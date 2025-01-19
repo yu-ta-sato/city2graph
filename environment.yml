@@ -8,3 +8,4 @@ dependencies:
   - networkx
   - jupyter
   - overturemaps
+  - momepy
