@@ -1,3 +1,8 @@
 *.geojson
 .ipynb_checkpoints
 .DS_Store
+**/__pycache__/
+.pytest_cache/
+.vscode/
+notebooks/**
+!notebooks/city2graph_demo.ipynb

@@ -1,0 +1,22 @@
+name: city2graph_docs
+channels:
+  - conda-forge
+dependencies:
+  - python=3.12
+  - sphinx
+  - sphinx_rtd_theme
+  - sphinx-autodoc-typehints
+  - nbsphinx
+  - numpydoc
+  - myst-parser
+  - pip
+  # Required dependencies for city2graph
+  - shapely
+  - geopandas
+  - networkx
+  - momepy
+  - pip:
+    - sphinx-copybutton
+    - sphinxcontrib-napoleon
+    - torch-geometric
+    - sphinx-material

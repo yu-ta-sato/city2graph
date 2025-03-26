@@ -10,5 +10,6 @@ description = "A library that converts Overture Maps data into a graph represent
 dependencies = [
     "networkx",
     "shapely",
-    "geopandas"
+    "geopandas",
+    "torch_geometric"
 ]
