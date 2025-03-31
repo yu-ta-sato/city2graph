@@ -1,0 +1,14 @@
+shapely
+geopandas
+networkx
+momepy
+torch
+torch_geometric
+sphinx
+sphinx-autodoc-typehints
+pydata-sphinx-theme
+myst-parser
+nbsphinx
+numpydoc
+toml
+overturemaps

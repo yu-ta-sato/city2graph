@@ -1,0 +1,35 @@
+[build-system]
+requires = ["setuptools", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "city2graph"
+version = "0.1.0"
+description = "A library that converts Overture Maps data into a graph representation using NetworkX"
+requires-python = ">=3.12"
+dependencies = [
+    "networkx",
+    "shapely",
+    "geopandas",
+    "torch",
+    "torch_geometric",
+    "momepy",
+    "overturemaps"
+]
+
+[project.optional-dependencies]
+docs = [
+    "sphinx",
+    "sphinx-autodoc-typehints",
+    "pydata-sphinx-theme",
+    "myst-parser",
+    "nbsphinx",
+    "numpydoc"
+]
+dev = [
+    "pytest",
+    "pytest-cov"
+]
+
+[tool.setuptools]
+packages = ["city2graph"]

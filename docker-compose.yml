@@ -1,0 +1,11 @@
+version: '3.8'
+
+services:
+  city2graph:
+    build: .
+    ports:
+      - "8888:8888"
+    volumes:
+      - .:/home/jovyan/city2graph
+    environment:
+      - JUPYTER_ENABLE_LAB=yes

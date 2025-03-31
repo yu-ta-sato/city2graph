@@ -1,0 +1,112 @@
+# Configuration file for the Sphinx documentation builder.
+#
+# For the full list of built-in configuration values, see the documentation:
+# https://www.sphinx-doc.org/en/master/usage/configuration.html
+
+# -- Path setup --------------------------------------------------------------
+import os
+import sys
+sys.path.insert(0, os.path.abspath('../..'))
+
+# -- Project information -----------------------------------------------------
+# https://www.sphinx-doc.org/en/master/usage/configuration.html#project-information
+
+project = 'city2graph'
+copyright = '2025, city2graph developers'
+author = 'city2graph developers'
+release = '0.1.0'
+
+# -- General configuration ---------------------------------------------------
+# https://www.sphinx-doc.org/en/master/usage/configuration.html#general-configuration
+
+extensions = [
+    'sphinx.ext.autodoc',
+    'sphinx.ext.autosummary',
+    'sphinx.ext.coverage',
+    'sphinx.ext.napoleon',
+    'sphinx.ext.viewcode',
+    'sphinx.ext.mathjax',
+    'sphinx.ext.intersphinx',
+    'sphinx_autodoc_typehints',
+    'nbsphinx',
+    'numpydoc',
+]
+
+templates_path = ['_templates']
+exclude_patterns = []
+
+language = 'en'
+
+# -- Options for autodoc -----------------------------------------------------
+autodoc_member_order = 'bysource'
+autodoc_typehints = 'description'
+autoclass_content = 'both'
+
+# -- Options for numpydoc ----------------------------------------------------
+numpydoc_show_class_members = False
+numpydoc_show_inherited_class_members = False
+numpydoc_class_members_toctree = False
+
+# -- Options for HTML output -------------------------------------------------
+# https://www.sphinx-doc.org/en/master/usage/configuration.html#options-for-html-output
+
+html_theme = 'pydata_sphinx_theme'
+html_static_path = ['_static']
+
+# Set the favicon for the browser tab
+html_favicon = '_static/city2graph_logo.png'
+
+# Custom CSS
+html_css_files = [
+    'custom.css',
+]
+
+# Theme configuration
+html_theme_options = {
+    "github_url": "https://github.com/username/city2graph",  # Replace with actual GitHub URL
+    "use_edit_page_button": False,
+    "show_toc_level": 2,
+    "logo": {
+        "image_light": "_static/city2graph_logo_wide.png",
+        "image_dark": "_static/city2graph_logo_wide_dark.png",
+    },
+}
+
+# -- Copy logo files to static directory -------------------------------------
+import shutil
+from pathlib import Path
+
+# Source logo files
+source_dir = Path('../../images')
+target_dir = Path('_static')
+
+# Create the _static directory if it doesn't exist
+os.makedirs(Path('_static'), exist_ok=True)
+
+# Copy logo files
+logo_files = [
+    'city2graph_logo_wide.png',
+    'city2graph_logo_wide_dark.png',
+    'city2graph_logo_main.png',
+    'city2graph_logo_main_dark.png',
+    'city2graph_logo.png'  # Added for favicon
+]
+
+for logo in logo_files:
+    source_file = source_dir / logo
+    target_file = target_dir / logo
+    
+    if source_file.exists():
+        shutil.copy2(source_file, target_file)
+
+# -- Intersphinx configuration -----------------------------------------------
+intersphinx_mapping = {
+    'python': ('https://docs.python.org/3', None),
+    'numpy': ('https://numpy.org/doc/stable/', None),
+    'pandas': ('https://pandas.pydata.org/pandas-docs/stable/', None),
+    'geopandas': ('https://geopandas.org/en/stable/', None),
+    'networkx': ('https://networkx.org/documentation/stable/', None),
+    'torch': ('https://pytorch.org/docs/stable/', None),
+    'torch_geometric': ('https://pytorch-geometric.readthedocs.io/en/latest/', None),
+    'momepy': ('http://docs.momepy.org/en/stable/', None),
+}
