@@ -72,33 +72,6 @@ html_theme_options = {
     },
 }
 
-# -- Copy logo files to static directory -------------------------------------
-import shutil
-from pathlib import Path
-
-# Source logo files
-source_dir = Path('../../images')
-target_dir = Path('_static')
-
-# Create the _static directory if it doesn't exist
-os.makedirs(Path('_static'), exist_ok=True)
-
-# Copy logo files
-logo_files = [
-    'city2graph_logo_wide.png',
-    'city2graph_logo_wide_dark.png',
-    'city2graph_logo_main.png',
-    'city2graph_logo_main_dark.png',
-    'city2graph_logo.png'  # Added for favicon
-]
-
-for logo in logo_files:
-    source_file = source_dir / logo
-    target_file = target_dir / logo
-    
-    if source_file.exists():
-        shutil.copy2(source_file, target_file)
-
 # -- Intersphinx configuration -----------------------------------------------
 intersphinx_mapping = {
     'python': ('https://docs.python.org/3', None),
