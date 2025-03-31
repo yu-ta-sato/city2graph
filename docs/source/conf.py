@@ -63,7 +63,7 @@ html_css_files = [
 
 # Theme configuration
 html_theme_options = {
-    "github_url": "https://github.com/username/city2graph",  # Replace with actual GitHub URL
+    "github_url": "https://github.com/yu-ta-sato/city2graph",  # Replace with actual GitHub URL
     "use_edit_page_button": False,
     "show_toc_level": 2,
     "logo": {
