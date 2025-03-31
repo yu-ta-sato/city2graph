@@ -70,6 +70,9 @@ html_theme_options = {
         "image_light": "_static/city2graph_logo_wide.png",
         "image_dark": "_static/city2graph_logo_wide_dark.png",
     },
+    "open_graph_image": "_static/city2graph_logo_wide.png",
+    "open_graph_description": "A Python package for transforming urban data into graphs for Graph Neural Networks.",
+
 }
 
 # -- Intersphinx configuration -----------------------------------------------
