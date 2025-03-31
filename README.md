@@ -23,7 +23,7 @@ cd city2graph
 
 # Create and activate the conda environment
 conda env create -f environment.yml
-conda activate city2graph
+conda activate city2graph_env
 
 # Install the package in development mode
 pip install -e .
