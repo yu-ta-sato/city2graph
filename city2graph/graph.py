@@ -356,7 +356,7 @@ def _is_valid_edge_df(edge_gdf: Optional[gpd.GeoDataFrame]) -> bool:
 def _build_graph_data(
     nodes: Dict[str, gpd.GeoDataFrame],
     edges: Dict[Tuple[str, str, str], gpd.GeoDataFrame],
-    id_cols: Dict[str, str],
+    node_id_cols: Dict[str, str],
     node_feature_cols: Dict[str, List[str]],
     node_label_cols: Optional[Dict[str, List[str]]],
     edge_source_cols: Dict[Tuple[str, str, str], str],
@@ -373,7 +373,7 @@ def _build_graph_data(
         Dictionary of node GeoDataFrames keyed by node type.
     edges : dict
         Dictionary of edge GeoDataFrames keyed by (source_type, relation, target_type).
-    id_cols : dict
+    node_id_cols : dict
         Dictionary mapping node types to the ID column name.
     node_feature_cols : dict
         Dictionary mapping node types to lists of feature column names.
@@ -390,7 +390,7 @@ def _build_graph_data(
 
     Returns
     -------
-    HeteroData
+    torch_geometric.data.HeteroData
         A PyTorch Geometric HeteroData graph object.
     """
     device = _get_device(device)
@@ -400,7 +400,7 @@ def _build_graph_data(
     # Process nodes across types
     for node_type, node_gdf in nodes.items():
         # ...existing node ID mapping and feature creation...
-        id_col = id_cols.get(node_type)
+        id_col = node_id_cols.get(node_type)
         id_mapping, actual_id_col = _extract_node_id_mapping(node_gdf, id_col)
         node_id_mappings[node_type] = {"mapping": id_mapping, "id_col": actual_id_col}
         # Update: use feature columns instead of attribute_cols
@@ -509,7 +509,7 @@ def _build_graph_data(
 def create_homogeneous_graph(
     nodes_gdf: gpd.GeoDataFrame,
     edges_gdf: Optional[gpd.GeoDataFrame] = None,
-    id_col: Optional[str] = None,
+    node_id_col: Optional[str] = None,
     node_feature_cols: Optional[List[str]] = None,
     node_label_cols: Optional[List[str]] = None,
     edge_source_col: Optional[str] = None,
@@ -526,7 +526,7 @@ def create_homogeneous_graph(
         GeoDataFrame containing node data.
     edges_gdf : GeoDataFrame, optional
         GeoDataFrame containing edge data.
-    id_col : str, optional
+    node_id_col : str, optional
         Column name that uniquely identifies each node.
     node_feature_cols : list of str, optional
         List of columns to use as node features.
@@ -543,7 +543,7 @@ def create_homogeneous_graph(
 
     Returns
     -------
-    Data
+    torch_geometric.data.Data
         A PyTorch Geometric Data graph object.
     """
     # Preprocess homogeneous graph inputs into dictionaries.
@@ -551,7 +551,7 @@ def create_homogeneous_graph(
     edges_dict = {}
     if edges_gdf is not None and not edges_gdf.empty:
         edges_dict[("node", "edge", "node")] = edges_gdf
-    id_cols = {"node": id_col} if id_col else {}
+    node_id_cols = {"node": node_id_col} if node_id_col else {}
     node_feature_cols = {"node": node_feature_cols} if node_feature_cols else {}
     node_label_cols = {"node": node_label_cols} if node_label_cols else None
     edge_source_cols = (
@@ -564,7 +564,7 @@ def create_homogeneous_graph(
     hetero_data = _build_graph_data(
         nodes=nodes_dict,
         edges=edges_dict,
-        id_cols=id_cols,
+        id_cols=node_id_cols,
         node_feature_cols=node_feature_cols,
         node_label_cols=node_label_cols,
         edge_source_cols=edge_source_cols,
@@ -626,7 +626,7 @@ def create_heterogeneous_graph(
 
     Returns
     -------
-    HeteroData
+    torch_geometric.data.HeteroData
         A PyTorch Geometric HeteroData graph object.
     """
     if node_id_cols is None:
