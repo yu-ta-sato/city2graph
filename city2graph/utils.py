@@ -14,9 +14,17 @@ from shapely.geometry import LineString, MultiLineString, Polygon, Point
 from shapely.geometry.base import BaseGeometry
 import networkx as nx
 from shapely.ops import unary_union
+import momepy
 
 # Define the public API for this module
-__all__ = ["load_overture_data", "get_barrier_geometry", "identify_connector_mask" , "identify_barrier_mask", "split_segments_by_connectors"]
+__all__ = [
+    "load_overture_data",
+    "get_barrier_geometry",
+    "identify_connector_mask",
+    "identify_barrier_mask",
+    "split_segments_by_connectors",
+    "create_tessellation",
+]
 
 # Valid Overture Maps data types
 VALID_OVERTURE_TYPES: Set[str] = {
@@ -365,20 +373,24 @@ def identify_barrier_mask(level_rules: str) -> list:
     Only rules with "value" equal to 0 are considered as barriers.
     If any such rule has "between" equal to null, then the entire interval [0, 1]
     is treated as non-barrier.
-    
+
     For example, if level_rules is:
-    
+
     '[{"value": 0, "between": [0.17760709099999999, 0.83631280600000002]},
       {"value": 0, "between": [0.95722406000000004, 0.95967328100000004]}]'
-    
+
     then the barrier intervals are [(0.17760709, 0.836312806), (0.95722406, 0.959673281)],
     and the returned non-barrier intervals will be:
     [[0.0, 0.17760709], [0.836312806, 0.95722406], [0.959673281, 1.0]].
-    
+
     If any rule for which "value" equals 0 has "between" as null, then
     the function returns [[0.0, 1.0]].
     """
-    if not isinstance(level_rules, str) or level_rules.strip().lower() in ("", "none", "null"):
+    if not isinstance(level_rules, str) or level_rules.strip().lower() in (
+        "",
+        "none",
+        "null",
+    ):
         return [[0.0, 1.0]]
     try:
         rules = json.loads(level_rules.replace("'", '"'))
@@ -435,10 +447,10 @@ def _get_barrier_geometry(row):
 
     if barrier_mask is None:
         return None
-    
+
     if barrier_mask == [[0.0, 1.0]]:
         return row.geometry
-    
+
     try:
         geom = row.geometry
         if isinstance(geom, MultiLineString):
@@ -446,19 +458,29 @@ def _get_barrier_geometry(row):
             for part in geom.geoms:
                 clipped = _extract_barriers_from_mask(part, barrier_mask)
                 if clipped:
-                    parts.extend(clipped.geoms if isinstance(clipped, MultiLineString) else [clipped])
-            return None if not parts else parts[0] if len(parts) == 1 else MultiLineString(parts)
+                    parts.extend(
+                        clipped.geoms
+                        if isinstance(clipped, MultiLineString)
+                        else [clipped]
+                    )
+            return (
+                None
+                if not parts
+                else parts[0] if len(parts) == 1 else MultiLineString(parts)
+            )
 
         else:
             return _extract_barriers_from_mask(geom, barrier_mask)
-        
+
     except Exception:
         return None
+
 
 def get_barrier_geometry(gdf: gpd.GeoDataFrame) -> gpd.GeoSeries:
     # Process each row of the GeoDataFrame
     barrier_geoms = gdf.apply(_get_barrier_geometry, axis=1)
     return gpd.GeoSeries(barrier_geoms, crs=gdf.crs)
+
 
 def identify_connector_mask(connectors_info: str) -> list:
     """
@@ -501,10 +523,18 @@ def _recalc_barrier_mask(original_mask: list, sub_start: float, sub_end: float) 
         inter_start = max(interval[0], sub_start)
         inter_end = min(interval[1], sub_end)
         if inter_start < inter_end:
-            new_mask.append([(inter_start - sub_start) / seg_length, (inter_end - sub_start) / seg_length])
+            new_mask.append(
+                [
+                    (inter_start - sub_start) / seg_length,
+                    (inter_end - sub_start) / seg_length,
+                ]
+            )
     return new_mask
 
-def split_segments_by_connectors(segments_gdf: gpd.GeoDataFrame, connectors_gdf: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
+
+def split_segments_by_connectors(
+    segments_gdf: gpd.GeoDataFrame, connectors_gdf: gpd.GeoDataFrame
+) -> gpd.GeoDataFrame:
     new_rows = []
     for idx, row in segments_gdf.iterrows():
         geom = row.geometry
@@ -532,7 +562,9 @@ def split_segments_by_connectors(segments_gdf: gpd.GeoDataFrame, connectors_gdf:
                 new_rows.append(new_row)
                 continue
         except Exception as e:
-            warnings.warn(f"Failed to parse connectors for segment {row.get('id', idx)}: {e}")
+            warnings.warn(
+                f"Failed to parse connectors for segment {row.get('id', idx)}: {e}"
+            )
             new_row = row.copy()
             new_row["connector_mask"] = connector_mask
             new_row["barrier_mask"] = barrier_mask
@@ -581,17 +613,21 @@ def split_segments_by_connectors(segments_gdf: gpd.GeoDataFrame, connectors_gdf:
             new_row["id"] = f"{original_id}_{counter}"
             counter += 1
             new_rows.append(new_row)
-    
-    new_columns = segments_gdf.columns.tolist()  # + ["split_from", "split_to", "connector_mask", "barrier_mask"]
+
+    new_columns = (
+        segments_gdf.columns.tolist()
+    )  # + ["split_from", "split_to", "connector_mask", "barrier_mask"]
     result_gdf = gpd.GeoDataFrame(new_rows, columns=new_columns, crs=segments_gdf.crs)
-    
+
     # Reset the index of the resulting GeoDataFrame
     result_gdf = result_gdf.reset_index(drop=True)
-    
+
     return result_gdf
 
 
-def get_walking_distance(point: Point, distance: float, street_network: nx.Graph) -> BaseGeometry:
+def get_walking_distance(
+    point: Point, distance: float, street_network: nx.Graph
+) -> BaseGeometry:
     """
     Compute an area reachable on foot from a point, based on topological distance of the street network.
 
@@ -602,7 +638,7 @@ def get_walking_distance(point: Point, distance: float, street_network: nx.Graph
     distance : float
         The maximum travel distance along the street network.
     street_network : nx.Graph
-        A networkx Graph where nodes have 'geometry' (Point) and edges have 'geometry' (LineString) 
+        A networkx Graph where nodes have 'geometry' (Point) and edges have 'geometry' (LineString)
         and a 'length' attribute for distance.
 
     Returns
@@ -613,7 +649,7 @@ def get_walking_distance(point: Point, distance: float, street_network: nx.Graph
     # Find the nearest node in the street network
     nearest_node = min(
         street_network.nodes,
-        key=lambda n: point.distance(street_network.nodes[n]["geometry"])
+        key=lambda n: point.distance(street_network.nodes[n]["geometry"]),
     )
 
     # Get all nodes within the given distance
@@ -632,3 +668,99 @@ def get_walking_distance(point: Point, distance: float, street_network: nx.Graph
 
     # Merge edges into a single geometry
     return unary_union(edge_geometries)
+
+
+def create_tessellation(
+    geometry: Union[gpd.GeoDataFrame, gpd.GeoSeries],
+    primary_barriers: Optional[Union[gpd.GeoDataFrame, gpd.GeoSeries]] = None,
+    shrink: float=0.4,
+    segment: float=0.5,
+    threshold: float=0.05,
+    n_jobs: int=-1,
+    **kwargs: Any
+) -> gpd.GeoDataFrame:
+    """
+,
+    shrink: float=0.4,
+    segment: float=0.5,
+    threshold: float=0.05,
+    n_jobs: int=-1,
+    **kwargs: Any
+    Create tessellations from the given geometries.
+    If primary_barriers are provided, enclosed tessellations are created.
+    If not, morphological tessellations are created.
+    For more details, see momepy.enclosed_tessellation and momepy.morphological_tessellation.
+
+    Parameters
+    ----------
+    geometry : Union[geopandas.GeoDataFrame, geopandas.GeoSeriesgeopandas       Input gegeopandastries to create a tessellation for. Should contain the geometries to tessellate.
+    primary_barriers : Optional[Union[gpd.GeoDataFrame, gpd.GeoSeries]], default=None
+        Optional GeoDataFrame or GeoSeries containing barriers to use for enclosed tessellation.
+        If provided, the function will create enclosed tessellation using these barriers.
+        If None, morphological tessellation will be created using the input geometries.
+    shrink : float, default=0.4
+        Distance for negative buffer of tessellations. By default, 0.4.
+        Used for both momepy.enclosed_tessellation and momepy.morphological_tessellation.
+    segment : float, default=0.5
+        Maximum distance between points for tessellations. By default, 0.5.
+        Used for both momepy.enclosed_tessellation and momepy.morphological_tessellation.
+    threshold : float, default=0.05
+        Minimum threshold for a building to be considered within an enclosure. By default, 0.05.
+        Used for both momepy.enclosed_tessellation.
+    n_jobs : int, default=-1
+        Number of parallel jobs to run. By default, -1 (use all available cores).
+        Used for both momepy.enclosed_tessellation.
+    **kwargs : Any
+        Additional keyword arguments to pass to momepy.enclosed_tessellation.
+        These can include parameters specific to the tessellation method used.
+    Returns
+    -------
+    geopandas.GeoDataFrame
+        GeoDataFrageopandascontaining the tessellation polygeopandass.
+    """
+    # Create tessellation using momepy based on whether primary_barriers are provided
+    if primary_barriers is not None:
+        # Convert primary_barriers to GeoDataFrame if it's a GeoSeries
+        if isinstance(primary_barriers, gpd.GeoSeries):
+            primary_barriers = gpd.GeoDataFrame(
+                geometry=primary_barriers, crs=primary_barriers.crs
+            )
+
+        # Ensure the barriers are in the same CRS as the input geometry
+        if geometry.crs != primary_barriers.crs:
+            raise ValueError(
+                "CRS mismatch: geometry and barriers must have the same CRS."
+            )
+        
+        # Create enclosures for enclosed tessellation
+        enclosures = momepy.enclosures(primary_barriers=primary_barriers,
+                                       limit=None,
+                                       additional_barriers=None,
+                                       enclosure_id='eID',
+                                       clip=False)
+        
+        tessellation = momepy.enclosed_tessellation(
+            geometry=geometry,
+            enclosures=enclosures,
+            shrink=shrink,
+            segment=segment,
+            threshold=threshold,
+            n_jobs=n_jobs,
+            **kwargs
+            )
+
+        # Apply ID handling for enclosed tessellation
+        tessellation["tess_id"] = [
+            f"{i}_{j}"
+            for i, j in zip(tessellation["enclosure_index"], tessellation.index)
+        ]
+        tessellation.reset_index(drop=True, inplace=True)
+    else:
+        # Create morphological tessellation
+        tessellation = momepy.morphological_tessellation(geometry=geometry,
+                                                         clip='bounding_box',
+                                                         shrink=shrink,
+                                                         segment=segment)
+        tessellation["tess_id"] = tessellation.index
+
+    return tessellation
