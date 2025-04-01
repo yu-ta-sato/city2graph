@@ -4,7 +4,7 @@ import pandas as pd
 import numpy as np
 import networkx as nx
 from shapely.geometry import LineString, Point, Polygon, MultiLineString
-from city2graph.morphological_network import (
+from city2graph.morphology import (
     convert_gdf_to_dual,
     create_private_to_private,
     create_private_to_public,
