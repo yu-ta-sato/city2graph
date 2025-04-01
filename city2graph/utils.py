@@ -680,12 +680,6 @@ def create_tessellation(
     **kwargs: Any
 ) -> gpd.GeoDataFrame:
     """
-,
-    shrink: float=0.4,
-    segment: float=0.5,
-    threshold: float=0.05,
-    n_jobs: int=-1,
-    **kwargs: Any
     Create tessellations from the given geometries.
     If primary_barriers are provided, enclosed tessellations are created.
     If not, morphological tessellations are created.
@@ -716,7 +710,7 @@ def create_tessellation(
     Returns
     -------
     geopandas.GeoDataFrame
-        GeoDataFrageopandascontaining the tessellation polygeopandass.
+        GeoDataFrame containing the tessellation polygons.
     """
     # Create tessellation using momepy based on whether primary_barriers are provided
     if primary_barriers is not None:
