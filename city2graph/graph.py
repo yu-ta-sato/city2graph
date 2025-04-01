@@ -17,7 +17,7 @@ import networkx as nx
 __all__ = [
     "create_homogeneous_graph",
     "create_heterogeneous_graph",
-    "create_morphological_graph",
+    "from_morphological_network",
     "to_networkx",
 ]
 
@@ -564,7 +564,7 @@ def create_homogeneous_graph(
     hetero_data = _build_graph_data(
         nodes=nodes_dict,
         edges=edges_dict,
-        id_cols=node_id_cols,
+        node_id_cols=node_id_cols,
         node_feature_cols=node_feature_cols,
         node_label_cols=node_label_cols,
         edge_source_cols=edge_source_cols,
@@ -641,7 +641,7 @@ def create_heterogeneous_graph(
     data = _build_graph_data(
         nodes=nodes_dict,
         edges=edges_dict,
-        id_cols=node_id_cols,
+        node_id_cols=node_id_cols,
         node_feature_cols=node_feature_cols,
         node_label_cols=node_label_cols,
         edge_source_cols=edge_source_cols,
@@ -654,48 +654,34 @@ def create_heterogeneous_graph(
     return data
 
 
-# Modified create_morphological_graph: update parameter names and usage
-def create_morphological_graph(
-    private_gdf: Optional[gpd.GeoDataFrame] = None,
-    public_gdf: Optional[gpd.GeoDataFrame] = None,
-    private_id_col: Optional[str] = None,
-    public_id_col: Optional[str] = None,
+def from_morphological_network(
+    network_output: Dict,
+    private_id_col: str = 'tess_id',
+    public_id_col: str = 'id',
     private_node_feature_cols: Optional[List[str]] = None,
     public_node_feature_cols: Optional[List[str]] = None,
-    private_group_col: Optional[str] = None,
-    public_geom_col: Optional[str] = None,
-    contiguity: str = "queen",
-    tolerance: float = 1,
     device: Optional[Union[str, torch.device]] = None,
 ) -> Union[HeteroData, Data]:
     """
-    Create a morphological graph representation of urban spaces using PyTorch Geometric.
-    Supports both heterogeneous and homogeneous graphs depending on the node GeoDataFrames provided.
-    Edge data is derived using functions from morphological_network.py.
+    Create a graph representation from the output of create_morphological_network.
 
     Parameters
     ----------
-    private_gdf : geopandas.GeoDataFrame, default None
-        GeoDataFrame containing tessellation polygons with node features for private spaces.
-    public_gdf : geopandas.GeoDataFrame, default None
-        GeoDataFrame containing street segments with node features for public spaces.
-    private_id_col : str, default None
-        Column name in private_gdf that uniquely identifies each private space.
-    public_id_col : str, default None
-        Column name in public_gdf that uniquely identifies each public space.
+    network_output : dict
+        Output dictionary from create_morphological_network containing:
+        - 'tessellation': GeoDataFrame of tessellation cells (private spaces)
+        - 'segments': GeoDataFrame of road segments (public spaces)
+        - 'private_to_private': GeoDataFrame of connections between tessellation cells
+        - 'public_to_public': GeoDataFrame of connections between road segments
+        - 'private_to_public': GeoDataFrame of connections between tessellation cells and road segments
+    private_id_col : str, default='tess_id'
+        Column name in tessellation GeoDataFrame that uniquely identifies each private space.
+    public_id_col : str, default='id'
+        Column name in segments GeoDataFrame that uniquely identifies each public space.
     private_node_feature_cols : list, default None
-        Attributes in private_gdf to use as node features.
+        Attributes in tessellation GeoDataFrame to use as node features.
     public_node_feature_cols : list, default None
-        Attributes in public_gdf to use as node features.
-    private_group_col : str, default None
-        Column name in private_gdf to use for grouping in private_to_private.
-    public_geom_col : str, default None
-        Column name in public_gdf to use for geometry in private_to_public.
-    contiguity : str, default "queen"
-        Type of contiguity to use for private_to_private connections.
-        Must be 'queen' or 'rook'.
-    tolerance : float, default 1
-        Buffer tolerance for spatial joins.
+        Attributes in segments GeoDataFrame to use as node features.
     device : str, default None
         Device to use for tensors. Must be 'cuda' or 'cpu' if provided.
         If None, will use CUDA if available, otherwise CPU.
@@ -709,55 +695,33 @@ def create_morphological_graph(
     Raises
     ------
     ValueError
-        If device is not None, 'cuda', or 'cpu'
+        If required data is missing from the network_output dictionary
     """
     # Validate device
     device = _get_device(device)
-
+    
+    # Extract data from network_output
+    if not isinstance(network_output, dict):
+        raise ValueError("network_output must be a dictionary returned from create_morphological_network")
+    
+    # Extract GeoDataFrames from the network output
+    private_gdf = network_output.get('tessellations')
+    public_gdf = network_output.get('segments')
+    private_to_private_gdf = network_output.get('private_to_private')
+    public_to_public_gdf = network_output.get('public_to_public')
+    private_to_public_gdf = network_output.get('private_to_public')
+    
+    # Validate that required data exists
     has_private = private_gdf is not None and not private_gdf.empty
     has_public = public_gdf is not None and not public_gdf.empty
-
-    # Create edge GeoDataFrames using morphological_network functions
-    private_to_private_gdf = (
-        morphological_network.create_private_to_private(
-            private_gdf,
-            private_id_col=private_id_col,
-            group_col=private_group_col,
-            contiguity=contiguity,
-        )
-        if has_private
-        else gpd.GeoDataFrame()
-    )
-
-    public_to_public_gdf = (
-        morphological_network.create_public_to_public(
-            public_gdf, public_id_col=public_id_col
-        )
-        if has_public
-        else gpd.GeoDataFrame()
-    )
-
-    private_to_public_gdf = (
-        morphological_network.create_private_to_public(
-            private_gdf,
-            public_gdf,
-            private_id_col=private_id_col,
-            public_id_col=public_id_col,
-            public_geom_col=public_geom_col,
-            tolerance=tolerance,
-        )
-        if has_private and has_public
-        else gpd.GeoDataFrame()
-    )
-
+    
     # Case 1: We have both private and public nodes - create heterogeneous graph
     if has_private and has_public:
         # Create nodes dictionary
-        nodes_dict = {}
-        if has_private:
-            nodes_dict["private"] = private_gdf
-        if has_public:
-            nodes_dict["public"] = public_gdf
+        nodes_dict = {
+            "private": private_gdf,
+            "public": public_gdf
+        }
 
         # Create edges dictionary with edge type tuples
         edges_dict = {
@@ -767,11 +731,10 @@ def create_morphological_graph(
         }
 
         # Create node ID columns dictionary
-        node_id_cols = {}
-        if private_id_col is not None:
-            node_id_cols["private"] = private_id_col
-        if public_id_col is not None:
-            node_id_cols["public"] = public_id_col
+        node_id_cols = {
+            "private": private_id_col,
+            "public": public_id_col
+        }
 
         # Create node feature columns dictionary
         node_feature_cols = {}
@@ -811,7 +774,7 @@ def create_morphological_graph(
         return create_homogeneous_graph(
             nodes_gdf=private_gdf,
             edges_gdf=private_to_private_gdf,
-            id_col=private_id_col,
+            node_id_col=private_id_col,
             node_feature_cols=private_node_feature_cols,
             node_label_cols=None,
             edge_source_col="from_private_id",
@@ -825,7 +788,7 @@ def create_morphological_graph(
         return create_homogeneous_graph(
             nodes_gdf=public_gdf,
             edges_gdf=public_to_public_gdf,
-            id_col=public_id_col,
+            node_id_col=public_id_col,
             node_feature_cols=public_node_feature_cols,
             node_label_cols=None,
             edge_source_col="from_public_id",

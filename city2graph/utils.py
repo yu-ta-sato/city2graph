@@ -6,14 +6,12 @@ import json
 import warnings
 import os
 import subprocess
-from typing import List, Tuple, Union, Optional, Dict, Set, Any, Sequence, cast
+from typing import List, Union, Optional, Dict, Set, Any, cast
 
 import geopandas as gpd
-import pandas as pd
 from shapely.geometry import LineString, MultiLineString, Polygon, Point
 from shapely.geometry.base import BaseGeometry
 import networkx as nx
-from shapely.ops import unary_union
 import momepy
 
 # Define the public API for this module
@@ -24,6 +22,7 @@ __all__ = [
     "identify_barrier_mask",
     "split_segments_by_connectors",
     "create_tessellation",
+    "filter_network_by_distance"
 ]
 
 # Valid Overture Maps data types
@@ -624,52 +623,6 @@ def split_segments_by_connectors(
 
     return result_gdf
 
-
-def get_walking_distance(
-    point: Point, distance: float, street_network: nx.Graph
-) -> BaseGeometry:
-    """
-    Compute an area reachable on foot from a point, based on topological distance of the street network.
-
-    Parameters
-    ----------
-    point : Point
-        The location from which to compute walking distance.
-    distance : float
-        The maximum travel distance along the street network.
-    street_network : nx.Graph
-        A networkx Graph where nodes have 'geometry' (Point) and edges have 'geometry' (LineString)
-        and a 'length' attribute for distance.
-
-    Returns
-    -------
-    BaseGeometry
-        A unified geometry of all edges reachable within the specified distance.
-    """
-    # Find the nearest node in the street network
-    nearest_node = min(
-        street_network.nodes,
-        key=lambda n: point.distance(street_network.nodes[n]["geometry"]),
-    )
-
-    # Get all nodes within the given distance
-    lengths = nx.single_source_dijkstra_path_length(
-        street_network, nearest_node, cutoff=distance, weight="length"
-    )
-    reachable_nodes = set(lengths.keys())
-
-    # Collect edges between reachable nodes
-    edge_geometries = []
-    for u, v in street_network.edges():
-        if u in reachable_nodes and v in reachable_nodes:
-            edge_data = street_network[u][v]
-            if "geometry" in edge_data:
-                edge_geometries.append(edge_data["geometry"])
-
-    # Merge edges into a single geometry
-    return unary_union(edge_geometries)
-
-
 def create_tessellation(
     geometry: Union[gpd.GeoDataFrame, gpd.GeoSeries],
     primary_barriers: Optional[Union[gpd.GeoDataFrame, gpd.GeoSeries]] = None,
@@ -758,3 +711,121 @@ def create_tessellation(
         tessellation["tess_id"] = tessellation.index
 
     return tessellation
+
+def _get_nearest_node(point, nodes_gdf, node_id='node_id'):
+    """
+    Helper function to find the nearest node in a GeoDataFrame.
+    """
+    if isinstance(point, gpd.GeoSeries):
+        point = point.iloc[0]
+    nearest_idx = nodes_gdf.distance(point).idxmin()
+    return nodes_gdf.loc[nearest_idx, node_id]
+
+
+def filter_network_by_distance(
+    network: Union[gpd.GeoDataFrame, nx.Graph],
+    center_point: Union[Point, gpd.GeoSeries, gpd.GeoDataFrame],
+    distance: float, 
+    edge_attr: str="length", 
+    node_id_col: Optional[str]=None
+) -> Union[gpd.GeoDataFrame, nx.Graph]:
+    """
+    Extracts a filtered network containing only elements
+    within a given shortest-path distance from specified center point(s).
+
+    Parameters
+    ----------
+    network : Union[gpd.GeoDataFrame, nx.Graph]
+        Input network data as either a GeoDataFrame of edges or a NetworkX graph.
+    center_point : Union[Point, gpd.GeoSeries, gpd.GeoDataFrame]
+        Center point(s) for distance calculation.
+        Can be a single Point, GeoSeries of points, or GeoDataFrame with point geometries.
+    distance : float, default=1000
+        Maximum shortest-path distance from any center node.
+    edge_attr : str, default="length"
+        Edge attribute to use as weight for distance calculation.
+    node_id_col : Optional[str], default=None
+        Column name in nodes GeoDataFrame to use as node identifier.
+        If None, will use auto-generated node IDs.
+    
+    Returns
+    -------
+    Union[gpd.GeoDataFrame, nx.Graph]
+        Filtered network containing only elements within distance of any center point.
+        Returns the same type as the input (either GeoDataFrame or NetworkX graph).
+    """
+    # Determine input type
+    is_graph_input = isinstance(network, nx.Graph)
+    
+    # Convert to NetworkX graph if input is GeoDataFrame
+    if is_graph_input:
+        G = network
+        original_crs = None
+    else:
+        G = momepy.gdf_to_nx(network)
+        original_crs = network.crs
+    
+    # Build a GeoDataFrame for the nodes using their 'x' and 'y' attributes
+    node_ids, node_geometries = zip(*[
+        (nid, Point([attrs.get('x'), attrs.get('y')]))
+        for nid, attrs in G.nodes(data=True)
+    ])
+    
+    # Use provided node_id_col or default
+    node_id_name = node_id_col or 'node_id'
+    
+    nodes_gdf = gpd.GeoDataFrame(
+        {node_id_name: node_ids, 'geometry': node_geometries},
+        crs=original_crs
+    )
+    
+    # Initialize a set to collect nodes within distance from any center point
+    nodes_within_distance = set()
+    
+    # Handle different types of center_point input
+    center_points = center_point
+    if isinstance(center_point, gpd.GeoSeries) or isinstance(center_point, gpd.GeoDataFrame):
+        # If it's a GeoDataFrame, convert to GeoSeries
+        if isinstance(center_point, gpd.GeoDataFrame):
+            center_points = center_point.geometry
+    else:
+        # Convert single point to a list
+        center_points = [center_point]
+    
+    # Process each center point
+    for point in center_points:
+        # Find the nearest node to this center
+        nearest_node = _get_nearest_node(point, nodes_gdf, node_id=node_id_name)
+        
+        # Compute shortest path lengths from this center
+        try:
+            distance_dict = nx.shortest_path_length(G, nearest_node, weight=edge_attr)
+            # Add nodes within distance from this center
+            nodes_within_distance.update(
+                k for k, v in distance_dict.items() if v < distance
+            )
+        except (nx.NetworkXNoPath, nx.NodeNotFound) as e:
+            warnings.warn(f"Could not compute paths from a center point: {e}", RuntimeWarning)
+    
+    # Extract subgraph for nodes within distance from any center
+    if nodes_within_distance:
+        # Create a subgraph from the original graph
+        subgraph = G.subgraph(nodes_within_distance)
+        
+        # Return the result in the same format as the input
+        if is_graph_input:
+            return subgraph
+        else:
+            filtered_gdf = momepy.nx_to_gdf(subgraph, points=False)
+            
+            # Ensure that the geometry column is properly set as GeoSeries
+            if not isinstance(filtered_gdf.geometry, gpd.GeoSeries):
+                filtered_gdf = gpd.GeoDataFrame(filtered_gdf, geometry='geometry', crs=original_crs)
+            
+            return filtered_gdf
+    else:
+        # Return empty result in the same format as the input
+        if is_graph_input:
+            return nx.Graph()
+        else:
+            return gpd.GeoDataFrame(geometry=[], crs=original_crs)

@@ -10,97 +10,18 @@ import shapely
 import libpysal
 import momepy
 import warnings
+from typing import Union
+
+from city2graph.utils import filter_network_by_distance, create_tessellation
 
 # Define the public API for this module
 __all__ = [
-    'extract_nearby_segments',
     'convert_gdf_to_dual',
     'create_private_to_private',
     'create_private_to_public',
-    'create_public_to_public'
+    'create_public_to_public',
+    'create_morphological_network'
 ]
-
-# Helper function to find the nearest node in a GeoDataFrame.
-def _get_nearest_node(point, nodes_gdf, node_id='node_id'):
-    if isinstance(point, gpd.GeoSeries):
-        point = point.iloc[0]
-    nearest_idx = nodes_gdf.distance(point).idxmin()
-    return nodes_gdf.loc[nearest_idx, node_id]
-
-
-def extract_nearby_segments(gdf, center_point, threshold=1000):
-    """
-    Extracts a filtered segments GeoDataFrame containing only segments
-    within a given shortest-path distance threshold from specified center point(s).
-
-    Args:
-        gdf (geopandas.GeoDataFrame): Input segments.
-        center_point (geopandas.GeoSeries or geopandas.GeoDataFrame): Center point(s) for distance calculation.
-                                                                      Can be a single point or multiple points.
-        threshold (float): Maximum shortest-path distance from any center node.
-    
-    Returns:
-        geopandas.GeoDataFrame: Filtered segments GeoDataFrame containing segments
-                               within threshold distance of any center point.
-    """
-    
-    # Convert segments GeoDataFrame to a NetworkX graph using momepy function.
-    G = momepy.gdf_to_nx(gdf)
-    
-    # Build a GeoDataFrame for the nodes using their 'x' and 'y' attributes.
-    node_ids, node_geometries = zip(*[
-        (nid, shapely.Point([attrs.get('x'), attrs.get('y')]))
-        for nid, attrs in G.nodes(data=True)
-    ])
-    
-    nodes_gdf = gpd.GeoDataFrame(
-        {'node_id': node_ids, 'geometry': node_geometries},
-        crs=gdf.crs
-    )
-    
-    # Initialize a set to collect nodes within threshold from any center point
-    nodes_within_threshold = set()
-    
-    # Handle both single point and multiple points cases
-    center_points = center_point
-    if isinstance(center_point, gpd.GeoSeries) or isinstance(center_point, gpd.GeoDataFrame):
-        # If it's a GeoDataFrame, convert to GeoSeries
-        if isinstance(center_point, gpd.GeoDataFrame):
-            center_points = center_point.geometry
-    else:
-        # Convert single point to a list
-        center_points = [center_point]
-    
-    # Process each center point
-    for point in center_points:
-        # Find the nearest node to this center
-        nearest_node = _get_nearest_node(point, nodes_gdf)
-        
-        # Compute shortest path lengths from this center
-        try:
-            distance_dict = nx.shortest_path_length(G, nearest_node, weight="length")
-            # Add nodes within threshold from this center
-            nodes_within_threshold.update(
-                k for k, v in distance_dict.items() if v < threshold
-            )
-        except (nx.NetworkXNoPath, nx.NodeNotFound) as e:
-            warnings.warn(f"Could not compute paths from a center point: {e}", RuntimeWarning)
-    
-    # Extract subgraph for nodes within threshold from any center
-    if nodes_within_threshold:
-        # Create a subgraph from the original graph
-        subgraph = G.subgraph(nodes_within_threshold)
-        gdf_filtered = momepy.nx_to_gdf(subgraph, points=False)
-
-        # Ensure that the geometry column is properly set as GeoSeries
-        if not isinstance(gdf_filtered.geometry, gpd.GeoSeries):
-            gdf_filtered = gpd.GeoDataFrame(gdf_filtered, geometry='geometry', crs=gdf.crs)
-
-        return gdf_filtered
-    else:
-        # Return empty GeoDataFrame with same structure if no nodes within threshold
-        return gpd.GeoDataFrame(geometry=[], crs=gdf.crs)
-
 
 def _get_adjacent_publics(
     privates,
@@ -194,8 +115,10 @@ def _get_adjacent_publics(
     # Determine the street geometry column and create buffered version
     publics_copy = publics.copy()
     if public_geom_col is not None:
-        publics_copy.geometry = publics_copy[public_geom_col]
-    
+        publics_copy.geometry = gpd.GeoSeries(
+            publics_copy[public_geom_col], crs=publics_copy.crs
+            )
+
     # Create buffered geometries for intersection test
     publics_copy.geometry = publics_copy.geometry.buffer(buffer)
 
@@ -824,7 +747,7 @@ def create_private_to_public(
     private_id_col=None,
     public_id_col=None,
     public_geom_col=None,
-    tolerance=1,
+    tolerance: float=1.0,
 ):
     """
     Creates connections between tessellation polygons (private space) and street segments (public space).
@@ -877,7 +800,9 @@ def create_private_to_public(
     )
 
 
-def create_public_to_public(public_gdf, public_id_col=None, tolerance=1e-8):
+def create_public_to_public(public_gdf: gpd.GeoDataFrame,
+                            public_id_col:str=None,
+                            tolerance:float=1e-8):
     """
     Create connections between street segments (public-public connections).
     
@@ -954,3 +879,141 @@ def create_public_to_public(public_gdf, public_id_col=None, tolerance=1e-8):
             {"from_public_id": [], "to_public_id": [], "geometry": []},
             crs=public_gdf.crs,
         )
+
+
+def create_morphological_network(
+    buildings_gdf: gpd.GeoDataFrame,
+    segments_gdf: gpd.GeoDataFrame,
+    center_point: Union[gpd.GeoSeries, gpd.GeoDataFrame] = None,
+    distance: float = None,
+    private_id_col='tess_id',
+    public_id_col='id',
+    public_geom_col='barrier_geometry',
+    tolerance=1,
+    contiguity='queen'
+):
+    """
+    Create a complete morphological network from buildings and road segments.
+    
+    This function performs a series of operations:
+    1. Creates tessellations based on buildings and road barrier geometries
+    2. Optionally filters the network by distance from a specified center point
+    3. Identifies enclosed tessellations adjacent to the segments
+    4. Creates three types of connections:
+       - Private to private (between tessellation cells)
+       - Public to public (between road segments)
+       - Private to public (between tessellation cells and road segments)
+    
+    Parameters
+    ----------
+    buildings_gdf : geopandas.GeoDataFrame
+        GeoDataFrame containing building polygons
+    segments_gdf : geopandas.GeoDataFrame
+        GeoDataFrame containing road segments as LineStrings.
+        Should include a 'barrier_geometry' column or the column specified in public_geom_col.
+    center_point : Union[Point, gpd.GeoSeries, gpd.GeoDataFrame], optional
+        Optional center point for filtering the network by distance.
+        If provided, only segments within the specified distance will be included.
+    distance : float, default=1000
+        Maximum network distance from center_point to include segments, if center_point is provided.
+        If None, no distance filtering will be applied even if center_point is provided.
+    private_id_col : str, default='tess_id'
+        Column name that uniquely identifies each tessellation cell (private space).
+    public_id_col : str, default='id'
+        Column name that uniquely identifies each road segment (public space).
+    public_geom_col : str, default='barrier_geometry'
+        Column name in segments_gdf containing the processed geometry to use.
+    tolerance : float, default=1
+        Buffer tolerance for spatial joins and endpoint connections (in meters).
+    contiguity : str, default='queen'
+        Type of contiguity for private-to-private connections, either 'queen' or 'rook'.
+        
+    Returns
+    -------
+    dict
+        Dictionary containing the following elements:
+        - 'tessellation': GeoDataFrame of tessellation cells (private spaces)
+        - 'segments': GeoDataFrame of road segments (public spaces)
+        - 'buildings': GeoDataFrame of buildings
+        - 'private_to_private': GeoDataFrame of connections between tessellation cells
+        - 'public_to_public': GeoDataFrame of connections between road segments
+        - 'private_to_public': GeoDataFrame of connections between tessellation cells and road segments
+        
+    Notes
+    -----
+    - If center_point is not provided, all segments will be included.
+    - The barrier_geometry column should contain the processed geometries for road segments.
+      If it doesn't exist, the function will use the column specified in public_geom_col.
+    - The function requires the city2graph package and depends on create_tessellation, filter_network_by_distance,
+      create_private_to_private, create_public_to_public, and create_private_to_public functions.
+    """
+
+    # Check if public_geom_col exists in segments_gdf
+    if public_geom_col not in segments_gdf.columns:
+        warnings.warn(f"Column '{public_geom_col}' not found in segments_gdf. Using 'geometry' column instead.", RuntimeWarning)
+        public_geom_col = 'geometry'
+    
+    # 1. Create tessellations based on buildings and road barrier geometries
+    enclosed_tess = create_tessellation(
+        buildings_gdf, 
+        primary_barriers=segments_gdf[public_geom_col]
+    )
+    
+    # 2. Optionally filter the network by distance from a specified center point
+    if center_point is not None and distance is not None:
+        segments_subset = filter_network_by_distance(
+            segments_gdf,
+            center_point,
+            distance=distance
+        )
+    else:
+        segments_subset = segments_gdf.copy()
+    
+    # 3. Get the enclosure indices that are adjacent to the segments using a spatial join
+    adjacent_enclosure_indices = gpd.sjoin(
+        enclosed_tess, 
+        segments_subset, 
+        how='inner', 
+        predicate='intersects'
+    )['enclosure_index'].unique()
+    
+    # Get enclosed tessellation for the adjacent enclosures
+    tess_subset = enclosed_tess[enclosed_tess['enclosure_index'].isin(adjacent_enclosure_indices)]
+    
+    # Filter buildings that intersect with the enclosed tessellation
+    buildings_subset = buildings_gdf[buildings_gdf.geometry.intersects(tess_subset.unary_union)]
+    
+    # 4. Create connections between adjacent private spaces (tessellation cells)
+    private_to_private = create_private_to_private(
+        tess_subset,
+        private_id_col=private_id_col,
+        group_col="enclosure_index",
+        contiguity=contiguity
+    )
+    
+    # Create connections between street segments
+    public_to_public = create_public_to_public(
+        segments_subset,
+        public_id_col=public_id_col,
+        tolerance=tolerance
+    )
+    
+    # Create connections between private spaces and public spaces
+    private_to_public = create_private_to_public(
+        tess_subset,
+        segments_subset,
+        private_id_col=private_id_col,
+        public_id_col=public_id_col,
+        public_geom_col=public_geom_col,
+        tolerance=tolerance
+    )
+    
+    # Return all created elements
+    return {
+        'tessellations': tess_subset,
+        'segments': segments_subset,
+        'buildings': buildings_subset,
+        'private_to_private': private_to_private,
+        'public_to_public': public_to_public,
+        'private_to_public': private_to_public
+    }
