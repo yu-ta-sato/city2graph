@@ -2,12 +2,12 @@ import os
 import io
 import zipfile
 import logging
-
+import numpy as np
 import pandas as pd
 import geopandas as gpd
 from shapely.geometry import Point, LineString
 
-__all__ = ["load_gtfs", "get_od_pairs"]
+__all__ = ["load_gtfs", "get_od_pairs", "create_travel_summary_network"]
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -343,13 +343,7 @@ def _get_service_dates(gtfs_data, start_date=None, end_date=None):
         if end_date is None and 'end_date' in calendar.columns:
             max_end_date = calendar['end_date'].max()
             end_date = max_end_date if pd.notna(max_end_date) else None
-        
-        # Default dates if still None
-        if start_date is None:
-            start_date = '20230101'  # Default to Jan 1, 2023
-        if end_date is None:
-            end_date = '20231231'  # Default to Dec 31, 2023
-            
+                    
         # Convert dates to datetime objects
         start_dt = datetime.strptime(str(start_date), '%Y%m%d')
         end_dt = datetime.strptime(str(end_date), '%Y%m%d')
@@ -649,3 +643,179 @@ def get_od_pairs(gtfs_data, start_date=None, end_date=None, include_geometry=Tru
         else:
             logger.info("Origin-destination pair generation complete")
             return expanded_od
+
+def _time_to_seconds(time_str):
+    if pd.isna(time_str):
+        return np.nan
+    if isinstance(time_str, (int, float)):
+        return time_str
+    parts = time_str.split(':')
+    if len(parts) == 3:
+        h, m, s = parts
+        return int(h) * 3600 + int(m) * 60 + int(s)
+    return np.nan
+
+def _create_travel_summary_gdf(result, stops):
+    # Merge coordinates from origin stops
+    result = result.merge(
+        stops[['stop_lat', 'stop_lon']],
+        left_on='from_stop_id',
+        right_index=True,
+        suffixes=('', '_from')
+    )
+    
+    # Merge coordinates from destination stops
+    result = result.merge(
+        stops[['stop_lat', 'stop_lon']],
+        left_on='to_stop_id',
+        right_index=True,
+        suffixes=('_from', '_to')
+    )
+    
+    # Create LineString geometries for each stop pair
+    geometries = [
+        LineString([(row['stop_lon_from'], row['stop_lat_from']),
+                    (row['stop_lon_to'], row['stop_lat_to'])])
+        for _, row in result.iterrows()
+    ]
+    
+    gdf = gpd.GeoDataFrame(
+        result[['from_stop_id', 'to_stop_id', 'travel_time', 'frequency']],
+        geometry=geometries,
+        crs="EPSG:4326"
+    )
+    return gdf
+
+
+def _vectorized_time_to_seconds(time_series):
+    """
+    Efficiently convert a series of GTFS time strings to seconds.
+    
+    Parameters
+    ----------
+    time_series : pandas.Series
+        Series containing time strings in HH:MM:SS format
+        
+    Returns
+    -------
+    pandas.Series
+        Series containing time values converted to seconds
+    """
+    if time_series.dtype == 'object':
+        # Only process string values
+        mask = ~pd.isna(time_series)
+        result = pd.Series(np.nan, index=time_series.index)
+        
+        if mask.any():
+            # Process only non-NaN values
+            time_parts = time_series[mask].str.split(':', expand=True).astype(int)
+            result[mask] = time_parts[0] * 3600 + time_parts[1] * 60 + time_parts[2]
+        
+        return result
+    else:
+        # If already numeric, return as is
+        return time_series
+
+
+def create_travel_summary_network(gtfs_data, start_time=None, end_time=None, 
+                                  calendar_start=None, calendar_end=None, as_gdf=True):
+    """
+    Create a network representing travel times and frequencies between stops.
+    
+    Parameters
+    ----------
+    gtfs_data : dict
+        Dictionary with GTFS dataframes from load_gtfs
+    start_time : str, optional
+        Start time of day (HH:MM:SS) to filter trips
+    end_time : str, optional
+        End time of day (HH:MM:SS) to filter trips
+    calendar_start : str, optional
+        Start date in YYYYMMDD format to filter by service calendar
+    calendar_end : str, optional
+        End date in YYYYMMDD format to filter by service calendar
+    as_gdf : bool, default True
+        If True, return a GeoDataFrame; if False, return a dictionary
+        
+    Returns
+    -------
+    geopandas.GeoDataFrame or dict
+        Network of stop connections with travel times and frequencies
+    """    
+    # Extract and preprocess the necessary dataframes
+    stop_times = gtfs_data["stop_times"].copy()
+    trips = gtfs_data["trips"][['trip_id', 'service_id']].copy()
+    
+    # Convert time columns to seconds (vectorized for speed)
+    stop_times['arrival_time_sec'] = _vectorized_time_to_seconds(stop_times['arrival_time'])
+    stop_times['departure_time_sec'] = _vectorized_time_to_seconds(stop_times['departure_time'])
+    
+    # Apply time-of-day filters efficiently
+    if start_time is not None:
+        start_time_sec = _time_to_seconds(str(start_time))
+        stop_times = stop_times[stop_times['departure_time_sec'] >= start_time_sec]
+    if end_time is not None:
+        end_time_sec = _time_to_seconds(str(end_time))
+        stop_times = stop_times[stop_times['arrival_time_sec'] <= end_time_sec]
+    
+    # Merge with trips to get service_id (using optimal merge strategy)
+    stop_times = pd.merge(stop_times, trips, on='trip_id', how='inner')
+    
+    # Handle calendar filtering
+    if calendar_start is not None or calendar_end is not None:
+        # Get valid service dates and calculate service frequency
+        service_dates = _get_service_dates(gtfs_data, calendar_start, calendar_end)
+        
+        # Create a mapping from service_id to service count for efficient lookup
+        service_counts = {s_id: len(dates) for s_id, dates in service_dates.items()}
+        
+        # Add service counts using map (faster than apply)
+        stop_times['service_count'] = stop_times['service_id'].map(service_counts).fillna(0)
+        
+        # Filter out trips with no valid service dates
+        stop_times = stop_times[stop_times['service_count'] > 0]
+    else:
+        # Without calendar filtering, use uniform weight
+        stop_times['service_count'] = 1
+    
+    # Create next stop info efficiently by sorting once then using shift
+    stop_times = stop_times.sort_values(['trip_id', 'stop_sequence'])
+    
+    # Calculate next stop info within each trip
+    stop_times['next_stop_id'] = stop_times.groupby('trip_id')['stop_id'].shift(-1)
+    stop_times['next_arrival_time_sec'] = stop_times.groupby('trip_id')['arrival_time_sec'].shift(-1)
+    
+    # Calculate travel times vectorized
+    valid_pairs = stop_times.dropna(subset=['next_stop_id', 'next_arrival_time_sec']).copy()
+    valid_pairs['travel_time'] = valid_pairs['next_arrival_time_sec'] - valid_pairs['departure_time_sec']
+    
+    # Filter invalid pairs (all at once)
+    valid_pairs = valid_pairs[valid_pairs['travel_time'] > 0]
+    
+    # Pre-calculate weights for aggregation
+    valid_pairs['weighted_time'] = valid_pairs['travel_time'] * valid_pairs['service_count']
+    
+    # Efficient groupby aggregation with pre-calculated values
+    result = valid_pairs.groupby(['stop_id', 'next_stop_id']).agg(
+        weighted_time=('weighted_time', 'sum'),
+        total_service_count=('service_count', 'sum')
+    ).reset_index()
+    
+    # Calculate weighted average travel time
+    result['travel_time'] = result['weighted_time'] / result['total_service_count']
+    result['frequency'] = result['total_service_count']
+    result = result.drop(['weighted_time', 'total_service_count'], axis=1)
+    
+    # Return dictionary if requested
+    if not as_gdf:
+        return {(row['stop_id'], row['next_stop_id']): (row['travel_time'], row['frequency']) 
+                for _, row in result.iterrows()}
+    
+    # Prepare for GeoDataFrame creation
+    result = result.rename(columns={'stop_id': 'from_stop_id', 'next_stop_id': 'to_stop_id'})
+    stops = gtfs_data['stops'].set_index('stop_id')
+    
+    # Create GeoDataFrame
+    gdf = _create_travel_summary_gdf(result, stops)
+    
+    return gdf
