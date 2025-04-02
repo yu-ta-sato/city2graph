@@ -1,3 +1,7 @@
+"""
+Module for loading and processing GTFS data, constructing transportation networks.
+"""
+
 import os
 import io
 import zipfile

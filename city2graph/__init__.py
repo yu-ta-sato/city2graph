@@ -8,6 +8,7 @@ from .utils import *
 from .morphology import *
 from .transportation import *
 from .graph import *
+from .contiguity import *
 
 __author__ = "Yuta Sato"
 

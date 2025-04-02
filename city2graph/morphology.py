@@ -889,7 +889,6 @@ def create_morphological_network(
     private_id_col='tess_id',
     public_id_col='id',
     public_geom_col='barrier_geometry',
-    tolerance=1,
     contiguity='queen'
 ):
     """
@@ -953,13 +952,13 @@ def create_morphological_network(
         warnings.warn(f"Column '{public_geom_col}' not found in segments_gdf. Using 'geometry' column instead.", RuntimeWarning)
         public_geom_col = 'geometry'
     
-    # 1. Create tessellations based on buildings and road barrier geometries
+    # Create tessellations based on buildings and road barrier geometries
     enclosed_tess = create_tessellation(
         buildings_gdf, 
         primary_barriers=segments_gdf[public_geom_col]
     )
     
-    # 2. Optionally filter the network by distance from a specified center point
+    # Optionally filter the network by distance from a specified center point
     if center_point is not None and distance is not None:
         segments_subset = filter_network_by_distance(
             segments_gdf,
@@ -969,7 +968,7 @@ def create_morphological_network(
     else:
         segments_subset = segments_gdf.copy()
     
-    # 3. Get the enclosure indices that are adjacent to the segments using a spatial join
+    # Get the enclosure indices that are adjacent to the segments using a spatial join
     adjacent_enclosure_indices = gpd.sjoin(
         enclosed_tess, 
         segments_subset, 
@@ -983,7 +982,7 @@ def create_morphological_network(
     # Filter buildings that intersect with the enclosed tessellation
     buildings_subset = buildings_gdf[buildings_gdf.geometry.intersects(tess_subset.unary_union)]
     
-    # 4. Create connections between adjacent private spaces (tessellation cells)
+    # Create connections between adjacent private spaces (tessellation cells)
     private_to_private = create_private_to_private(
         tess_subset,
         private_id_col=private_id_col,
@@ -995,7 +994,6 @@ def create_morphological_network(
     public_to_public = create_public_to_public(
         segments_subset,
         public_id_col=public_id_col,
-        tolerance=tolerance
     )
     
     # Create connections between private spaces and public spaces
@@ -1005,7 +1003,6 @@ def create_morphological_network(
         private_id_col=private_id_col,
         public_id_col=public_id_col,
         public_geom_col=public_geom_col,
-        tolerance=tolerance
     )
     
     # Return all created elements
