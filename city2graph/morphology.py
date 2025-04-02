@@ -16,12 +16,13 @@ from city2graph.utils import filter_network_by_distance, create_tessellation
 
 # Define the public API for this module
 __all__ = [
-    'convert_gdf_to_dual',
-    'create_private_to_private',
-    'create_private_to_public',
-    'create_public_to_public',
-    'create_morphological_network'
+    "convert_gdf_to_dual",
+    "private_to_private_network",
+    "private_to_public_network",
+    "public_to_public_network",
+    "morphological_network",
 ]
+
 
 def _get_adjacent_publics(
     privates,
@@ -57,7 +58,7 @@ def _get_adjacent_publics(
     -------
     dict
         Dictionary mapping private space IDs to lists of adjacent public space IDs
-        
+
     Raises
     ------
     ValueError
@@ -72,7 +73,7 @@ def _get_adjacent_publics(
         raise TypeError("publics must be a GeoDataFrame")
     if not isinstance(buffer, (int, float)):
         raise TypeError("buffer must be a number")
-        
+
     # Check for empty DataFrames
     if privates.empty:
         warnings.warn("privates GeoDataFrame is empty", RuntimeWarning)
@@ -80,7 +81,7 @@ def _get_adjacent_publics(
     if publics.empty:
         warnings.warn("publics GeoDataFrame is empty", RuntimeWarning)
         return {}
-        
+
     # Check if required columns exist
     if public_id_col not in publics.columns:
         raise ValueError(f"public_id_col '{public_id_col}' not found in publics")
@@ -88,16 +89,26 @@ def _get_adjacent_publics(
         raise ValueError(f"private_id_col '{private_id_col}' not found in privates")
     if public_geom_col and public_geom_col not in publics.columns:
         raise ValueError(f"public_geom_col '{public_geom_col}' not found in publics")
-        
+
     # Check geometry types
-    if not all(isinstance(geom, (shapely.geometry.Polygon, shapely.geometry.MultiPolygon)) 
-              for geom in privates.geometry):
-        warnings.warn("Some geometries in privates are not Polygons or MultiPolygons", 
-                     RuntimeWarning)
-    if not all(isinstance(geom, (shapely.geometry.LineString, shapely.geometry.MultiLineString)) 
-              for geom in publics.geometry):
-        warnings.warn("Some geometries in publics are not LineStrings or MultiLineStrings", 
-                     RuntimeWarning)
+    if not all(
+        isinstance(geom, (shapely.geometry.Polygon, shapely.geometry.MultiPolygon))
+        for geom in privates.geometry
+    ):
+        warnings.warn(
+            "Some geometries in privates are not Polygons or MultiPolygons",
+            RuntimeWarning,
+        )
+    if not all(
+        isinstance(
+            geom, (shapely.geometry.LineString, shapely.geometry.MultiLineString)
+        )
+        for geom in publics.geometry
+    ):
+        warnings.warn(
+            "Some geometries in publics are not LineStrings or MultiLineStrings",
+            RuntimeWarning,
+        )
 
     # Ensure both GeoDataFrames use the same CRS
     if privates.crs != publics.crs:
@@ -117,7 +128,7 @@ def _get_adjacent_publics(
     if public_geom_col is not None:
         publics_copy.geometry = gpd.GeoSeries(
             publics_copy[public_geom_col], crs=publics_copy.crs
-            )
+        )
 
     # Create buffered geometries for intersection test
     publics_copy.geometry = publics_copy.geometry.buffer(buffer)
@@ -144,7 +155,7 @@ def _get_adjacent_publics(
 def _extract_dual_graph_nodes(dual_graph, id_col, gdf_crs):
     """
     Extract nodes from dual graph into a GeoDataFrame.
-    
+
     Parameters
     ----------
     dual_graph : networkx.Graph
@@ -153,7 +164,7 @@ def _extract_dual_graph_nodes(dual_graph, id_col, gdf_crs):
         Column name for the node identifiers
     gdf_crs : pyproj.CRS
         Coordinate reference system for the output GeoDataFrame
-        
+
     Returns
     -------
     geopandas.GeoDataFrame
@@ -163,7 +174,7 @@ def _extract_dual_graph_nodes(dual_graph, id_col, gdf_crs):
     nodes_data = pd.DataFrame.from_dict(
         dict(dual_graph.nodes(data=True)), orient="index"
     )
-    
+
     if nodes_data.empty:
         return gpd.GeoDataFrame(
             columns=[id_col, "geometry"], geometry="geometry", crs=gdf_crs
@@ -172,18 +183,18 @@ def _extract_dual_graph_nodes(dual_graph, id_col, gdf_crs):
     # Check if id_col exists before filtering
     if id_col in nodes_data.columns:
         nodes_data = nodes_data[nodes_data[id_col].notna()]
-        
+
         # Create geometries from coordinates
         nodes_data["geometry"] = [shapely.Point(coord) for coord in nodes_data.index]
-        
+
         # Create a GeoDataFrame
         dual_node_gdf = gpd.GeoDataFrame(nodes_data, geometry="geometry", crs=gdf_crs)
-        
+
         # Set the index of the dual_gdf
         dual_node_gdf = dual_node_gdf.set_index(dual_node_gdf[id_col]).drop(
             columns=[id_col]
         )
-        
+
         return dual_node_gdf
     else:
         return gpd.GeoDataFrame(
@@ -194,14 +205,14 @@ def _extract_dual_graph_nodes(dual_graph, id_col, gdf_crs):
 def _extract_node_connections(dual_graph, id_col):
     """
     Extract connections between nodes from dual graph.
-    
+
     Parameters
     ----------
     dual_graph : networkx.Graph
         Dual graph representation of the network
     id_col : str
         Column name for the node identifiers
-        
+
     Returns
     -------
     dict
@@ -214,14 +225,14 @@ def _extract_node_connections(dual_graph, id_col):
         connections[node_id] = [
             dual_graph.nodes[n].get(id_col, n) for n in dual_graph.neighbors(node)
         ]
-    
+
     return connections
 
 
 def _find_additional_connections(line_gdf, id_col, tolerance, connections=None):
     """
     Find additional connections between lines based on endpoint proximity.
-    
+
     Parameters
     ----------
     line_gdf : geopandas.GeoDataFrame
@@ -232,7 +243,7 @@ def _find_additional_connections(line_gdf, id_col, tolerance, connections=None):
         Distance tolerance for endpoint connections
     connections : dict, optional
         Existing connections dictionary to update
-        
+
     Returns
     -------
     dict
@@ -240,18 +251,18 @@ def _find_additional_connections(line_gdf, id_col, tolerance, connections=None):
     """
     if connections is None:
         connections = {}
-    
+
     if line_gdf.empty:
         return connections
 
     # Extract endpoints vectorized
     endpoints_data = []
-    
+
     # This part builds a list of endpoints for each linestring
     for idx, row in line_gdf.iterrows():
         if not isinstance(row.geometry, shapely.geometry.LineString):
             continue
-            
+
         coords = list(row.geometry.coords)
         endpoints_data.extend(
             [
@@ -270,22 +281,22 @@ def _find_additional_connections(line_gdf, id_col, tolerance, connections=None):
 
     if not endpoints_data:
         return connections
-        
+
     # Create GeoDataFrame of endpoints
     endpoints_gdf = gpd.GeoDataFrame(
         endpoints_data, geometry="endpoint", crs=line_gdf.crs
     )
-    
+
     # Create buffers around endpoints for spatial join
     endpoints_gdf["buffer_geom"] = endpoints_gdf.endpoint.buffer(tolerance)
-    
+
     # Prepare lines for joining
     lines_for_join = (
         line_gdf[[id_col, "geometry"]]
         .reset_index()
         .rename(columns={"index": "line_index"})
     )
-    
+
     # Spatial join buffered endpoints with lines
     joined = gpd.sjoin(
         endpoints_gdf.set_geometry("buffer_geom"),
@@ -293,35 +304,33 @@ def _find_additional_connections(line_gdf, id_col, tolerance, connections=None):
         predicate="intersects",
         how="left",
     )
-    
+
     # Filter out self-matches
     joined = joined[joined.line_idx != joined.line_index]
-    
+
     # Update connections dictionary based on endpoint intersections
     if not joined.empty:
         # Determine column names
-        orig_id_col = (
-            f"{id_col}_left" if f"{id_col}_left" in joined.columns else id_col
-        )
+        orig_id_col = f"{id_col}_left" if f"{id_col}_left" in joined.columns else id_col
         other_id_col = (
             f"{id_col}_right" if f"{id_col}_right" in joined.columns else id_col
         )
-        
+
         # Process each valid connection
         for _, row in joined.iterrows():
             orig_id = row[orig_id_col]
             other_id = row[other_id_col]
-            
+
             if orig_id not in connections:
                 connections[orig_id] = []
             if other_id not in connections[orig_id]:
                 connections[orig_id].append(other_id)
-                
+
             if other_id not in connections:
                 connections[other_id] = []
             if orig_id not in connections[other_id]:
                 connections[other_id].append(orig_id)
-    
+
     return connections
 
 
@@ -329,7 +338,7 @@ def convert_gdf_to_dual(gdf, id_col=None, tolerance=1e-8):
     """
     Convert a GeoDataFrame to a NetworkX graph and then back to a GeoDataFrame.
     Also detects connections where endpoints of one linestring are on another linestring.
-    
+
     Parameters
     ----------
     gdf : geopandas.GeoDataFrame
@@ -339,12 +348,12 @@ def convert_gdf_to_dual(gdf, id_col=None, tolerance=1e-8):
         If None, will use DataFrame index
     tolerance : float, default 1e-8
         Distance tolerance for detecting endpoint connections
-        
+
     Returns
     -------
     tuple
         (GeoDataFrame of nodes, dict of connections)
-        
+
     Raises
     ------
     TypeError
@@ -359,29 +368,28 @@ def convert_gdf_to_dual(gdf, id_col=None, tolerance=1e-8):
         raise TypeError("Tolerance must be a number")
     if tolerance < 0:
         raise ValueError("Tolerance must be non-negative")
-        
+
     # Check for empty DataFrame
     if gdf.empty:
         warnings.warn("Input GeoDataFrame is empty", RuntimeWarning)
-        return (
-            gpd.GeoDataFrame(columns=[id_col] if id_col else [], crs=gdf.crs),
-            {}
-        )
-        
+        return (gpd.GeoDataFrame(columns=[id_col] if id_col else [], crs=gdf.crs), {})
+
     # Validate geometry types
     invalid_geoms = gdf.geometry.apply(
-        lambda g: not isinstance(g, (shapely.geometry.LineString, shapely.geometry.MultiLineString))
+        lambda g: not isinstance(
+            g, (shapely.geometry.LineString, shapely.geometry.MultiLineString)
+        )
     )
     if invalid_geoms.any():
         warnings.warn(
             f"Found {invalid_geoms.sum()} geometries that are not LineString or MultiLineString",
-            RuntimeWarning
+            RuntimeWarning,
         )
-        
+
     # Check for null geometries
     if gdf.geometry.isna().any():
         warnings.warn("Found null geometries in input GeoDataFrame", RuntimeWarning)
-        gdf = gdf.dropna(subset=['geometry'])
+        gdf = gdf.dropna(subset=["geometry"])
 
     # Handle ID column
     if id_col is None:
@@ -391,21 +399,19 @@ def convert_gdf_to_dual(gdf, id_col=None, tolerance=1e-8):
 
     # Convert to NetworkX graph
     dual_graph = momepy.gdf_to_nx(gdf, approach="dual", preserve_index=True)
-    
+
     # Extract nodes as GeoDataFrame
     dual_node_gdf = _extract_dual_graph_nodes(dual_graph, id_col, gdf.crs)
-    
+
     # Extract node connections from graph
     connections = _extract_node_connections(dual_graph, id_col)
-    
+
     # Find additional connections based on endpoints
     line_gdf = gdf[
         gdf.geometry.apply(lambda g: isinstance(g, shapely.geometry.LineString))
     ]
-    connections = _find_additional_connections(
-        line_gdf, id_col, tolerance, connections
-    )
-    
+    connections = _find_additional_connections(line_gdf, id_col, tolerance, connections)
+
     return dual_node_gdf, connections
 
 
@@ -419,7 +425,7 @@ def _create_connecting_lines(
     """
     Create a GeoDataFrame of LineStrings connecting the centroid of each tessellation
     polygon to the nodes of adjacent streets.
-    
+
     Parameters
     ----------
     enclosed_tess : geopandas.GeoDataFrame
@@ -434,12 +440,12 @@ def _create_connecting_lines(
     public_id_col : str, default None
         Column name in public_dual_gdf that uniquely identifies each public space
         If None, will use DataFrame index
-        
+
     Returns
     -------
     geopandas.GeoDataFrame
         GeoDataFrame containing LineString connections between private and public spaces
-        
+
     Raises
     ------
     TypeError
@@ -454,30 +460,30 @@ def _create_connecting_lines(
         raise TypeError("public_dual_gdf must be a GeoDataFrame")
     if not isinstance(adjacent_streets, dict):
         raise TypeError("adjacent_streets must be a dictionary")
-        
+
     # Check for empty inputs
     if enclosed_tess.empty:
         warnings.warn("enclosed_tess GeoDataFrame is empty", RuntimeWarning)
         return gpd.GeoDataFrame(
-            {"private_id": [], "public_id": [], "geometry": []},
-            crs=enclosed_tess.crs
+            {"private_id": [], "public_id": [], "geometry": []}, crs=enclosed_tess.crs
         )
     if public_dual_gdf.empty:
         warnings.warn("public_dual_gdf GeoDataFrame is empty", RuntimeWarning)
         return gpd.GeoDataFrame(
-            {"private_id": [], "public_id": [], "geometry": []},
-            crs=enclosed_tess.crs
+            {"private_id": [], "public_id": [], "geometry": []}, crs=enclosed_tess.crs
         )
     if not adjacent_streets:
         warnings.warn("adjacent_streets dictionary is empty", RuntimeWarning)
         return gpd.GeoDataFrame(
-            {"private_id": [], "public_id": [], "geometry": []},
-            crs=enclosed_tess.crs
+            {"private_id": [], "public_id": [], "geometry": []}, crs=enclosed_tess.crs
         )
 
     # Check CRS compatibility
     if enclosed_tess.crs != public_dual_gdf.crs:
-        warnings.warn("CRS mismatch between enclosed_tess and public_dual_gdf. Converting public_dual_gdf to match enclosed_tess CRS.", RuntimeWarning)
+        warnings.warn(
+            "CRS mismatch between enclosed_tess and public_dual_gdf. Converting public_dual_gdf to match enclosed_tess CRS.",
+            RuntimeWarning,
+        )
         public_dual_gdf = public_dual_gdf.to_crs(enclosed_tess.crs)
 
     # Handle private ID column
@@ -485,7 +491,7 @@ def _create_connecting_lines(
         enclosed_tess = enclosed_tess.reset_index(drop=True)
         private_id_col = "index"
         enclosed_tess[private_id_col] = enclosed_tess.index
-    
+
     # Handle public ID column
     if public_id_col is None:
         public_dual_gdf = public_dual_gdf.reset_index(drop=True)
@@ -540,7 +546,7 @@ def _create_connecting_lines(
 def _prep_contiguity_graph(tess_group, private_id_col, contiguity):
     """
     Prepare a contiguity-based graph for a group of tessellation polygons.
-    
+
     Parameters
     ----------
     tess_group : geopandas.GeoDataFrame
@@ -549,7 +555,7 @@ def _prep_contiguity_graph(tess_group, private_id_col, contiguity):
         Column name that uniquely identifies each private space
     contiguity : str
         Type of contiguity ('queen' or 'rook')
-    
+
     Returns
     -------
     tuple
@@ -561,9 +567,7 @@ def _prep_contiguity_graph(tess_group, private_id_col, contiguity):
 
     # Create mapping from position to ID
     pos_to_id_mapping = dict(
-        enumerate(
-            tess_group[private_id_col] if private_id_col else tess_group.index
-        )
+        enumerate(tess_group[private_id_col] if private_id_col else tess_group.index)
     )
 
     # Create contiguity weights
@@ -614,12 +618,13 @@ def _prep_contiguity_graph(tess_group, private_id_col, contiguity):
     return w_nx, pos_to_id_mapping
 
 
-def create_private_to_private(
+def private_to_private_network(
     private_gdf, private_id_col=None, group_col=None, contiguity="queen"
 ):
     """
-    Create contiguity matrices for each group defined by group_col in the tessellation GeoDataFrame.
-    
+    Create contiguity matrices for private spaces.
+    If group_col is provided, the contiguity is calculated for each group separately.
+
     Parameters
     ----------
     private_gdf : geopandas.GeoDataFrame
@@ -632,12 +637,12 @@ def create_private_to_private(
         If None, all polygons are treated as one group
     contiguity : str, default "queen"
         Type of contiguity, either 'queen' or 'rook'
-        
+
     Returns
     -------
     geopandas.GeoDataFrame
         GeoDataFrame containing LineString connections between adjacent private spaces
-        
+
     Raises
     ------
     TypeError
@@ -648,42 +653,49 @@ def create_private_to_private(
     # Input validation
     if not isinstance(private_gdf, gpd.GeoDataFrame):
         raise TypeError("private_gdf must be a GeoDataFrame")
-        
+
     # Check for empty DataFrame
     if private_gdf.empty:
         warnings.warn("private_gdf GeoDataFrame is empty", RuntimeWarning)
         return gpd.GeoDataFrame(
-            columns=["from_private_id", "to_private_id", group_col or "group", "geometry"],
+            columns=[
+                "from_private_id",
+                "to_private_id",
+                group_col or "group",
+                "geometry",
+            ],
             geometry="geometry",
-            crs=private_gdf.crs
+            crs=private_gdf.crs,
         )
-        
+
     # Validate contiguity parameter
     if contiguity.lower() not in ["queen", "rook"]:
         raise ValueError("contiguity must be 'queen' or 'rook'")
-    
+
     # Check specified columns exist
     if private_id_col is not None and private_id_col not in private_gdf.columns:
         raise ValueError(f"private_id_col '{private_id_col}' not found in private_gdf")
-    
+
     if group_col is not None and group_col not in private_gdf.columns:
         raise ValueError(f"group_col '{group_col}' not found in private_gdf")
-    
+
     # Validate geometry types
     invalid_geoms = private_gdf.geometry.apply(
-        lambda g: not isinstance(g, (shapely.geometry.Polygon, shapely.geometry.MultiPolygon))
+        lambda g: not isinstance(
+            g, (shapely.geometry.Polygon, shapely.geometry.MultiPolygon)
+        )
     )
     if invalid_geoms.any():
         warnings.warn(
             f"Found {invalid_geoms.sum()} geometries that are not Polygon or MultiPolygon",
-            RuntimeWarning
+            RuntimeWarning,
         )
-    
+
     # Check for null geometries
     if private_gdf.geometry.isna().any():
         warnings.warn("Found null geometries in private_gdf", RuntimeWarning)
         private_gdf = private_gdf.dropna(subset=["geometry"])
-    
+
     # Handle private ID column
     if private_id_col is None:
         private_gdf = private_gdf.reset_index(drop=True)
@@ -706,7 +718,7 @@ def create_private_to_private(
         w_nx, pos_to_id_mapping = _prep_contiguity_graph(
             tess_group, private_id_col, contiguity
         )
-        
+
         if w_nx is None:
             continue
 
@@ -741,17 +753,17 @@ def create_private_to_private(
         return gpd.GeoDataFrame(columns=cols, crs=private_gdf.crs)
 
 
-def create_private_to_public(
+def private_to_public_network(
     private_gdf,
     public_gdf,
     private_id_col=None,
     public_id_col=None,
     public_geom_col=None,
-    tolerance: float=1.0,
+    tolerance: float = 1.0,
 ):
     """
-    Creates connections between tessellation polygons (private space) and street segments (public space).
-    
+    Creates connections between private spaces (such as tessellation polygons) and public spaces (such as streets).
+
     Parameters
     ----------
     private_gdf : geopandas.GeoDataFrame
@@ -769,7 +781,7 @@ def create_private_to_public(
         If None, will use the geometry column
     tolerance : float, default 1
         Buffer tolerance for spatial joins
-        
+
     Returns
     -------
     geopandas.GeoDataFrame
@@ -800,12 +812,12 @@ def create_private_to_public(
     )
 
 
-def create_public_to_public(public_gdf: gpd.GeoDataFrame,
-                            public_id_col:str=None,
-                            tolerance:float=1e-8):
+def public_to_public_network(
+    public_gdf: gpd.GeoDataFrame, public_id_col: str = None, tolerance: float = 1e-8
+):
     """
-    Create connections between street segments (public-public connections).
-    
+    Create connections between public spaces represented as a dual graph.
+
     Parameters
     ----------
     public_gdf : geopandas.GeoDataFrame
@@ -815,7 +827,7 @@ def create_public_to_public(public_gdf: gpd.GeoDataFrame,
         If None, will use DataFrame index
     tolerance : float, default 1e-8
         Distance tolerance for detecting endpoint connections
-        
+
     Returns
     -------
     geopandas.GeoDataFrame
@@ -825,7 +837,7 @@ def create_public_to_public(public_gdf: gpd.GeoDataFrame,
     public_dual_gdf, public_to_public_dict = convert_gdf_to_dual(
         public_gdf, id_col=public_id_col, tolerance=tolerance
     )
-    
+
     # Handle empty result
     if public_dual_gdf.empty or not public_to_public_dict:
         return gpd.GeoDataFrame(
@@ -881,19 +893,20 @@ def create_public_to_public(public_gdf: gpd.GeoDataFrame,
         )
 
 
-def create_morphological_network(
+def morphological_network(
     buildings_gdf: gpd.GeoDataFrame,
     segments_gdf: gpd.GeoDataFrame,
     center_point: Union[gpd.GeoSeries, gpd.GeoDataFrame] = None,
     distance: float = None,
-    private_id_col='tess_id',
-    public_id_col='id',
-    public_geom_col='barrier_geometry',
-    contiguity='queen'
+    private_id_col="tess_id",
+    public_id_col="id",
+    public_geom_col="barrier_geometry",
+    contiguity="queen",
 ):
     """
     Create a complete morphological network from buildings and road segments.
-    
+    The private spaces are represented as tessellations, and the public spaces are represented as a dual graph of road segments.
+
     This function performs a series of operations:
     1. Creates tessellations based on buildings and road barrier geometries
     2. Optionally filters the network by distance from a specified center point
@@ -902,7 +915,7 @@ def create_morphological_network(
        - Private to private (between tessellation cells)
        - Public to public (between road segments)
        - Private to public (between tessellation cells and road segments)
-    
+
     Parameters
     ----------
     buildings_gdf : geopandas.GeoDataFrame
@@ -926,7 +939,7 @@ def create_morphological_network(
         Buffer tolerance for spatial joins and endpoint connections (in meters).
     contiguity : str, default='queen'
         Type of contiguity for private-to-private connections, either 'queen' or 'rook'.
-        
+
     Returns
     -------
     dict
@@ -937,7 +950,7 @@ def create_morphological_network(
         - 'private_to_private': GeoDataFrame of connections between tessellation cells
         - 'public_to_public': GeoDataFrame of connections between road segments
         - 'private_to_public': GeoDataFrame of connections between tessellation cells and road segments
-        
+
     Notes
     -----
     - If center_point is not provided, all segments will be included.
@@ -949,68 +962,69 @@ def create_morphological_network(
 
     # Check if public_geom_col exists in segments_gdf
     if public_geom_col not in segments_gdf.columns:
-        warnings.warn(f"Column '{public_geom_col}' not found in segments_gdf. Using 'geometry' column instead.", RuntimeWarning)
-        public_geom_col = 'geometry'
-    
+        warnings.warn(
+            f"Column '{public_geom_col}' not found in segments_gdf. Using 'geometry' column instead.",
+            RuntimeWarning,
+        )
+        public_geom_col = "geometry"
+
     # Create tessellations based on buildings and road barrier geometries
     enclosed_tess = create_tessellation(
-        buildings_gdf, 
-        primary_barriers=segments_gdf[public_geom_col]
+        buildings_gdf, primary_barriers=segments_gdf[public_geom_col]
     )
-    
+
     # Optionally filter the network by distance from a specified center point
     if center_point is not None and distance is not None:
         segments_subset = filter_network_by_distance(
-            segments_gdf,
-            center_point,
-            distance=distance
+            segments_gdf, center_point, distance=distance
         )
     else:
         segments_subset = segments_gdf.copy()
-    
+
     # Get the enclosure indices that are adjacent to the segments using a spatial join
     adjacent_enclosure_indices = gpd.sjoin(
-        enclosed_tess, 
-        segments_subset, 
-        how='inner', 
-        predicate='intersects'
-    )['enclosure_index'].unique()
-    
+        enclosed_tess, segments_subset, how="inner", predicate="intersects"
+    )["enclosure_index"].unique()
+
     # Get enclosed tessellation for the adjacent enclosures
-    tess_subset = enclosed_tess[enclosed_tess['enclosure_index'].isin(adjacent_enclosure_indices)]
-    
+    tess_subset = enclosed_tess[
+        enclosed_tess["enclosure_index"].isin(adjacent_enclosure_indices)
+    ]
+
     # Filter buildings that intersect with the enclosed tessellation
-    buildings_subset = buildings_gdf[buildings_gdf.geometry.intersects(tess_subset.unary_union)]
-    
+    buildings_subset = buildings_gdf[
+        buildings_gdf.geometry.intersects(tess_subset.unary_union)
+    ]
+
     # Create connections between adjacent private spaces (tessellation cells)
-    private_to_private = create_private_to_private(
+    private_to_private = private_to_private_network(
         tess_subset,
         private_id_col=private_id_col,
         group_col="enclosure_index",
-        contiguity=contiguity
+        contiguity=contiguity,
     )
-    
+
     # Create connections between street segments
-    public_to_public = create_public_to_public(
+    public_to_public = public_to_public_network(
         segments_subset,
         public_id_col=public_id_col,
     )
-    
+
     # Create connections between private spaces and public spaces
-    private_to_public = create_private_to_public(
+    private_to_public = private_to_public_network(
         tess_subset,
         segments_subset,
         private_id_col=private_id_col,
         public_id_col=public_id_col,
         public_geom_col=public_geom_col,
     )
-    
+
     # Return all created elements
     return {
-        'tessellations': tess_subset,
-        'segments': segments_subset,
-        'buildings': buildings_subset,
-        'private_to_private': private_to_private,
-        'public_to_public': public_to_public,
-        'private_to_public': private_to_public
+        "tessellations": tess_subset,
+        "segments": segments_subset,
+        "buildings": buildings_subset,
+        "private_to_private": private_to_private,
+        "public_to_public": public_to_public,
+        "private_to_public": private_to_public,
     }

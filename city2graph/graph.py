@@ -15,8 +15,8 @@ import networkx as nx
 
 # Define the public API for this module
 __all__ = [
-    "create_homogeneous_graph",
-    "create_heterogeneous_graph",
+    "homogeneous_graph",
+    "heterogeneous_graph",
     "from_morphological_network",
     "to_networkx",
 ]
@@ -502,11 +502,7 @@ def _build_graph_data(
     return data
 
 
-# Refactored create_homogeneous_graph: Preprocess the input GeoDataFrames into dictionary form,
-# call _build_graph_data, then convert the resulting HeteroData into a standard Data object.
-# Updated create_homogeneous_graph with a y_attribute_cols parameter
-# Modified create_homogeneous_graph: update parameter names and usage
-def create_homogeneous_graph(
+def homogeneous_graph(
     nodes_gdf: gpd.GeoDataFrame,
     edges_gdf: Optional[gpd.GeoDataFrame] = None,
     node_id_col: Optional[str] = None,
@@ -586,10 +582,7 @@ def create_homogeneous_graph(
     return data
 
 
-# Refactored create_heterogeneous_graph using _build_graph_data
-# Updated create_heterogeneous_graph to accept node_y_attribute_cols parameter
-# Modified create_heterogeneous_graph: update parameter names and usage
-def create_heterogeneous_graph(
+def heterogeneous_graph(
     nodes_dict: Dict[str, gpd.GeoDataFrame],
     edges_dict: Dict[Tuple[str, str, str], gpd.GeoDataFrame],
     node_id_cols: Optional[Dict[str, str]] = None,
@@ -757,7 +750,7 @@ def from_morphological_network(
         }
 
         # Create the heterogeneous graph
-        return create_heterogeneous_graph(
+        return heterogeneous_graph(
             nodes_dict=nodes_dict,
             edges_dict=edges_dict,
             node_id_cols=node_id_cols,
@@ -771,7 +764,7 @@ def from_morphological_network(
 
     # Case 2: We only have private nodes - create homogeneous graph
     elif has_private:
-        return create_homogeneous_graph(
+        return homogeneous_graph(
             nodes_gdf=private_gdf,
             edges_gdf=private_to_private_gdf,
             node_id_col=private_id_col,
@@ -785,7 +778,7 @@ def from_morphological_network(
 
     # Case 3: We only have public nodes - create homogeneous graph
     elif has_public:
-        return create_homogeneous_graph(
+        return homogeneous_graph(
             nodes_gdf=public_gdf,
             edges_gdf=public_to_public_gdf,
             node_id_col=public_id_col,
