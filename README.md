@@ -8,13 +8,22 @@
 
 ## Features
 
-- Convert city geometry to mathematical graphs
-- Create morphological networks from urban spatial data
-- Analyze urban networks and connectivity
-- Support for various urban data formats
-- Visualization tools for urban graphs
+- Construct graphs from morphological datasets (e.g. buildings, streets, and land use)
+- Construct graphs from transportation datasets (e.g. public transport of buses, trams, and trains)
+- Construct graphs from contiguity datasets (e.g. land use, land cover, and administrative boundaries)
+- Construct graphs from mobility datasets (e.g. bike-sharing, migration, and pedestrian flows)
+- Convert geospatial data into pytorch tensors for graph representation learning, such as Graph Neural Networks (GNNs)
+
 
 ## Installation
+
+### From PyPI (To be enabled)
+
+```bash
+pip install city2graph
+```
+
+### From Source
 
 ```bash
 # Clone the repository

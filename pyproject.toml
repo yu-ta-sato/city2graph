@@ -6,16 +6,38 @@ build-backend = "setuptools.build_meta"
 name = "city2graph"
 version = "0.1.0"
 description = "A library that converts Overture Maps data into a graph representation using NetworkX"
-requires-python = ">=3.12"
+authors = [
+    {name = "Yuta Sato", email = "stein.stone.ishi@gmail.com"},
+]
+readme = "README.md"
+license = {text = "BSD-3-Clause"}
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: BSD License",
+    "Programming Language :: Python",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3 :: Only",
+    "Topic :: Scientific/Engineering :: GIS",
+]
+keywords = ["graph-neural-networks", "pytorch-geometric", "urban", "transportation", "mobility", "overturemaps", "gtfs"]
+requires-python = ">=3.10"
 dependencies = [
     "networkx",
     "shapely",
     "geopandas",
-    "torch",
-    "torch_geometric",
+    "pytorch",
+    "torch_geometric>=2.6.1",
     "momepy",
     "overturemaps"
 ]
+
+[project.urls]
+"Homepage" = "https://github.com/yu-ta-sato/city2graph"
+"Documentation" = "https://ysato.blog/city2graph"
+"Bug Tracker" = "https://github.com/yu-ta-sato/city2graph/issues"
 
 [project.optional-dependencies]
 docs = [
