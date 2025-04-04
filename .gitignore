@@ -5,6 +5,12 @@
 **/__pycache__/
 .pytest_cache/
 .vscode/
+
 notebooks/**
 !notebooks/city2graph_demo.ipynb
+
+docs/source/examples/**
+!docs/source/examples/**/*.ipynb
+
 conda/conda-bld/
+docs/build/
