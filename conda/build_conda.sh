@@ -7,6 +7,8 @@ export PYG_VERSION=$2     # "2.5",  "2.6"
 export CUDA_VERSION=$3    # "cpu",  "cu118", "cu121", "cu124"
 
 # Export these as environment variables for meta.yaml
+# CUDA will be supported in the future
+export CONDA_TORCH_CONSTRAINT="torch>=2.4.0"
 export CONDA_PYG_CONSTRAINT="pyg=*=*cpu*"
 
 # Add output directory to config

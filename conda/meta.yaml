@@ -13,11 +13,15 @@ requirements:
     - wheel
   run:
     - python {{ environ.get('PYTHON_VERSION') }}
-    - networkx
-    - shapely
+    - networkx>=2.8
+    - shapely>=2.1.0
+    - pandas>=1.5.1
     - geopandas>=0.12.0
+    - libpysal>=4.12.1
+    - numba
     - momepy
     - overturemaps
+    - {{ environ.get('CONDA_TORCH_CONSTRAINT') }}
     - {{ environ.get('CONDA_PYG_CONSTRAINT') }}
 
 build:
