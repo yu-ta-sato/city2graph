@@ -6,4 +6,4 @@ This section provides examples of how to use city2graph in various urban analysi
 
 .. nbgallery::
 
-   morphological_networks_from_overturemaps.ipynb
+   morphological_networks_from_overturemaps
