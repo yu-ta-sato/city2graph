@@ -12,4 +12,4 @@ nbsphinx
 numpydoc
 toml
 overturemaps
-py-pandoc
+pandoc
