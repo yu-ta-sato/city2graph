@@ -23,5 +23,4 @@ requirements:
 build:
   number: 0
   script: {{ environ.get('PYTHON') }} -m pip install . -vv
-  string: py{{ environ.get('PYTHON_VERSION', '').replace('.', '') }}_pyg_{{ environ.get('PYG_VERSION').replace('.', '') }}_{{ environ.get('CUDA_VERSION') }}
-  skip: true  # [py<310]
+  string: py{{ environ.get('PYTHON_VERSION', '').replace('.', '') }}_pyg_{{ environ.get('PYG_VERSION', '') }}_{{ environ.get('CUDA_VERSION', 'cpu') }}

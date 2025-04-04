@@ -1,6 +1,5 @@
 name: city2graph_env
 channels:
-  - conda-forge/label/shapely_dev
   - conda-forge
   - pyg
   
@@ -11,4 +10,4 @@ dependencies:
   - jupyter
   - overturemaps
   - momepy
-  - pyg
+  - pyg>=2.6.1

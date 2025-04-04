@@ -23,6 +23,12 @@
 pip install city2graph
 ```
 
+### From conda-forge (To be enabled)
+
+```bash
+conda install -c conda-forge city2graph
+```
+
 ### From Source
 
 ```bash
@@ -37,3 +43,17 @@ conda activate city2graph_env
 # Install the package in development mode
 pip install -e .
 ```
+
+### Using Docker Compose
+
+```bash
+# Build and run in detached mode
+docker-compose up -d
+
+# Access Jupyter notebook at http://localhost:8888
+
+# Stop containers when done
+docker-compose down
+```
+
+You can customize the services in the `docker-compose.yml` file according to your needs.

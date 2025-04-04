@@ -7,26 +7,18 @@ export PYG_VERSION=$2     # "2.5",  "2.6"
 export CUDA_VERSION=$3    # "cpu",  "cu118", "cu121", "cu124"
 
 # Export these as environment variables for meta.yaml
-export CONDA_PYG_CONSTRAINT="pyg=${PYG_VERSION%.*}.*"
-
-# Create temp directory for building
-BUILD_DIR=$(mktemp -d)
-
-# Copy recipe to build directory
-cp -r $(dirname "$0")/* $BUILD_DIR/
+export CONDA_PYG_CONSTRAINT="pyg=*=*cpu*"
 
 # Add output directory to config
 CONDA_BLD_PATH=${CONDA_BLD_PATH:-"$(pwd)/conda-bld"}
 mkdir -p $CONDA_BLD_PATH
 
 # Run conda build with the specified configuration
-conda build $BUILD_DIR \
-  --python=$PYTHON_VERSION \
-  --output-folder $CONDA_BLD_PATH \
-  --no-anaconda-upload \
+conda build . \
   -c pyg \
-  -c conda-forge
-
+  -c conda-forge \
+  --output-folder $CONDA_BLD_PATH
+  
 echo "Build completed. Packages are in $CONDA_BLD_PATH"
 
 # Clean up AFTER the build is done

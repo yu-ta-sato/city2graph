@@ -9,7 +9,6 @@ import geopandas as gpd
 import warnings
 from torch_geometric.data import HeteroData, Data
 from torch_geometric.utils import to_networkx as pyg_to_networkx
-from city2graph import morphology
 from typing import Optional, Union, List, Tuple, Dict
 import networkx as nx
 

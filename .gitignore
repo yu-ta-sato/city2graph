@@ -7,3 +7,4 @@
 .vscode/
 notebooks/**
 !notebooks/city2graph_demo.ipynb
+conda/conda-bld/
