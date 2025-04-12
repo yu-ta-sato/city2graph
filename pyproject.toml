@@ -1,13 +1,13 @@
 [build-system]
-requires = ["setuptools", "wheel"]
-build-backend = "setuptools.build_meta"
+requires = ["poetry-core>=1.0.0"]
+build-backend = "poetry.core.masonry.api"
 
 [project]
 name = "city2graph"
 version = "0.1.0"
 description = "A library that converts Overture Maps data into a graph representation using NetworkX"
 authors = [
-    {name = "Yuta Sato", email = "stein.stone.ishi@gmail.com"},
+    {name = "Yuta Sato", email = "stein.stone.ishi@gmail.com"}
 ]
 readme = "README.md"
 license = {text = "BSD-3-Clause"}
@@ -16,14 +16,13 @@ classifiers = [
     "Intended Audience :: Science/Research",
     "License :: OSI Approved :: BSD License",
     "Programming Language :: Python",
-    "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3 :: Only",
     "Topic :: Scientific/Engineering :: GIS",
 ]
 keywords = ["graph-neural-networks", "pytorch-geometric", "urban", "transportation", "mobility", "overturemaps", "gtfs"]
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 dependencies = [
     "networkx>=2.8",
     "shapely>=2.1.0",
@@ -40,19 +39,23 @@ dependencies = [
 "Documentation" = "https://ysato.blog/city2graph"
 "Bug Tracker" = "https://github.com/yu-ta-sato/city2graph/issues"
 
-[project.optional-dependencies]
-docs = [
-    "sphinx",
-    "sphinx-autodoc-typehints",
-    "pydata-sphinx-theme",
-    "myst-parser",
-    "nbsphinx",
-    "numpydoc"
-]
-dev = [
-    "pytest",
-    "pytest-cov"
-]
+[tool.poetry]
+packages = [{include = "city2graph"}]
 
-[tool.setuptools]
-packages = ["city2graph"]
+[tool.poetry.group.docs]
+optional = true
+
+[tool.poetry.group.docs.dependencies]
+sphinx = "*"
+sphinx-autodoc-typehints = "*"
+pydata-sphinx-theme = "*"
+myst-parser = "*"
+nbsphinx = "*"
+numpydoc = "*"
+
+[tool.poetry.group.dev]
+optional = true
+
+[tool.poetry.group.dev.dependencies]
+pytest = "*"
+pytest-cov = "*"

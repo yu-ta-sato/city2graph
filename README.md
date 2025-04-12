@@ -23,25 +23,26 @@
 pip install city2graph
 ```
 
-### From conda-forge (To be enabled)
+**Important:** PyTorch and PyTorch Geometric do not support `conda` installations anymore. For the most reliable setup, we recommend using `pip` or `poetry` installation methods described below.
+
+If you encounter issues with `conda`, consider creating a `conda` environment for Python only and then installing the remaining dependencies with `pip`:
+
+
+### Using Poetry
 
 ```bash
-conda install -c conda-forge city2graph
-```
+# Install Poetry if you haven't already done it
+curl -sSL https://install.python-poetry.org | python3 -
 
-### From Source
-
-```bash
 # Clone the repository
 git clone https://github.com/yourusername/city2graph.git
 cd city2graph
 
-# Create and activate the conda environment
-conda env create -f environment.yml
-conda activate city2graph_env
+# Install dependencies using Poetry
+poetry install
 
-# Install the package in development mode
-pip install -e .
+# Activate the virtual environment (for Poetry 2.0.0+)
+poetry env activate
 ```
 
 ### Using Docker Compose
