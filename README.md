@@ -17,7 +17,7 @@
 
 ## Installation
 
-### From PyPI
+### Without PyTorch
 
 The simplest way to install city2graph is via pip:
 
@@ -28,9 +28,9 @@ pip install city2graph
 
 This installs the core functionality without PyTorch and PyTorch Geometric. It's suitable for basic graph operations with networkx, shapely, geopandas, etc.
 
-### With PyTorch (Optional)
+### With PyTorch (CPU)
 
-If you need the graph neural network functionality, install with the torch option:
+If you need the Graph Neural Networks functionality, install with the torch option:
 
 ```bash
 # Install with PyTorch and PyTorch Geometric (CPU version)
@@ -39,14 +39,12 @@ pip install "city2graph[torch]"
 
 This will install PyTorch and PyTorch Geometric with CPU support, suitable for development and small-scale processing.
 
-### With Specific CUDA Version (for GPU acceleration)
+### With PyTorch + CUDA (GPU)
 
 For GPU acceleration with a specific CUDA version, we recommend installing PyTorch and PyTorch Geometric separately before installing city2graph:
 
 ```bash
-# Step 1: Install PyTorch with your desired CUDA version
-# Visit https://pytorch.org/get-started/locally/ and select your preferences
-# Example for PyTorch 2.4.0 with CUDA 12.1:
+# Step 1: Install PyTorch with your desired CUDA version (e.g. PyTorch 2.4.0 + CUDA 12.1)
 pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
 
 # Step 2: Install PyTorch Geometric and its CUDA dependencies
@@ -57,19 +55,11 @@ pip install pyg_lib torch_scatter torch_sparse torch_cluster torch_spline_conv -
 pip install city2graph
 ```
 
-For macOS users with Apple Silicon:
-
-```bash
-# PyTorch for macOS uses MPS (Metal Performance Shaders) instead of CUDA
-pip install torch torchvision torchaudio
-pip install torch-geometric
-pip install pyg_lib torch_scatter torch_sparse torch_cluster torch_spline_conv -f https://data.pyg.org/whl/torch-2.4.0+cpu.html
-pip install city2graph
-```
-
 **Important:** Due to the low demand, `conda` distributions are deprecated for PyTorch and PyTorch Geometric. For the most reliable setup, we recommend using pip or Poetry as described above.
 
 ### Using Poetry
+
+#### Basic Installation (without PyTorch)
 
 ```bash
 # Install Poetry if you haven't already done it
@@ -82,32 +72,46 @@ cd city2graph
 # Install core dependencies (without PyTorch)
 poetry install --without torch torch-cuda
 
-# For PyTorch with CUDA support:
-# 1. First install PyTorch with your specific CUDA version
-# (outside of Poetry, in your system Python)
-pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
+# Activate the virtual environment
+poetry env activate
+```
 
-# 2. Then install PyTorch Geometric with matching CUDA dependencies
-pip install torch-geometric
-pip install pyg_lib torch_scatter torch_sparse torch_cluster torch_spline_conv -f https://data.pyg.org/whl/torch-2.4.0+cu121.html
+This installs the core functionality without PyTorch and PyTorch Geometric, suitable for basic graph operations with networkx, shapely, geopandas, etc.
 
-# 3. Now install the remaining dependencies with Poetry
-poetry install
+#### With PyTorch (Optional)
 
-# Alternatively, for CPU-only PyTorch:
+```bash
+# Step 1: Install the base dependencies with torch group
 poetry install --with torch
 
+# Step 2: Install PyG extensions outside of Poetry's dependency resolver
+# For CPU version:
+poetry run pip install pyg_lib torch_scatter torch_sparse torch_cluster torch_spline_conv -f https://data.pyg.org/whl/torch-2.4.0+cpu.html
+```
+
+This will install PyTorch and PyTorch Geometric with CPU support, suitable for development and small-scale processing.
+
+**Important:** PyTorch Geometric extensions cannot be managed by Poetry's dependency resolver and must be installed separately with pip as shown above.
+
+#### With Specific CUDA Version (for GPU acceleration)
+
+```bash
+# Step 1: Install the base dependencies with torch group
+poetry install --with torch
+
+# Step 2: Install PyG extensions outside of Poetry's dependency resolver with CUDA support
+# Replace cu121 with your CUDA version:
+poetry run pip install pyg_lib torch_scatter torch_sparse torch_cluster torch_spline_conv -f https://data.pyg.org/whl/torch-2.4.0+cu121.html
+```
+
+#### With Development or Documentation Dependencies
+
+```bash
 # Install with development dependencies (includes ipython, jupyter, notebook, and code formatting tools)
 poetry install --with dev
 
-# Install with documentation dependencies
-poetry install --with docs
-
-# Install with both development and documentation dependencies
-poetry install --with dev,docs
-
 # Activate the virtual environment
-poetry shell
+poetry env activate
 
 # Start IPython for interactive development
 poetry run ipython
@@ -126,7 +130,7 @@ The development dependencies include:
 
 These tools help streamline development and maintain code quality.
 
-### Using Docker Compose
+## Using Docker Compose
 
 Before using Docker Compose, ensure you have Docker and Docker Compose installed on your system:
 

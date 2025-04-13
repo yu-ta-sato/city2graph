@@ -3,12 +3,24 @@ Module for creating heterogeneous graph representations of urban environments.
 Converts geodataframes containing spatial data into PyTorch Geometric HeteroData objects.
 """
 
-import torch
+try:
+    import torch
+    import torch.nn as nn
+    from torch_geometric.data import HeteroData, Data
+    from torch_geometric.utils import to_networkx as pyg_to_networkx
+    TORCH_AVAILABLE = True
+except ImportError:
+    TORCH_AVAILABLE = False
+    # Create placeholder classes to prevent import errors
+    class HeteroData:
+        pass
+    
+    class Data:
+        pass
+
 import numpy as np
 import geopandas as gpd
 import warnings
-from torch_geometric.data import HeteroData, Data
-from torch_geometric.utils import to_networkx as pyg_to_networkx
 from typing import Optional, Union, List, Tuple, Dict
 import networkx as nx
 
@@ -18,10 +30,23 @@ __all__ = [
     "heterogeneous_graph",
     "from_morphological_network",
     "to_networkx",
+    "is_torch_available",
 ]
 
 
-def _get_device(device: Optional[Union[str, torch.device]] = None) -> torch.device:
+def is_torch_available() -> bool:
+    """
+    Check if PyTorch and PyTorch Geometric are available.
+
+    Returns
+    -------
+    bool
+        True if PyTorch and PyTorch Geometric are available, False otherwise.
+    """
+    return TORCH_AVAILABLE
+
+
+def _get_device(device: Optional[Union[str, 'torch.device']] = None) -> Union['torch.device', str]:
     """
     Get the appropriate torch device (CUDA if available, otherwise CPU).
 
@@ -40,7 +65,16 @@ def _get_device(device: Optional[Union[str, torch.device]] = None) -> torch.devi
     ------
     ValueError
         If device is not None, 'cuda', 'cpu', or torch.device
+    ImportError
+        If PyTorch is not installed
     """
+    if not TORCH_AVAILABLE:
+        raise ImportError(
+            "PyTorch and PyTorch Geometric are required for this function. "
+            "Please install them using: poetry install --with torch or "
+            "pip install city2graph[torch]"
+        )
+    
     if device is None:
         return torch.device("cuda" if torch.cuda.is_available() else "cpu")
     elif isinstance(device, torch.device):
@@ -186,8 +220,8 @@ def _extract_node_id_mapping(
 def _create_node_features(
     node_gdf: gpd.GeoDataFrame,
     feature_cols: Optional[List[str]] = None,
-    device: Optional[Union[str, torch.device]] = None,
-) -> torch.Tensor:
+    device: Optional[Union[str, 'torch.device']] = None,
+) -> 'torch.Tensor':
     """
     Create node feature tensors from attribute columns.
 
@@ -225,8 +259,8 @@ def _create_node_features(
 def _create_edge_features(
     edge_gdf: gpd.GeoDataFrame,
     feature_cols: Optional[List[str]] = None,
-    device: Optional[Union[str, torch.device]] = None,
-) -> torch.Tensor:
+    device: Optional[Union[str, 'torch.device']] = None,
+) -> 'torch.Tensor':
     """
     Create edge feature tensors from attribute columns in edge_gdf.
 
@@ -361,7 +395,7 @@ def _build_graph_data(
     edge_source_cols: Dict[Tuple[str, str, str], str],
     edge_target_cols: Dict[Tuple[str, str, str], str],
     edge_feature_cols: Optional[Dict[Tuple[str, str, str], List[str]]],
-    device: Optional[Union[str, torch.device]],
+    device: Optional[Union[str, 'torch.device']],
 ) -> HeteroData:
     """
     Build a heterogeneous graph (HeteroData) from node and edge GeoDataFrames.
@@ -510,7 +544,7 @@ def homogeneous_graph(
     edge_source_col: Optional[str] = None,
     edge_target_col: Optional[str] = None,
     edge_feature_cols: Optional[List[str]] = None,
-    device: Optional[Union[str, torch.device]] = None,
+    device: Optional[Union[str, 'torch.device']] = None,
 ) -> Data:
     """
     Create a homogeneous graph Data object from nodes and edges GeoDataFrames.
@@ -540,7 +574,19 @@ def homogeneous_graph(
     -------
     torch_geometric.data.Data
         A PyTorch Geometric Data graph object.
+        
+    Raises
+    ------
+    ImportError
+        If PyTorch and PyTorch Geometric are not installed
     """
+    if not TORCH_AVAILABLE:
+        raise ImportError(
+            "PyTorch and PyTorch Geometric are required for this function. "
+            "Please install them using: poetry install --with torch or "
+            "pip install city2graph[torch]"
+        )
+    
     # Preprocess homogeneous graph inputs into dictionaries.
     nodes_dict = {"node": nodes_gdf}
     edges_dict = {}
@@ -590,7 +636,7 @@ def heterogeneous_graph(
     edge_source_cols: Optional[Dict[Tuple[str, str, str], str]] = None,
     edge_target_cols: Optional[Dict[Tuple[str, str, str], str]] = None,
     edge_feature_cols: Optional[Dict[Tuple[str, str, str], List[str]]] = None,
-    device: Optional[Union[str, torch.device]] = None,
+    device: Optional[Union[str, 'torch.device']] = None,
 ) -> HeteroData:
     """
     Create a heterogeneous graph HeteroData object from node and edge dictionaries.
@@ -620,7 +666,19 @@ def heterogeneous_graph(
     -------
     torch_geometric.data.HeteroData
         A PyTorch Geometric HeteroData graph object.
+        
+    Raises
+    ------
+    ImportError
+        If PyTorch and PyTorch Geometric are not installed
     """
+    if not TORCH_AVAILABLE:
+        raise ImportError(
+            "PyTorch and PyTorch Geometric are required for this function. "
+            "Please install them using: poetry install --with torch or "
+            "pip install city2graph[torch]"
+        )
+    
     if node_id_cols is None:
         node_id_cols = {}
     if node_feature_cols is None:
@@ -642,7 +700,6 @@ def heterogeneous_graph(
         device=device,
     )
 
-    # Removed manual CRS assignment based on nodes_gdf.
     return data
 
 
@@ -652,7 +709,7 @@ def from_morphological_network(
     public_id_col: str = 'id',
     private_node_feature_cols: Optional[List[str]] = None,
     public_node_feature_cols: Optional[List[str]] = None,
-    device: Optional[Union[str, torch.device]] = None,
+    device: Optional[Union[str, 'torch.device']] = None,
 ) -> Union[HeteroData, Data]:
     """
     Create a graph representation from the output of create_morphological_network.
@@ -686,9 +743,18 @@ def from_morphological_network(
 
     Raises
     ------
+    ImportError
+        If PyTorch and PyTorch Geometric are not installed
     ValueError
         If required data is missing from the network_output dictionary
     """
+    if not TORCH_AVAILABLE:
+        raise ImportError(
+            "PyTorch and PyTorch Geometric are required for this function. "
+            "Please install them using: poetry install --with torch or "
+            "pip install city2graph[torch]"
+        )
+    
     # Validate device
     device = _get_device(device)
     
