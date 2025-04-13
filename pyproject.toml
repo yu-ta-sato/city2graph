@@ -22,16 +22,25 @@ classifiers = [
     "Topic :: Scientific/Engineering :: GIS",
 ]
 keywords = ["graph-neural-networks", "pytorch-geometric", "urban", "transportation", "mobility", "overturemaps", "gtfs"]
-requires-python = ">=3.11"
+requires-python = ">=3.11,<4.0"
 dependencies = [
     "networkx>=2.8",
     "shapely>=2.1.0",
     "geopandas>0.12.0",
     "libpysal>=4.12.1",
     "momepy",
-    "overturemaps",
-    "torch>2.4.0",
-    "torch_geometric>=2.6.1"
+    "overturemaps"
+]
+
+[project.optional-dependencies]
+torch = [
+    "torch>=2.4.0",
+    "torch_geometric>=2.6.1",
+    "pyg_lib",
+    "torch_scatter",
+    "torch_sparse",
+    "torch_cluster",
+    "torch_spline_conv"
 ]
 
 [project.urls]
@@ -41,6 +50,25 @@ dependencies = [
 
 [tool.poetry]
 packages = [{include = "city2graph"}]
+
+[tool.poetry.group.torch]
+optional = true
+
+[tool.poetry.group.torch.dependencies]
+torch = ">=2.4.0"
+torch-geometric = ">=2.6.1"
+
+[tool.poetry.group.torch-cuda]
+optional = true
+
+[tool.poetry.group.torch-cuda.dependencies]
+torch = {version = ">=2.4.0", extras = ["cuda"]}
+torch-geometric = ">=2.6.1"
+pyg_lib = "*"
+torch_scatter = "*"
+torch_sparse = "*"
+torch_cluster = "*"
+torch_spline_conv = "*"
 
 [tool.poetry.group.docs]
 optional = true
@@ -59,3 +87,8 @@ optional = true
 [tool.poetry.group.dev.dependencies]
 pytest = "*"
 pytest-cov = "*"
+ipython = "^8.14.0"
+jupyter = "^1.0.0"
+notebook = "^7.0.0"
+black = "^23.3.0"
+isort = "^5.12.0"
