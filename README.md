@@ -45,7 +45,7 @@ For GPU acceleration with a specific CUDA version, we recommend installing PyTor
 
 ```bash
 # Step 1: Install PyTorch with your desired CUDA version (e.g. PyTorch 2.4.0 + CUDA 12.1)
-pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
+pip install torch==2.4.0  --index-url https://download.pytorch.org/whl/cu121
 
 # Step 2: Install PyTorch Geometric and its CUDA dependencies
 pip install torch-geometric
