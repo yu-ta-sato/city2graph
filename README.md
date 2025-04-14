@@ -26,7 +26,7 @@ The simplest way to install city2graph is via pip:
 pip install city2graph
 ```
 
-This installs the core functionality without PyTorch and PyTorch Geometric. It's suitable for basic graph operations with networkx, shapely, geopandas, etc.
+This installs the core functionality without PyTorch and PyTorch Geometric.
 
 ### With PyTorch (CPU)
 
@@ -78,14 +78,13 @@ poetry env activate
 
 This installs the core functionality without PyTorch and PyTorch Geometric, suitable for basic graph operations with networkx, shapely, geopandas, etc.
 
-#### With PyTorch (Optional)
+#### With PyTorch
 
 ```bash
 # Step 1: Install the base dependencies with torch group
 poetry install --with torch
 
 # Step 2: Install PyG extensions outside of Poetry's dependency resolver
-# For CPU version:
 poetry run pip install pyg_lib torch_scatter torch_sparse torch_cluster torch_spline_conv -f https://data.pyg.org/whl/torch-2.4.0+cpu.html
 ```
 
@@ -100,7 +99,6 @@ This will install PyTorch and PyTorch Geometric with CPU support, suitable for d
 poetry install --with torch
 
 # Step 2: Install PyG extensions outside of Poetry's dependency resolver with CUDA support
-# Replace cu121 with your CUDA version:
 poetry run pip install pyg_lib torch_scatter torch_sparse torch_cluster torch_spline_conv -f https://data.pyg.org/whl/torch-2.4.0+cu121.html
 ```
 
