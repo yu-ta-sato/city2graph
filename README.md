@@ -48,7 +48,7 @@ For GPU acceleration with a specific CUDA version, we recommend installing PyTor
 pip install torch==2.4.0  --index-url https://download.pytorch.org/whl/cu121
 
 # Step 2: Install PyTorch Geometric and its CUDA dependencies
-pip install torch-geometric
+pip install torch_geometric
 pip install pyg_lib torch_scatter torch_sparse torch_cluster torch_spline_conv -f https://data.pyg.org/whl/torch-2.4.0+cu121.html
 
 # Step 3: Now install city2graph (it will detect the pre-installed PyTorch)
