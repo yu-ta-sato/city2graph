@@ -36,9 +36,10 @@ def _build_knn_edges(indices: np.ndarray, node_indices: list | None = None) -> l
         return [(node_indices[i], node_indices[j]) 
                 for i, neighbors in enumerate(indices) 
                 for j in neighbors[1:]]  # Skip self (first neighbor)
-    return [(i, j) 
-            for i, neighbors in enumerate(indices) 
-            for j in neighbors[1:]]  # Skip self (first neighbor)
+    else:
+        return [(i, j) 
+                for i, neighbors in enumerate(indices) 
+                for j in neighbors[1:]]  # Skip self (first neighbor)
 
 
 def _build_delaunay_edges(coords: np.ndarray, node_indices: list) -> set[tuple]:
