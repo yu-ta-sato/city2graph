@@ -11,9 +11,10 @@ import geopandas as gpd
 import networkx as nx
 import numpy as np
 from scipy.spatial import Delaunay
+from scipy.spatial.distance import pdist, squareform
 from sklearn.neighbors import NearestNeighbors
 
-__all__ = ["knn_graph", "delaunay_graph"]
+__all__ = ["knn_graph", "delaunay_graph", "gilbert_graph", "waxman_graph"]
 
 
 def _build_knn_edges(indices: np.ndarray, node_indices: list | None = None) -> list[tuple]:
@@ -200,3 +201,83 @@ def delaunay_graph(gdf: gpd.GeoDataFrame) -> nx.Graph:
     graph.add_edges_from(edges)
     
     return graph
+
+
+def gilbert_graph(gdf: gpd.GeoDataFrame, radius: float) -> nx.Graph:
+    """
+    Generate Gilbert disc model graph from GeoDataFrame point geometries.
+
+    Parameters
+    ----------
+    gdf : geopandas.GeoDataFrame
+        Input GeoDataFrame with point geometries.
+    radius : float
+        Connection radius.
+
+    Returns
+    -------
+    networkx.Graph
+        Graph with nodes and edges connecting points within radius.
+    """
+    graph, coords, node_indices = _init_graph_and_nodes(gdf)
+    if coords is None or len(coords) < 2:
+        return graph
+    
+    # Vectorized distance computation and edge creation
+    dists = squareform(pdist(coords))
+    edge_mask = np.triu(dists <= radius, k=1)
+    edge_indices = np.nonzero(edge_mask)
+    
+    # Convert to node indices without loops
+    edges = [(node_indices[i], node_indices[j]) for i, j in zip(edge_indices[0], edge_indices[1])]
+    
+    graph.add_edges_from(edges)
+    graph.graph['radius'] = radius
+    return graph
+
+
+def waxman_graph(gdf: gpd.GeoDataFrame, beta: float, r0: float, seed: int | None = None) -> nx.Graph:
+    """
+    Generate Waxman random geometric graph with $H_{ij} = \beta e^{-d_{ij}/r_0}}$.
+
+    Parameters
+    ----------
+    gdf : geopandas.GeoDataFrame
+        Input GeoDataFrame with point geometries.
+    beta : float
+        Probability scale factor.
+    r0 : float
+        Euclidean distance scale factor.
+    seed : int | None, optional
+        Random seed for reproducibility.
+
+    Returns
+    -------
+    networkx.Graph
+        Stochastic Waxman graph with 'beta' and 'r0' in graph attributes.
+    """
+    graph, coords, node_indices = _init_graph_and_nodes(gdf)
+    if coords is None or len(coords) < 2:
+        return graph
+    
+    # Vectorized distance computation and probability calculation
+    dists = squareform(pdist(coords))
+    probs = beta * np.exp(-dists / r0)
+    if seed is not None:
+        rng = np.random.default_rng(seed)
+    else:
+        rng = np.random.default_rng()
+    random_matrix = rng.random(probs.shape)
+
+    # Create upper triangular mask for undirected edges
+    edge_mask = np.triu(random_matrix <= probs, k=1)
+    edge_indices = np.nonzero(edge_mask)
+    
+    # Convert to node indices without loops
+    edges = [(node_indices[i], node_indices[j]) for i, j in zip(edge_indices[0], edge_indices[1])]
+    
+    graph.add_edges_from(edges)
+    graph.graph['beta'] = beta
+    graph.graph['r0'] = r0
+    return graph
+
