@@ -32,7 +32,11 @@ extensions = [
 ]
 
 ogp_site_url = 'https://city2graph.net/'
-ogp_image = "https://city2graph.net/_images/city2graph_logo_main.png"
+#ogp_image = "https://city2graph.net/_images/city2graph_logo_main.png"
+ogp_social_cards = {
+    "image": "https://city2graph.net/_static/city2graph_logo.png",
+}
+
 
 templates_path = ['_templates']
 exclude_patterns = ['_build']
