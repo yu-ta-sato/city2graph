@@ -5,6 +5,7 @@
 **/__pycache__/
 .pytest_cache/
 .vscode/
+dev/
 
 notebooks/**
 !notebooks/city2graph_demo.ipynb

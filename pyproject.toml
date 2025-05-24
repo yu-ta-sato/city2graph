@@ -25,11 +25,12 @@ keywords = ["graph-neural-networks", "pytorch-geometric", "urban", "transportati
 requires-python = ">=3.11,<4.0"
 dependencies = [
     "networkx>=2.8",
+    "osmnx>=2.0.3",
     "shapely>=2.1.0",
     "geopandas>0.12.0",
     "libpysal>=4.12.1",
     "momepy",
-    "overturemaps"
+    "overturemaps",
 ]
 
 [project.optional-dependencies]
@@ -85,3 +86,8 @@ jupyter = "^1.0.0"
 notebook = "^7.0.0"
 black = "^23.3.0"
 isort = "^5.12.0"
+ipykernel = "^6.29.5"
+matplotlib = "^3.10.3"
+folium = "^0.19.6"
+mapclassify = "^2.8.1"
+sphinxext-opengraph = {extras = ["social-cards"], version = "^0.10.0"}
