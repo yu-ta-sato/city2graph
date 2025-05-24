@@ -6,6 +6,7 @@ torch
 torch_geometric
 sphinx
 sphinx-autodoc-typehints
+sphinxext-opengraph[social-cards]
 pydata-sphinx-theme
 myst-parser
 nbsphinx
