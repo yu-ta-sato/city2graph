@@ -137,13 +137,13 @@ def _init_graph_and_nodes(data: gpd.GeoDataFrame) -> tuple[nx.Graph, np.ndarray 
     return G, coords, node_indices
 
 
-def knn_graph(data: gpd.GeoDataFrame, k: int = 5) -> nx.Graph:
+def knn_graph(gdf: gpd.GeoDataFrame, k: int = 5) -> nx.Graph:
     """
     Generate k-nearest neighbor graph from points or polygon centroids.
 
     Parameters
     ----------
-    data : geopandas.GeoDataFrame
+    gdf : geopandas.GeoDataFrame
         Input data as a GeoDataFrame. Centroids of geometries are used.
     k : int, default 5
         Number of nearest neighbors to connect to each node.
@@ -154,7 +154,7 @@ def knn_graph(data: gpd.GeoDataFrame, k: int = 5) -> nx.Graph:
         Graph with nodes and k-nearest neighbor edges.
         Node attributes include original data and 'pos' coordinates.
     """
-    graph, coords, node_indices = _init_graph_and_nodes(data)
+    graph, coords, node_indices = _init_graph_and_nodes(gdf)
     
     # Early return for edge cases
     if k == 0 or coords is None or len(coords) <= 1:
@@ -173,13 +173,13 @@ def knn_graph(data: gpd.GeoDataFrame, k: int = 5) -> nx.Graph:
     return graph
 
 
-def delaunay_graph(data: gpd.GeoDataFrame) -> nx.Graph:
+def delaunay_graph(gdf: gpd.GeoDataFrame) -> nx.Graph:
     """
     Generate Delaunay graph from points or polygon centroids.
 
     Parameters
     ----------
-    data : geopandas.GeoDataFrame
+    gdf : geopandas.GeoDataFrame
         Input data as a GeoDataFrame. Centroids of geometries are used.
 
     Returns
@@ -188,7 +188,7 @@ def delaunay_graph(data: gpd.GeoDataFrame) -> nx.Graph:
         Graph with nodes and Delaunay triangulation edges.
         Node attributes include original data and 'pos' coordinates.
     """
-    graph, coords, node_indices = _init_graph_and_nodes(data)
+    graph, coords, node_indices = _init_graph_and_nodes(gdf)
     
     # Early return for insufficient points
     if coords is None or len(coords) < 3:
