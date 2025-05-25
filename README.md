@@ -1,7 +1,28 @@
 # city2graph
 
 <p align="center">
-  <img src="docs/source/_static/city2graph_logo_main.png" width="400" alt="city2graph logo">
+  <img src="docs/source/_static/city2graph_log```bash
+# Step 1: Install the base dependencies with torch extra
+uv sync --extra torch
+
+# Step 2: Install PyG extensions via pip (due to uv index URL limitations)
+uv run pip install pyg_lib torch_scatter torch_sparse torch_cluster torch_spline_conv -f https://data.pyg.org/whl/torch-2.4.0+cpu.html
+```
+
+This will install PyTorch and PyTorch Geometric with CPU support, suitable for development and small-scale processing.
+
+#### With Specific CUDA Version (for GPU acceleration)
+
+```bash
+# Step 1: Install the base dependencies with torch extra
+uv sync --extra torch
+
+# Step 2: Install PyG extensions with CUDA support via pip
+uv run pip install pyg_lib torch_scatter torch_sparse torch_cluster torch_spline_conv -f https://data.pyg.org/whl/torch-2.4.0+cu121.html
+```
+
+**Note:** Due to uv's current limitations with custom index URLs for PyTorch packages, PyG extensions must be installed via pip within the uv environment.
+400" alt="city2graph logo">
 </p>
 
 **city2graph** is a Python library for converting urban geometry into graph representations, enabling advanced analysis of urban environments. For more information, please reach out to the document (https://city2graph.net).
@@ -55,25 +76,22 @@ pip install pyg_lib torch_scatter torch_sparse torch_cluster torch_spline_conv -
 pip install city2graph
 ```
 
-**Important:** Due to the low demand, `conda` distributions are deprecated for PyTorch and PyTorch Geometric. For the most reliable setup, we recommend using pip or Poetry as described above.
+**Important:** Due to the low demand, `conda` distributions are deprecated for PyTorch and PyTorch Geometric. For the most reliable setup, we recommend using pip or uv as described above.
 
-### Using Poetry
+### Using uv
 
 #### Basic Installation (without PyTorch)
 
 ```bash
-# Install Poetry if you haven't already done it
-curl -sSL https://install.python-poetry.org | python3 -
+# Install uv if you haven't already done it
+curl -LsSf https://astral.sh/uv/install.sh | sh
 
 # Clone the repository
 git clone https://github.com/yu-ta-sato/city2graph.git
 cd city2graph
 
 # Install core dependencies (without PyTorch)
-poetry install --without torch torch-cuda
-
-# Activate the virtual environment
-poetry env activate
+uv sync
 ```
 
 This installs the core functionality without PyTorch and PyTorch Geometric, suitable for basic graph operations with networkx, shapely, geopandas, etc.
@@ -81,52 +99,48 @@ This installs the core functionality without PyTorch and PyTorch Geometric, suit
 #### With PyTorch
 
 ```bash
-# Step 1: Install the base dependencies with torch group
-poetry install --with torch
-
-# Step 2: Install PyG extensions outside of Poetry's dependency resolver
-poetry run pip install pyg_lib torch_scatter torch_sparse torch_cluster torch_spline_conv -f https://data.pyg.org/whl/torch-2.4.0+cpu.html
+uv sync --extra torch
 ```
 
 This will install PyTorch and PyTorch Geometric with CPU support, suitable for development and small-scale processing.
 
-**Important:** PyTorch Geometric extensions cannot be managed by Poetry's dependency resolver and must be installed separately with pip as shown above.
-
 #### With Specific CUDA Version (for GPU acceleration)
 
 ```bash
-# Step 1: Install the base dependencies with torch group
-poetry install --with torch
+# Step 1: Install the base dependencies with torch extra
+uv sync --extra torch
 
-# Step 2: Install PyG extensions outside of Poetry's dependency resolver with CUDA support
-poetry run pip install pyg_lib torch_scatter torch_sparse torch_cluster torch_spline_conv -f https://data.pyg.org/whl/torch-2.4.0+cu121.html
+# Step 2: Install PyG extensions with CUDA support via pip
+uv run pip install pyg_lib torch_scatter torch_sparse torch_cluster torch_spline_conv -f https://data.pyg.org/whl/torch-2.4.0+cu121.html
 ```
+
+**Note:** Due to uv's current limitations with custom index URLs for PyTorch packages, PyG extensions must be installed via pip within the uv environment.
 
 #### With Development or Documentation Dependencies
 
 ```bash
 # Install with development dependencies (includes ipython, jupyter, notebook, and code formatting tools)
-poetry install --with dev
+uv sync --group dev
 
-# Activate the virtual environment
-poetry env activate
+# Install Jupyter kernel for the project (recommended for notebook development)
+uv run ipython kernel install --user --env VIRTUAL_ENV $(pwd)/.venv --name=city2gragh-uv
 
 # Start IPython for interactive development
-poetry run ipython
+uv run ipython kernel install --name "your-env-name" --user
 
-# Start Jupyter Notebook
-poetry run jupyter notebook
+# Start Jupyter Notebook (the city2graph kernel will be available)
+uv run jupyter notebook
 ```
 
 #### Development Environment
 
 The development dependencies include:
-- `ipython`: Enhanced interactive Python shell
-- `jupyter` and `notebook`: For running Jupyter notebooks
-- `black` and `isort`: Code formatting tools
+- `ipython`: Enhanced interactive Python shell with Jupyter kernel support
+- `jupyter` and `notebook`: For running Jupyter notebooks with project-specific kernel
+- `isort`: Code formatting tools
 - `pytest` and `pytest-cov`: Testing tools
 
-These tools help streamline development and maintain code quality.
+The Jupyter kernel installation ensures that when you start Jupyter notebooks, you can select the "city2graph" kernel which has access to all your project dependencies in the correct virtual environment.
 
 ## Using Docker Compose
 
