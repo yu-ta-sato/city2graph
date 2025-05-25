@@ -28,6 +28,7 @@ extensions = [
     'sphinx.ext.intersphinx',
     'sphinx_autodoc_typehints',
     'sphinxext.opengraph',
+    'sphinx_plotly_directive',
     'nbsphinx',
 ]
 
