@@ -1,6 +1,6 @@
 # city2graph
 
-  <img src="docs/source/_static/social_preview.png" width="400" alt="city2graph logo">
+  <img src="docs/source/_static/social_preview.png" alt="city2graph logo">
 
 **city2graph** is a Python library for converting urban geometry into graph representations, enabling advanced analysis of urban environments. For more information, please reach out to the document (https://city2graph.net).
 
