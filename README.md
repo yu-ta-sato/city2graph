@@ -1,29 +1,6 @@
 # city2graph
 
-<p align="center">
-  <img src="docs/source/_static/city2graph_log```bash
-# Step 1: Install the base dependencies with torch extra
-uv sync --extra torch
-
-# Step 2: Install PyG extensions via pip (due to uv index URL limitations)
-uv run pip install pyg_lib torch_scatter torch_sparse torch_cluster torch_spline_conv -f https://data.pyg.org/whl/torch-2.4.0+cpu.html
-```
-
-This will install PyTorch and PyTorch Geometric with CPU support, suitable for development and small-scale processing.
-
-#### With Specific CUDA Version (for GPU acceleration)
-
-```bash
-# Step 1: Install the base dependencies with torch extra
-uv sync --extra torch
-
-# Step 2: Install PyG extensions with CUDA support via pip
-uv run pip install pyg_lib torch_scatter torch_sparse torch_cluster torch_spline_conv -f https://data.pyg.org/whl/torch-2.4.0+cu121.html
-```
-
-**Note:** Due to uv's current limitations with custom index URLs for PyTorch packages, PyG extensions must be installed via pip within the uv environment.
-400" alt="city2graph logo">
-</p>
+  <img src="docs/source/_static/social_preview.png" width="400" alt="city2graph logo">
 
 **city2graph** is a Python library for converting urban geometry into graph representations, enabling advanced analysis of urban environments. For more information, please reach out to the document (https://city2graph.net).
 
