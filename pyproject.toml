@@ -40,13 +40,6 @@ torch = [
     # PyG extensions need to be installed separately
 ]
 
-[project.urls]
-"Homepage" = "https://github.com/c2g-dev/city2graph"
-"Documentation" = "https://city2graph.net"
-"Bug Tracker" = "https://github.com/c2g-dev/city2graph/issues"
-
-[dependency-groups]
-
 docs = [
     "sphinx",
     "sphinx-autodoc-typehints",
@@ -54,9 +47,13 @@ docs = [
     "myst-parser",
     "nbsphinx",
     "numpydoc",
-    "sphinxext-opengraph[social-cards] >=0.10.0"
-    
+    "sphinxext-opengraph[social-cards] >=0.10.0",
+    "sphinx-plotly-directive",
+    "toml",
+    "pandoc",
+    "overturemaps"
 ]
+
 dev = [
     "pytest",
     "pytest-cov",
@@ -70,6 +67,11 @@ dev = [
     "mapclassify >=2.8.1",
     "contextily>=1.6.2",
 ]
+
+[project.urls]
+"Homepage" = "https://github.com/c2g-dev/city2graph"
+"Documentation" = "https://city2graph.net"
+"Bug Tracker" = "https://github.com/c2g-dev/city2graph/issues"
 
 [tool.uv]
 default-groups = []
