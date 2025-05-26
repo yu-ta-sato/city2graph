@@ -12,27 +12,28 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v2
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          version: "0.7.8"
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
 
       - name: Set up Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5
         with:
-          python-version: '3.12'
+          python-version-file: "pyproject.toml"
+          cache: "uv"
 
       - name: Install dependencies
         run: |
           sudo apt install pandoc
-          python -m pip install --upgrade pip setuptools wheel
-          pip install -r docs/requirements.txt
+          uv sync --locked --all-extras --dev
 
-      - name: Install city2graph
-        run: |
-          pip install -e ".[docs]"
-          
       - name: Build documentation
-        run: |
-          cd docs
-          make html        
+        run: uv run make -C docs html        
 
       - name: Upload documentation artifacts
         uses: actions/upload-artifact@v4
