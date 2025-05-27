@@ -31,6 +31,9 @@ Features
 Examples
 --------
 
+**Morphology**
+
+
 .. code-block:: python
 
    morphological_network = city2graph.morphological_network(
@@ -49,6 +52,8 @@ Examples
 
 >> For details, see :doc:`examples/morphological_networks_from_overturemaps`
 
+**Transportation**
+
 .. code-block:: python
 
    sample_gtfs_path = Path("./itm_london_gtfs.zip")
@@ -66,6 +71,8 @@ Examples
    A bus transportation network between stops in London
 
 >> For details, see :doc:`examples/gtfs`
+
+**Proximity**
 
 .. code-block:: python
 
