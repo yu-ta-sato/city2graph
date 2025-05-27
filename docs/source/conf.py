@@ -33,8 +33,8 @@ extensions = [
     'sphinx_sitemap',
 ]
 
-ogp_site_url = 'https://c2g-dev.github.io/city2graph/'
-ogp_image = "https://c2g-dev.github.io/city2graph/_static/social_preview.png"
+ogp_site_url = 'https://city2graph.net/'
+ogp_image = "https://city2graph.net/_static/social_preview.png"
 
 
 templates_path = ['_templates']
@@ -42,7 +42,7 @@ exclude_patterns = ['_build']
 
 # -- SEO configuration ------------------------------------------------------
 # Base URL for sitemap and canonical URLs
-html_baseurl = 'https://c2g-dev.github.io/city2graph/'
+html_baseurl = 'https://city2graph.net/'
 # Include robots.txt in the output
 html_extra_path = ['robots.txt']
 # Default meta description for pages
@@ -80,7 +80,7 @@ html_css_files = [
 
 # Theme configuration
 html_theme_options = {
-    "github_url": "https://github.com/yu-ta-sato/city2graph",  # Replace with actual GitHub URL
+    "github_url": "https://github.com/c2g-dev/city2graph",  # Replace with actual GitHub URL
     "use_edit_page_button": False,
     "show_toc_level": 2,
     "logo": {
