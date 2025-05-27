@@ -74,7 +74,7 @@ Examples
 .. raw:: html
 
    <div style="text-align:center;">
-     <video width="800px" controls>
+     <video style="width:100%; max-width:800px;" controls>
        <source src="_static/gilbert_graph.mp4" type="video/mp4">
        Your browser does not support the video tag.
      </video>
