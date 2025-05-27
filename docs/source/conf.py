@@ -41,13 +41,15 @@ templates_path = ['_templates']
 exclude_patterns = ['_build']
 
 # -- SEO configuration ------------------------------------------------------
+# Title for the HTML documentation
+html_title = 'city2graph'
 # Base URL for sitemap and canonical URLs
 html_baseurl = 'https://city2graph.net/'
 # Include robots.txt in the output
 html_extra_path = ['robots.txt']
 # Default meta description for pages
 html_meta = {
-    'description': "A Python package for transforming urban data into graphs for Graph Neural Networks."
+    'description': "A Python package for transforming urban data into graphs for spatial analysis and Graph Neural Networks."
 }
 # Sitemap settings
 sitemap_url_scheme = "{link}"
@@ -88,7 +90,7 @@ html_theme_options = {
         "image_dark": "_static/city2graph_logo_wide_dark.png",
     },
     "open_graph_image": "_static/city2graph_logo_wide.png",
-    "open_graph_description": "A Python package for transforming urban data into graphs for Graph Neural Networks.",
+    "open_graph_description": "A Python package for transforming urban data into graphs for spatial analysis and Graph Neural Networks.",
 
 }
 
