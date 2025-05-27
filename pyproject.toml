@@ -49,6 +49,7 @@ docs = [
     "numpydoc",
     "sphinxext-opengraph[social-cards] >=0.10.0",
     "sphinx-plotly-directive",
+    "sphinx-sitemap",
     "toml",
     "pandoc",
     "overturemaps"

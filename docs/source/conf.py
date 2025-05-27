@@ -30,14 +30,27 @@ extensions = [
     'sphinxext.opengraph',
     'sphinx_plotly_directive',
     'nbsphinx',
+    'sphinx_sitemap',
 ]
 
-ogp_site_url = 'https://city2graph.net/'
-ogp_image = "https://city2graph.net/_static/social_preview.png"
+ogp_site_url = 'https://c2g-dev.github.io/city2graph/'
+ogp_image = "https://c2g-dev.github.io/city2graph/_static/social_preview.png"
 
 
 templates_path = ['_templates']
 exclude_patterns = ['_build']
+
+# -- SEO configuration ------------------------------------------------------
+# Base URL for sitemap and canonical URLs
+html_baseurl = 'https://c2g-dev.github.io/city2graph/'
+# Include robots.txt in the output
+html_extra_path = ['robots.txt']
+# Default meta description for pages
+html_meta = {
+    'description': "A Python package for transforming urban data into graphs for Graph Neural Networks."
+}
+# Sitemap settings
+sitemap_url_scheme = "{link}"
 
 language = 'en'
 
