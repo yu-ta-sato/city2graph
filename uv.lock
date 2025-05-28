@@ -389,6 +389,12 @@ dependencies = [
 ]
 
 [package.optional-dependencies]
+torch = [
+    { name = "torch" },
+    { name = "torch-geometric" },
+]
+
+[package.dev-dependencies]
 dev = [
     { name = "contextily" },
     { name = "folium" },
@@ -401,6 +407,7 @@ dev = [
     { name = "notebook" },
     { name = "pytest" },
     { name = "pytest-cov" },
+    { name = "ruff" },
 ]
 docs = [
     { name = "myst-parser" },
@@ -416,55 +423,50 @@ docs = [
     { name = "sphinxext-opengraph", extra = ["social-cards"] },
     { name = "toml" },
 ]
-torch = [
-    { name = "torch" },
-    { name = "torch-geometric" },
-]
-
-[package.dev-dependencies]
-dev = [
-    { name = "ruff" },
-]
 
 [package.metadata]
 requires-dist = [
-    { name = "contextily", marker = "extra == 'dev'", specifier = ">=1.6.2" },
-    { name = "folium", marker = "extra == 'dev'", specifier = ">=0.19.6" },
     { name = "geopandas", specifier = ">0.12.0" },
-    { name = "ipykernel", marker = "extra == 'dev'", specifier = ">=6.29.5" },
-    { name = "ipython", marker = "extra == 'dev'", specifier = ">=8.14.0" },
-    { name = "isort", marker = "extra == 'dev'", specifier = ">=5.12.0" },
-    { name = "jupyter", marker = "extra == 'dev'", specifier = ">=1.0.0" },
     { name = "libpysal", specifier = ">=4.12.1" },
-    { name = "mapclassify", marker = "extra == 'dev'", specifier = ">=2.8.1" },
-    { name = "matplotlib", marker = "extra == 'dev'", specifier = ">=3.10.3" },
     { name = "momepy" },
-    { name = "myst-parser", marker = "extra == 'docs'" },
-    { name = "nbsphinx", marker = "extra == 'docs'" },
     { name = "networkx", specifier = ">=2.8" },
-    { name = "notebook", marker = "extra == 'dev'", specifier = ">=7.0.0" },
-    { name = "numpydoc", marker = "extra == 'docs'" },
     { name = "osmnx", specifier = ">=2.0.3" },
     { name = "overturemaps" },
-    { name = "overturemaps", marker = "extra == 'docs'" },
-    { name = "pandoc", marker = "extra == 'docs'" },
-    { name = "pydata-sphinx-theme", marker = "extra == 'docs'" },
-    { name = "pytest", marker = "extra == 'dev'" },
-    { name = "pytest-cov", marker = "extra == 'dev'" },
     { name = "shapely", specifier = ">=2.1.0" },
-    { name = "sphinx", marker = "extra == 'docs'" },
-    { name = "sphinx-autodoc-typehints", marker = "extra == 'docs'" },
-    { name = "sphinx-plotly-directive", marker = "extra == 'docs'" },
-    { name = "sphinx-sitemap", marker = "extra == 'docs'" },
-    { name = "sphinxext-opengraph", extras = ["social-cards"], marker = "extra == 'docs'", specifier = ">=0.10.0" },
-    { name = "toml", marker = "extra == 'docs'" },
     { name = "torch", marker = "extra == 'torch'", specifier = ">=2.4.0" },
     { name = "torch-geometric", marker = "extra == 'torch'", specifier = ">=2.6.1" },
 ]
-provides-extras = ["torch", "docs", "dev"]
+provides-extras = ["torch"]
 
 [package.metadata.requires-dev]
-dev = [{ name = "ruff", specifier = ">=0.11.11" }]
+dev = [
+    { name = "contextily", specifier = ">=1.6.2" },
+    { name = "folium", specifier = ">=0.19.6" },
+    { name = "ipykernel", specifier = ">=6.29.5" },
+    { name = "ipython", specifier = ">=8.14.0" },
+    { name = "isort", specifier = ">=5.12.0" },
+    { name = "jupyter", specifier = ">=1.0.0" },
+    { name = "mapclassify", specifier = ">=2.8.1" },
+    { name = "matplotlib", specifier = ">=3.10.3" },
+    { name = "notebook", specifier = ">=7.0.0" },
+    { name = "pytest" },
+    { name = "pytest-cov" },
+    { name = "ruff", specifier = ">=0.11.11" },
+]
+docs = [
+    { name = "myst-parser" },
+    { name = "nbsphinx" },
+    { name = "numpydoc" },
+    { name = "overturemaps" },
+    { name = "pandoc" },
+    { name = "pydata-sphinx-theme" },
+    { name = "sphinx" },
+    { name = "sphinx-autodoc-typehints" },
+    { name = "sphinx-plotly-directive" },
+    { name = "sphinx-sitemap" },
+    { name = "sphinxext-opengraph", extras = ["social-cards"], specifier = ">=0.10.0" },
+    { name = "toml" },
+]
 
 [[package]]
 name = "click"

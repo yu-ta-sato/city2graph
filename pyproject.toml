@@ -40,6 +40,18 @@ torch = [
     # PyG extensions need to be installed separately
 ]
 
+[project.urls]
+"Homepage" = "https://github.com/c2g-dev/city2graph"
+"Documentation" = "https://city2graph.net"
+"Bug Tracker" = "https://github.com/c2g-dev/city2graph/issues"
+
+[tool.uv]
+default-groups = []
+
+[tool.hatch.build.targets.wheel]
+packages = ["city2graph"]
+
+[dependency-groups]
 docs = [
     "sphinx",
     "sphinx-autodoc-typehints",
@@ -67,20 +79,5 @@ dev = [
     "folium >=0.19.6",
     "mapclassify >=2.8.1",
     "contextily>=1.6.2",
-]
-
-[project.urls]
-"Homepage" = "https://github.com/c2g-dev/city2graph"
-"Documentation" = "https://city2graph.net"
-"Bug Tracker" = "https://github.com/c2g-dev/city2graph/issues"
-
-[tool.uv]
-default-groups = []
-
-[tool.hatch.build.targets.wheel]
-packages = ["city2graph"]
-
-[dependency-groups]
-dev = [
-    "ruff>=0.11.11",
+    "ruff>=0.11.11"
 ]
