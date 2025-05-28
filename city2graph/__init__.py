@@ -1,6 +1,7 @@
 """
 city2graph: A package for constructing graphs from geospatial dataset.
 """
+
 import contextlib
 from importlib.metadata import PackageNotFoundError, version
 

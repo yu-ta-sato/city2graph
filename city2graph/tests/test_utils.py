@@ -13,6 +13,7 @@ from city2graph.utils import (
     split_segments_by_connectors,
 )
 
+
 def test_get_substring_basic():
     line = LineString([(0, 0), (2, 0)])
     seg = _get_substring(line, 0.25, 0.75)
@@ -75,7 +76,9 @@ def test_filter_network_by_distance_graph():
 def test_get_barrier_geometry():
     line = LineString([(0, 0), (2, 0)])
     mask = [[0.5, 1.0]]
-    gdf = gpd.GeoDataFrame({'geometry': [line], 'barrier_mask': [mask]}, geometry='geometry')
+    gdf = gpd.GeoDataFrame(
+        {"geometry": [line], "barrier_mask": [mask]}, geometry="geometry"
+    )
     result = get_barrier_geometry(gdf)
     geom = result.iloc[0]
     assert isinstance(geom, LineString)
@@ -85,8 +88,8 @@ def test_get_barrier_geometry():
 
 def test_split_segments_by_connectors_no_split():
     line = LineString([(0, 0), (2, 0)])
-    segs = gpd.GeoDataFrame({'id': [1], 'geometry': [line]})
-    empty_conn = gpd.GeoDataFrame({'id': [], 'geometry': []})
+    segs = gpd.GeoDataFrame({"id": [1], "geometry": [line]})
+    empty_conn = gpd.GeoDataFrame({"id": [], "geometry": []})
     result = split_segments_by_connectors(segs, empty_conn)
     assert len(result) == 1
     assert list(result.iloc[0].geometry.coords) == list(line.coords)
@@ -94,14 +97,16 @@ def test_split_segments_by_connectors_no_split():
 
 def test_split_segments_by_connectors_with_split():
     line = LineString([(0, 0), (2, 0)])
-    connectors = gpd.GeoDataFrame({'id': [1], 'geometry': [Point(1, 0)]})
-    segs = gpd.GeoDataFrame({
-        'id': [1],
-        'geometry': [line],
-        'connectors': ["[{'connector_id': 1, 'at': 0.5}]"],
-        'level_rules': ["[]"]
-    })
+    connectors = gpd.GeoDataFrame({"id": [1], "geometry": [Point(1, 0)]})
+    segs = gpd.GeoDataFrame(
+        {
+            "id": [1],
+            "geometry": [line],
+            "connectors": ["[{'connector_id': 1, 'at': 0.5}]"],
+            "level_rules": ["[]"],
+        }
+    )
     result = split_segments_by_connectors(segs, connectors)
     assert len(result) == 2
-    starts = sorted(result['split_from'].tolist())
+    starts = sorted(result["split_from"].tolist())
     assert starts == [0.0, 0.5]

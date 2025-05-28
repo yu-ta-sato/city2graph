@@ -79,3 +79,8 @@ default-groups = []
 
 [tool.hatch.build.targets.wheel]
 packages = ["city2graph"]
+
+[dependency-groups]
+dev = [
+    "ruff>=0.11.11",
+]

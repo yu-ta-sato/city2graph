@@ -8,15 +8,18 @@ try:
     import torch.nn as nn
     from torch_geometric.data import HeteroData, Data
     from torch_geometric.utils import to_networkx as pyg_to_networkx
+
     TORCH_AVAILABLE = True
 except ImportError:
     TORCH_AVAILABLE = False
+
     # Create placeholder classes to prevent import errors
     class HeteroData:
         pass
-    
+
     class Data:
         pass
+
 
 import numpy as np
 import geopandas as gpd
@@ -46,7 +49,9 @@ def is_torch_available() -> bool:
     return TORCH_AVAILABLE
 
 
-def _get_device(device: Optional[Union[str, 'torch.device']] = None) -> Union['torch.device', str]:
+def _get_device(
+    device: Optional[Union[str, "torch.device"]] = None,
+) -> Union["torch.device", str]:
     """
     Get the appropriate torch device (CUDA if available, otherwise CPU).
 
@@ -74,7 +79,7 @@ def _get_device(device: Optional[Union[str, 'torch.device']] = None) -> Union['t
             "Please install them using: poetry install --with torch or "
             "pip install city2graph[torch]"
         )
-    
+
     if device is None:
         return torch.device("cuda" if torch.cuda.is_available() else "cpu")
     elif isinstance(device, torch.device):
@@ -220,8 +225,8 @@ def _extract_node_id_mapping(
 def _create_node_features(
     node_gdf: gpd.GeoDataFrame,
     feature_cols: Optional[List[str]] = None,
-    device: Optional[Union[str, 'torch.device']] = None,
-) -> 'torch.Tensor':
+    device: Optional[Union[str, "torch.device"]] = None,
+) -> "torch.Tensor":
     """
     Create node feature tensors from attribute columns.
 
@@ -259,8 +264,8 @@ def _create_node_features(
 def _create_edge_features(
     edge_gdf: gpd.GeoDataFrame,
     feature_cols: Optional[List[str]] = None,
-    device: Optional[Union[str, 'torch.device']] = None,
-) -> 'torch.Tensor':
+    device: Optional[Union[str, "torch.device"]] = None,
+) -> "torch.Tensor":
     """
     Create edge feature tensors from attribute columns in edge_gdf.
 
@@ -395,7 +400,7 @@ def _build_graph_data(
     edge_source_cols: Dict[Tuple[str, str, str], str],
     edge_target_cols: Dict[Tuple[str, str, str], str],
     edge_feature_cols: Optional[Dict[Tuple[str, str, str], List[str]]],
-    device: Optional[Union[str, 'torch.device']],
+    device: Optional[Union[str, "torch.device"]],
 ) -> HeteroData:
     """
     Build a heterogeneous graph (HeteroData) from node and edge GeoDataFrames.
@@ -544,7 +549,7 @@ def homogeneous_graph(
     edge_source_col: Optional[str] = None,
     edge_target_col: Optional[str] = None,
     edge_feature_cols: Optional[List[str]] = None,
-    device: Optional[Union[str, 'torch.device']] = None,
+    device: Optional[Union[str, "torch.device"]] = None,
 ) -> Data:
     """
     Create a homogeneous graph Data object from nodes and edges GeoDataFrames.
@@ -574,7 +579,7 @@ def homogeneous_graph(
     -------
     torch_geometric.data.Data
         A PyTorch Geometric Data graph object.
-        
+
     Raises
     ------
     ImportError
@@ -586,19 +591,27 @@ def homogeneous_graph(
             "Please install them using: poetry install --with torch or "
             "pip install city2graph[torch]"
         )
-    
+
     # Preprocess homogeneous graph inputs into dictionaries.
     # Ensure at least empty edge type entry for homogeneous graphs
     nodes_dict = {"node": nodes_gdf}
     # Use explicit None check to avoid ambiguous truth of GeoDataFrame
-    edges_dict = {("node", "edge", "node"): edges_gdf if edges_gdf is not None else gpd.GeoDataFrame()}
+    edges_dict = {
+        ("node", "edge", "node"): edges_gdf
+        if edges_gdf is not None
+        else gpd.GeoDataFrame()
+    }
     node_id_cols = {"node": node_id_col} if node_id_col else {}
     node_feature_cols = {"node": node_feature_cols} if node_feature_cols else {}
     node_label_cols = {"node": node_label_cols} if node_label_cols else None
     edge_source_cols = {("node", "edge", "node"): edge_source_col}
     edge_target_cols = {("node", "edge", "node"): edge_target_col}
     # Wrap edge features into dict mapping for builder
-    edge_feature_map = {("node", "edge", "node"): edge_feature_cols} if edge_feature_cols is not None else None
+    edge_feature_map = (
+        {("node", "edge", "node"): edge_feature_cols}
+        if edge_feature_cols is not None
+        else None
+    )
 
     hetero_data = _build_graph_data(
         nodes=nodes_dict,
@@ -634,7 +647,7 @@ def heterogeneous_graph(
     edge_source_cols: Optional[Dict[Tuple[str, str, str], str]] = None,
     edge_target_cols: Optional[Dict[Tuple[str, str, str], str]] = None,
     edge_feature_cols: Optional[Dict[Tuple[str, str, str], List[str]]] = None,
-    device: Optional[Union[str, 'torch.device']] = None,
+    device: Optional[Union[str, "torch.device"]] = None,
 ) -> HeteroData:
     """
     Create a heterogeneous graph HeteroData object from node and edge dictionaries.
@@ -664,7 +677,7 @@ def heterogeneous_graph(
     -------
     torch_geometric.data.HeteroData
         A PyTorch Geometric HeteroData graph object.
-        
+
     Raises
     ------
     ImportError
@@ -676,7 +689,7 @@ def heterogeneous_graph(
             "Please install them using: poetry install --with torch or "
             "pip install city2graph[torch]"
         )
-    
+
     if node_id_cols is None:
         node_id_cols = {}
     if node_feature_cols is None:
@@ -703,11 +716,11 @@ def heterogeneous_graph(
 
 def from_morphological_network(
     network_output: Dict,
-    private_id_col: str = 'tess_id',
-    public_id_col: str = 'id',
+    private_id_col: str = "tess_id",
+    public_id_col: str = "id",
     private_node_feature_cols: Optional[List[str]] = None,
     public_node_feature_cols: Optional[List[str]] = None,
-    device: Optional[Union[str, 'torch.device']] = None,
+    device: Optional[Union[str, "torch.device"]] = None,
 ) -> Union[HeteroData, Data]:
     """
     Create a graph representation from the output of create_morphological_network.
@@ -752,32 +765,31 @@ def from_morphological_network(
             "Please install them using: poetry install --with torch or "
             "pip install city2graph[torch]"
         )
-    
+
     # Validate device
     device = _get_device(device)
-    
+
     # Extract data from network_output
     if not isinstance(network_output, dict):
-        raise ValueError("network_output must be a dictionary returned from create_morphological_network")
-    
+        raise ValueError(
+            "network_output must be a dictionary returned from create_morphological_network"
+        )
+
     # Extract GeoDataFrames from the network output
-    private_gdf = network_output.get('tessellations')
-    public_gdf = network_output.get('segments')
-    private_to_private_gdf = network_output.get('private_to_private')
-    public_to_public_gdf = network_output.get('public_to_public')
-    private_to_public_gdf = network_output.get('private_to_public')
-    
+    private_gdf = network_output.get("tessellations")
+    public_gdf = network_output.get("segments")
+    private_to_private_gdf = network_output.get("private_to_private")
+    public_to_public_gdf = network_output.get("public_to_public")
+    private_to_public_gdf = network_output.get("private_to_public")
+
     # Validate that required data exists
     has_private = private_gdf is not None and not private_gdf.empty
     has_public = public_gdf is not None and not public_gdf.empty
-    
+
     # Case 1: We have both private and public nodes - create heterogeneous graph
     if has_private and has_public:
         # Create nodes dictionary
-        nodes_dict = {
-            "private": private_gdf,
-            "public": public_gdf
-        }
+        nodes_dict = {"private": private_gdf, "public": public_gdf}
 
         # Create edges dictionary with edge type tuples
         edges_dict = {
@@ -787,10 +799,7 @@ def from_morphological_network(
         }
 
         # Create node ID columns dictionary
-        node_id_cols = {
-            "private": private_id_col,
-            "public": public_id_col
-        }
+        node_id_cols = {"private": private_id_col, "public": public_id_col}
 
         # Create node feature columns dictionary
         node_feature_cols = {}
@@ -863,12 +872,12 @@ def from_morphological_network(
 def to_networkx(graph: Union[Data, HeteroData]) -> nx.Graph:
     """
     Convert PyTorch Geometric Data or HeteroData to a NetworkX graph.
-    
+
     Parameters
     ----------
     graph : Union[Data, HeteroData]
         The PyTorch Geometric graph to convert
-    
+
     Returns
     -------
     nx.Graph

@@ -384,7 +384,7 @@ def identify_barrier_mask(level_rules: str) -> list:
     ):
         return [[0.0, 1.0]]
     # Normalize Python None to JSON null for proper JSON parsing
-    s = level_rules.replace("'", '"').replace('None', 'null')
+    s = level_rules.replace("'", '"').replace("None", "null")
     try:
         rules = json.loads(s)
     except Exception as e:
@@ -459,7 +459,9 @@ def _get_barrier_geometry(row):
             return (
                 None
                 if not parts
-                else parts[0] if len(parts) == 1 else MultiLineString(parts)
+                else parts[0]
+                if len(parts) == 1
+                else MultiLineString(parts)
             )
 
         else:
@@ -675,10 +677,12 @@ def split_segments_by_connectors(
     return result_gdf.reset_index(drop=True)
 
 
-def _rebuild_geometry(seg_id: Any, geom: LineString, pivot_df: pd.DataFrame) -> List[Tuple[float, float]]:
+def _rebuild_geometry(
+    seg_id: Any, geom: LineString, pivot_df: pd.DataFrame
+) -> List[Tuple[float, float]]:
     """
     Rebuild the geometry of a segment by replacing its endpoints with quantized centroids.
-    
+
     Parameters
     ----------
     seg_id : Any
@@ -687,7 +691,7 @@ def _rebuild_geometry(seg_id: Any, geom: LineString, pivot_df: pd.DataFrame) -> 
         Original geometry of the segment
     pivot_df : pd.DataFrame
         DataFrame containing quantized centroid coordinates for endpoints
-        
+
     Returns
     -------
     List[Tuple[float, float]]
@@ -710,16 +714,15 @@ def _rebuild_geometry(seg_id: Any, geom: LineString, pivot_df: pd.DataFrame) -> 
 
 
 def adjust_segment_connectors(
-    segments_gdf: gpd.GeoDataFrame, 
-    threshold: float
+    segments_gdf: gpd.GeoDataFrame, threshold: float
 ) -> gpd.GeoDataFrame:
     """
     Adjust segment connector endpoints by clustering endpoints within a threshold distance.
-    
+
     This function identifies endpoints that are within a threshold distance of each other
     and replaces them with their cluster's centroid, creating more precise connections
     between LineString segments.
-    
+
     Parameters
     ----------
     segments_gdf : gpd.GeoDataFrame
@@ -727,13 +730,13 @@ def adjust_segment_connectors(
     threshold : float
         Distance threshold for clustering endpoints. Endpoints whose coordinates
         quantize to the same bin (based on this threshold) will be merged.
-        
+
     Returns
     -------
     gpd.GeoDataFrame
         GeoDataFrame with adjusted LineString geometries where endpoints
         that were within the threshold have been merged to a common point
-        
+
     Notes
     -----
     The function works by:
@@ -741,14 +744,14 @@ def adjust_segment_connectors(
     2. Quantizing coordinates to bins based on the threshold
     3. Computing the centroid for each bin
     4. Rebuilding LineStrings with the new endpoint coordinates
-    
+
     Only LineString geometries are processed; other geometry types are left unchanged.
     """
     # Filter to only process LineString geometries
     mask = segments_gdf.geometry.type == "LineString"
     if not mask.any():
         return segments_gdf
-    
+
     valid = segments_gdf.loc[mask].copy()
     valid["seg_id"] = valid.index
 
@@ -791,7 +794,7 @@ def adjust_segment_connectors(
         ),
         axis=1,
     )
-    
+
     # Update the original GeoDataFrame with the new geometries
     segments_gdf.update(valid)
     return segments_gdf
