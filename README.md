@@ -4,6 +4,8 @@
 
 **city2graph** is a Python library for converting urban geometry into graph representations, enabling advanced analysis of urban environments. For more information, please reach out to the document (https://city2graph.net).
 
+[![codecov](https://codecov.io/gh/c2g-dev/city2graph/graph/badge.svg?token=2R449G75Z0)](https://codecov.io/gh/c2g-dev/city2graph)
+
 ## Features
 
 - Construct graphs from morphological datasets (e.g. buildings, streets, and land use)
