@@ -39,19 +39,6 @@ torch = [
     "torch_geometric >=2.6.1",
     # PyG extensions need to be installed separately
 ]
-
-[project.urls]
-"Homepage" = "https://github.com/c2g-dev/city2graph"
-"Documentation" = "https://city2graph.net"
-"Bug Tracker" = "https://github.com/c2g-dev/city2graph/issues"
-
-[tool.uv]
-default-groups = []
-
-[tool.hatch.build.targets.wheel]
-packages = ["city2graph"]
-
-[dependency-groups]
 docs = [
     "sphinx",
     "sphinx-autodoc-typehints",
@@ -66,7 +53,6 @@ docs = [
     "pandoc",
     "overturemaps"
 ]
-
 dev = [
     "pytest",
     "pytest-cov",
@@ -81,3 +67,14 @@ dev = [
     "contextily>=1.6.2",
     "ruff>=0.11.11"
 ]
+
+[project.urls]
+"Homepage" = "https://github.com/c2g-dev/city2graph"
+"Documentation" = "https://city2graph.net"
+"Bug Tracker" = "https://github.com/c2g-dev/city2graph/issues"
+
+[tool.uv]
+default-groups = []
+
+[tool.hatch.build.targets.wheel]
+packages = ["city2graph"]
