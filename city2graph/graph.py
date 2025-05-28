@@ -588,19 +588,17 @@ def homogeneous_graph(
         )
     
     # Preprocess homogeneous graph inputs into dictionaries.
+    # Ensure at least empty edge type entry for homogeneous graphs
     nodes_dict = {"node": nodes_gdf}
-    edges_dict = {}
-    if edges_gdf is not None and not edges_gdf.empty:
-        edges_dict[("node", "edge", "node")] = edges_gdf
+    # Use explicit None check to avoid ambiguous truth of GeoDataFrame
+    edges_dict = {("node", "edge", "node"): edges_gdf if edges_gdf is not None else gpd.GeoDataFrame()}
     node_id_cols = {"node": node_id_col} if node_id_col else {}
     node_feature_cols = {"node": node_feature_cols} if node_feature_cols else {}
     node_label_cols = {"node": node_label_cols} if node_label_cols else None
-    edge_source_cols = (
-        {("node", "edge", "node"): edge_source_col} if edge_source_col else {}
-    )
-    edge_target_cols = (
-        {("node", "edge", "node"): edge_target_col} if edge_target_col else {}
-    )
+    edge_source_cols = {("node", "edge", "node"): edge_source_col}
+    edge_target_cols = {("node", "edge", "node"): edge_target_col}
+    # Wrap edge features into dict mapping for builder
+    edge_feature_map = {("node", "edge", "node"): edge_feature_cols} if edge_feature_cols is not None else None
 
     hetero_data = _build_graph_data(
         nodes=nodes_dict,
@@ -610,7 +608,7 @@ def homogeneous_graph(
         node_label_cols=node_label_cols,
         edge_source_cols=edge_source_cols,
         edge_target_cols=edge_target_cols,
-        edge_feature_cols=edge_feature_cols,
+        edge_feature_cols=edge_feature_map,
         device=device,
     )
 

@@ -9,7 +9,7 @@ import subprocess
 from typing import List, Tuple, Union, Optional, Dict, Set, Any
 
 import numpy as np
-import pandas as pd
+import pandas as pd  # needed for default series in split_segments_by_connectors
 import geopandas as gpd
 from shapely.geometry import LineString, MultiLineString, Polygon, Point
 from shapely.geometry.base import BaseGeometry
@@ -383,8 +383,10 @@ def identify_barrier_mask(level_rules: str) -> list:
         "null",
     ):
         return [[0.0, 1.0]]
+    # Normalize Python None to JSON null for proper JSON parsing
+    s = level_rules.replace("'", '"').replace('None', 'null')
     try:
-        rules = json.loads(level_rules.replace("'", '"'))
+        rules = json.loads(s)
     except Exception as e:
         warnings.warn(f"JSON parse failed for level_rules: {e}")
         return [[0.0, 1.0]]
@@ -641,12 +643,17 @@ def split_segments_by_connectors(
     valid_ids = set(connectors_gdf["id"])
 
     # Pre-process connectors_info and level_rules for all rows at once
-    segments_gdf["connector_mask"] = (
-        segments_gdf.get("connectors", "").astype(str).apply(identify_connector_mask)
-    )
-    segments_gdf["barrier_mask"] = (
-        segments_gdf.get("level_rules", "").astype(str).apply(identify_barrier_mask)
-    )
+    if "connectors" in segments_gdf.columns:
+        conn_series = segments_gdf["connectors"].astype(str)
+    else:
+        conn_series = pd.Series([""] * len(segments_gdf), index=segments_gdf.index)
+    segments_gdf["connector_mask"] = conn_series.apply(identify_connector_mask)
+
+    if "level_rules" in segments_gdf.columns:
+        lvl_series = segments_gdf["level_rules"].astype(str)
+    else:
+        lvl_series = pd.Series([""] * len(segments_gdf), index=segments_gdf.index)
+    segments_gdf["barrier_mask"] = lvl_series.apply(identify_barrier_mask)
 
     # Prepare data structures
     new_rows_data = []
@@ -661,10 +668,8 @@ def split_segments_by_connectors(
         for rows in batch_results:
             new_rows_data.extend(rows)
 
-    # Create a new GeoDataFrame from all processed rows
-    result_gdf = gpd.GeoDataFrame(
-        new_rows_data, columns=segments_gdf.columns, crs=segments_gdf.crs
-    )
+    # Create a new GeoDataFrame from all processed rows, include split columns
+    result_gdf = gpd.GeoDataFrame(new_rows_data, crs=segments_gdf.crs)
 
     # Reset the index of the resulting GeoDataFrame
     return result_gdf.reset_index(drop=True)
