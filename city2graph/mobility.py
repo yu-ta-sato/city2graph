@@ -1,5 +1,3 @@
-"""
-Module for processing mobility networks.
-"""
+"""Module for processing mobility networks."""
 
 __all__ = []

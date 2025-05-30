@@ -1,15 +1,14 @@
-"""
-city2graph: A package for constructing graphs from geospatial dataset.
-"""
+"""city2graph: A package for constructing graphs from geospatial dataset."""
 
 import contextlib
-from importlib.metadata import PackageNotFoundError, version
+from importlib.metadata import PackageNotFoundError
+from importlib.metadata import version
 
-from .utils import *
-from .morphology import *
-from .transportation import *
-from .graph import *
-from .proximity import *
+from .graph import *  # noqa: F403
+from .morphology import *  # noqa: F403
+from .proximity import *  # noqa: F403
+from .transportation import *  # noqa: F403
+from .utils import *  # noqa: F403
 
 __author__ = "Yuta Sato"
 

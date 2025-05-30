@@ -1,35 +1,36 @@
-"""
-Module for utilities that handle GeoDataFrames and spatial operations.
-"""
+"""Module for utilities that handle GeoDataFrames and spatial operations."""
 
 import json
-import warnings
-import os
+import logging
 import subprocess
-from typing import List, Tuple, Union, Optional, Dict, Set, Any
+from pathlib import Path
+from typing import Any
 
-import numpy as np
-import pandas as pd  # needed for default series in split_segments_by_connectors
 import geopandas as gpd
-from shapely.geometry import LineString, MultiLineString, Polygon, Point
-from shapely.geometry.base import BaseGeometry
-import networkx as nx
 import momepy
+import networkx as nx
+import numpy as np
+import pandas as pd
+from shapely.geometry import LineString
+from shapely.geometry import MultiLineString
+from shapely.geometry import Point
+from shapely.geometry import Polygon
+from shapely.geometry.base import BaseGeometry
 
 # Define the public API for this module
 __all__ = [
-    "load_overture_data",
-    "get_barrier_geometry",
-    "identify_connector_mask",
-    "identify_barrier_mask",
-    "split_segments_by_connectors",
     "adjust_segment_connectors",
     "create_tessellation",
     "filter_network_by_distance",
+    "get_barrier_geometry",
+    "identify_barrier_mask",
+    "identify_connector_mask",
+    "load_overture_data",
+    "split_segments_by_connectors",
 ]
 
 # Valid Overture Maps data types
-VALID_OVERTURE_TYPES: Set[str] = {
+VALID_OVERTURE_TYPES: set[str] = {
     "address",
     "bathymetry",
     "building",
@@ -47,17 +48,171 @@ VALID_OVERTURE_TYPES: Set[str] = {
     "water",
 }
 
+logger = logging.getLogger(__name__)
+
+
+def _validate_overture_types(types: list[str] | None) -> list[str]:
+    """Validate and return overture data types."""
+    if types is None:
+        return list(VALID_OVERTURE_TYPES)
+
+    invalid_types = [t for t in types if t not in VALID_OVERTURE_TYPES]
+    if invalid_types:
+        msg = (
+            f"Invalid Overture Maps data type(s): {invalid_types}. "
+            f"Valid types are: {sorted(VALID_OVERTURE_TYPES)}"
+        )
+        raise ValueError(msg)
+    return types
+
+
+def _prepare_polygon_area(area: Polygon) -> tuple[list[float], Polygon | None]:
+    """Transform polygon to WGS84 and extract bounding box."""
+    wgs84_crs = "EPSG:4326"
+    original_polygon = area
+
+    if hasattr(area, "crs") and area.crs and area.crs != wgs84_crs:
+        temp_gdf = gpd.GeoDataFrame(geometry=[area], crs=area.crs)
+        temp_gdf = temp_gdf.to_crs(wgs84_crs)
+        original_polygon = temp_gdf.geometry.iloc[0]
+        logger.info("Transformed polygon from %s to WGS84 (EPSG:4326)", area.crs)
+
+    minx, miny, maxx, maxy = original_polygon.bounds
+    return [minx, miny, maxx, maxy], original_polygon
+
+
+def _read_overture_data(
+    output_path: str, process: subprocess.CompletedProcess, save_to_file: bool, data_type: str,
+) -> gpd.GeoDataFrame:
+    """Read data from file or stdout and return GeoDataFrame."""
+    WGS84_CRS = "EPSG:4326"
+
+    if save_to_file:
+        if Path(output_path).exists() and Path(output_path).stat().st_size > 0:
+            return gpd.read_file(output_path)
+        logger.warning("No data returned for %s", data_type)
+
+    if process.stdout and process.stdout.strip():
+        try:
+            return gpd.read_file(process.stdout)
+        except (ValueError, TypeError, KeyError, UnicodeDecodeError) as e:
+            logger.warning("Could not parse GeoJSON for %s: %s", data_type, e)
+
+    return gpd.GeoDataFrame(geometry=[], crs=WGS84_CRS)
+
+
+def _clip_to_polygon(gdf: gpd.GeoDataFrame, polygon: Polygon, data_type: str) -> gpd.GeoDataFrame:
+    """Clip GeoDataFrame to polygon boundaries."""
+    WGS84_CRS = "EPSG:4326"
+
+    if polygon is None or gdf.empty:
+        return gdf
+
+    mask = gpd.GeoDataFrame(geometry=[polygon], crs=WGS84_CRS)
+    if gdf.crs != mask.crs:
+        mask = mask.to_crs(gdf.crs)
+
+    try:
+        return gpd.clip(gdf, mask)
+    except (ValueError, AttributeError, RuntimeError) as e:
+        logger.warning("Error clipping %s to polygon: %s", data_type, e)
+        return gdf
+
+
+def _process_single_overture_type(
+    data_type: str,
+    bbox_str: str,
+    output_dir: str,
+    prefix: str,
+    save_to_file: bool,
+    return_data: bool,
+    original_polygon: Polygon | None,
+) -> gpd.GeoDataFrame | None:
+    """Process a single overture data type."""
+    WGS84_CRS = "EPSG:4326"
+
+    def _raise_invalid_data_type(data_type: str) -> None:
+        """Raise ValueError for invalid data type."""
+        msg = f"Invalid data type: {data_type}"
+        raise ValueError(msg)
+
+    def _raise_invalid_bbox_format(error_msg: str = "Invalid bbox format") -> None:
+        """Raise ValueError for invalid bbox format."""
+        raise ValueError(error_msg)
+
+    # Validate data_type against known safe values to prevent injection
+    if data_type not in VALID_OVERTURE_TYPES:
+        _raise_invalid_data_type(data_type)
+
+    # Validate and sanitize bbox_str to prevent injection
+    try:
+        bbox_parts = bbox_str.split(",")
+        if len(bbox_parts) != 4:
+            _raise_invalid_bbox_format()
+        # Validate that all parts are valid floats
+        validated_bbox = [float(part.strip()) for part in bbox_parts]
+        safe_bbox_str = ",".join(map(str, validated_bbox))
+    except (ValueError, TypeError) as e:
+        msg = f"Invalid bbox format: {e}"
+        raise ValueError(msg) from e
+
+    # Validate output directory and prefix to prevent path traversal
+    safe_output_dir = Path(output_dir).resolve()
+    safe_prefix = Path(prefix).name if prefix else ""
+
+    output_filename = f"{safe_prefix}{data_type}.geojson" if safe_prefix else f"{data_type}.geojson"
+    output_path = Path(safe_output_dir) / output_filename
+
+    cmd_parts = [
+        "overturemaps", "download", f"--bbox={safe_bbox_str}",
+        "-f", "geojson", f"--type={data_type}",
+    ]
+
+    if save_to_file:
+        cmd_parts.extend(["-o", str(output_path)])
+
+    try:
+        process = subprocess.run(
+            cmd_parts,
+            check=True,
+            stdout=subprocess.PIPE if not save_to_file else None,
+            text=True,
+        )
+
+        if not return_data:
+            return None
+
+        gdf = _read_overture_data(output_path, process, save_to_file, data_type)
+        gdf = _clip_to_polygon(gdf, original_polygon, data_type)
+
+        if gdf.empty and "geometry" not in gdf:
+            gdf = gpd.GeoDataFrame(geometry=[], crs=gdf.crs or WGS84_CRS)
+
+        # Successfully processed data type
+        if not gdf.empty:
+            logger.warning("Successfully processed %s", data_type)
+
+    except (OSError, ValueError, TypeError, KeyError, AttributeError) as e:
+        logger.warning("Error processing %s data: %s", data_type, e)
+        return gpd.GeoDataFrame(geometry=[], crs=WGS84_CRS) if return_data else None
+    except subprocess.CalledProcessError as e:
+        logger.warning("Error downloading %s: %s", data_type, e)
+        return gpd.GeoDataFrame(geometry=[], crs=WGS84_CRS) if return_data else None
+    else:
+        return gdf
+
 
 def load_overture_data(
-    area: Union[List[float], Polygon],
-    types: Optional[List[str]] = None,
+    area: list[float] | Polygon,
+    types: list[str] | None = None,
     output_dir: str = ".",
     prefix: str = "",
     save_to_file: bool = True,
     return_data: bool = True,
-) -> Dict[str, gpd.GeoDataFrame]:
+) -> dict[str, gpd.GeoDataFrame]:
     """
     Load data from Overture Maps using the CLI tool and optionally save to GeoJSON files.
+
     Can accept either a bounding box or a Polygon as the area parameter.
 
     Parameters
@@ -98,141 +253,26 @@ def load_overture_data(
     The Overture Maps API requires coordinates in WGS84 (EPSG:4326) format.
     For more information, see https://docs.overturemaps.org/
     """
-    if types is None:
-        types = list(VALID_OVERTURE_TYPES)
-    else:
-        # Validate input types
-        invalid_types = [t for t in types if t not in VALID_OVERTURE_TYPES]
-        if invalid_types:
-            raise ValueError(
-                f"Invalid Overture Maps data type(s): {invalid_types}. "
-                f"Valid types are: {sorted(VALID_OVERTURE_TYPES)}"
-            )
+    types = _validate_overture_types(types)
 
-    # Create output directory if it doesn't exist
-    if save_to_file and not os.path.exists(output_dir):
-        os.makedirs(output_dir)
-
-    # Extract bounding box if area is a Polygon
-    original_polygon = None
+    if save_to_file and not Path(output_dir).exists():
+        Path(output_dir).mkdir(parents=True)
 
     if isinstance(area, Polygon):
-        # Ensure the polygon is in WGS84 coordinates (EPSG:4326)
-        wgs84_crs = "EPSG:4326"
-        original_polygon = area
-
-        # Check if we need to transform the polygon to WGS84
-        if hasattr(area, "crs") and area.crs and area.crs != wgs84_crs:
-            # Create a GeoDataFrame with the polygon to transform it
-            temp_gdf = gpd.GeoDataFrame(geometry=[area], crs=area.crs)
-            temp_gdf = temp_gdf.to_crs(wgs84_crs)
-            original_polygon = temp_gdf.geometry.iloc[0]
-            print(f"Transformed polygon from {area.crs} to WGS84 (EPSG:4326)")
-
-        # Get the bounding box in WGS84 coordinates
-        minx, miny, maxx, maxy = original_polygon.bounds
-        bbox = [minx, miny, maxx, maxy]
+        bbox, original_polygon = _prepare_polygon_area(area)
     else:
-        # Assume the provided bounding box is already in WGS84
-        bbox = area
+        bbox, original_polygon = area, None
 
-    # Format bbox as string for CLI
     bbox_str = ",".join(map(str, bbox))
-
-    # Define WGS84 CRS constant
-    WGS84_CRS = "EPSG:4326"
-
     result = {}
 
     for data_type in types:
-        output_filename = (
-            f"{prefix}{data_type}.geojson" if prefix else f"{data_type}.geojson"
+        gdf = _process_single_overture_type(
+            data_type, bbox_str, output_dir, prefix,
+            save_to_file, return_data, original_polygon,
         )
-        output_path = os.path.join(output_dir, output_filename)
-
-        # Build the CLI command
-        cmd_parts = [
-            "overturemaps",
-            "download",
-            f"--bbox={bbox_str}",
-            "-f",
-            "geojson",
-            f"--type={data_type}",
-        ]
-
-        if save_to_file:
-            cmd_parts.extend(["-o", output_path])
-
-        try:
-            # Execute the command
-            process = subprocess.run(
-                cmd_parts,
-                check=True,
-                stdout=subprocess.PIPE if not save_to_file else None,
-                text=True,
-            )
-
-            # Read data if requested
-            if return_data:
-                try:
-                    if save_to_file:
-                        # Read from the saved file
-                        if (
-                            os.path.exists(output_path)
-                            and os.path.getsize(output_path) > 0
-                        ):
-                            gdf = gpd.read_file(output_path)
-                        else:
-                            warnings.warn(f"No data returned for {data_type}")
-                            # Create empty GeoDataFrame with proper geometry column and CRS
-                            gdf = gpd.GeoDataFrame(geometry=[], crs=WGS84_CRS)
-                    else:
-                        # Parse from stdout
-                        if process.stdout and process.stdout.strip():
-                            try:
-                                gdf = gpd.read_file(process.stdout)
-                            except Exception as e:
-                                warnings.warn(
-                                    f"Could not parse GeoJSON for {data_type}: {e}"
-                                )
-                                gdf = gpd.GeoDataFrame(geometry=[], crs=WGS84_CRS)
-                        else:
-                            gdf = gpd.GeoDataFrame(geometry=[], crs=WGS84_CRS)
-
-                    # Clip to original polygon if provided
-                    if original_polygon is not None and not gdf.empty:
-                        # Create a GeoDataFrame from the original polygon for clipping
-                        mask = gpd.GeoDataFrame(
-                            geometry=[original_polygon], crs=WGS84_CRS
-                        )
-
-                        # Ensure the mask CRS matches the data CRS
-                        if gdf.crs != mask.crs:
-                            mask = mask.to_crs(gdf.crs)
-
-                        try:
-                            gdf = gpd.clip(gdf, mask)
-                        except Exception as e:
-                            warnings.warn(f"Error clipping {data_type} to polygon: {e}")
-
-                    # Ensure empty GeoDataFrames still have a valid geometry column
-                    if gdf.empty and "geometry" not in gdf:
-                        gdf = gpd.GeoDataFrame(geometry=[], crs=gdf.crs or WGS84_CRS)
-
-                    result[data_type] = gdf
-
-                except Exception as e:
-                    warnings.warn(f"Error processing {data_type} data: {e}")
-                    # Return an empty GeoDataFrame with proper setup
-                    result[data_type] = gpd.GeoDataFrame(geometry=[], crs=WGS84_CRS)
-
-                print(f"Successfully processed {data_type}")
-
-        except subprocess.CalledProcessError as e:
-            warnings.warn(f"Error downloading {data_type}: {e}")
-            if return_data:
-                # Create a properly formatted empty GeoDataFrame
-                result[data_type] = gpd.GeoDataFrame(geometry=[], crs=WGS84_CRS)
+        if return_data:
+            result[data_type] = gdf
 
     return result
 
@@ -243,7 +283,7 @@ def _extract_line_segment(
     end_point: Point,
     start_dist: float,
     end_dist: float,
-) -> Optional[LineString]:
+) -> LineString | None:
     """
     Create a LineString segment between two points on a line.
 
@@ -295,17 +335,16 @@ def _extract_line_segment(
     # If we have at least two points, create a LineString
     if len(new_coords) >= 2:
         return LineString(new_coords)
-    elif len(new_coords) == 1:
+    if len(new_coords) == 1:
         # Edge case: create a very short line
         p = new_coords[0]
         return LineString([(p[0], p[1]), (p[0] + 1e-9, p[1] + 1e-9)])
-    else:
-        return None
+    return None
 
 
 def _get_substring(
-    line: LineString, start_pct: float, end_pct: float
-) -> Optional[LineString]:
+    line: LineString, start_pct: float, end_pct: float,
+) -> LineString | None:
     """
     Extract substring of a line between start_pct and end_pct.
 
@@ -324,10 +363,8 @@ def _get_substring(
         The substring or None if invalid
     """
     # Validate input parameters
-    if not isinstance(line, LineString):
-        return None
-
-    if start_pct < 0 or end_pct > 1 or start_pct >= end_pct:
+    if (not isinstance(line, LineString) or
+        start_pct < 0 or end_pct > 1 or start_pct >= end_pct):
         return None
 
     # For full line or nearly full line, return the original
@@ -353,29 +390,44 @@ def _get_substring(
 
         return _extract_line_segment(line, start_point, end_point, start_dist, end_dist)
 
-    except Exception as e:
-        warnings.warn(f"Error creating line substring: {e}")
+    except (ValueError, AttributeError, TypeError) as e:
+        logger.warning("Error creating line substring: %s", e)
         return None
 
 
 def identify_barrier_mask(level_rules: str) -> list:
     """
     Compute non-barrier intervals (barrier mask) from level_rules JSON.
+
     Only rules with "value" equal to 0 are considered as barriers.
     If any such rule has "between" equal to null, then the entire interval [0, 1]
     is treated as non-barrier.
 
-    For example, if level_rules is:
+    Parameters
+    ----------
+    level_rules : str
+        JSON string containing level rules with "value" and "between" fields.
+        Example: '[{"value": 0, "between": [0.177, 0.836]}]'
 
-    '[{"value": 0, "between": [0.17760709099999999, 0.83631280600000002]},
-      {"value": 0, "between": [0.95722406000000004, 0.95967328100000004]}]'
+    Returns
+    -------
+    list
+        List of non-barrier intervals as [start, end] pairs.
+        Each interval represents a continuous non-barrier section.
 
-    then the barrier intervals are [(0.17760709, 0.836312806), (0.95722406, 0.959673281)],
-    and the returned non-barrier intervals will be:
-    [[0.0, 0.17760709], [0.836312806, 0.95722406], [0.959673281, 1.0]].
+    Examples
+    --------
+    >>> level_rules = '[{"value": 0, "between": [0.177, 0.836]}, {"value": 0, "between": [0.957, 0.959]}]'
+    >>> identify_barrier_mask(level_rules)
+    [[0.0, 0.177], [0.836, 0.957], [0.959, 1.0]]
 
+    Notes
+    -----
     If any rule for which "value" equals 0 has "between" as null, then
     the function returns [[0.0, 1.0]].
+
+    The barrier intervals are extracted from rules where "value" != 0,
+    and the returned intervals represent the complement (non-barrier sections).
     """
     if not isinstance(level_rules, str) or level_rules.strip().lower() in (
         "",
@@ -387,20 +439,19 @@ def identify_barrier_mask(level_rules: str) -> list:
     s = level_rules.replace("'", '"').replace("None", "null")
     try:
         rules = json.loads(s)
-    except Exception as e:
-        warnings.warn(f"JSON parse failed for level_rules: {e}")
+    except (json.JSONDecodeError, ValueError, TypeError) as e:
+        logger.warning("JSON parse failed for level_rules: %s", e)
         return [[0.0, 1.0]]
     if not isinstance(rules, list):
         rules = [rules]
     barrier_intervals = []
     for rule in rules:
-        if isinstance(rule, dict) and rule.get("value") is not None:
-            if rule.get("value") != 0:
-                between = rule.get("between")
-                if between is None:
-                    return []
-                if isinstance(between, list) and len(between) == 2:
-                    barrier_intervals.append((float(between[0]), float(between[1])))
+        if isinstance(rule, dict) and rule.get("value") is not None and rule.get("value") != 0:
+            between = rule.get("between")
+            if between is None:
+                return []
+            if isinstance(between, list) and len(between) == 2:
+                barrier_intervals.append((float(between[0]), float(between[1])))
     if not barrier_intervals:
         return [[0.0, 1.0]]
     barrier_intervals.sort(key=lambda x: x[0])
@@ -415,9 +466,10 @@ def identify_barrier_mask(level_rules: str) -> list:
     return result
 
 
-def _extract_barriers_from_mask(line: LineString, mask: list) -> Optional[BaseGeometry]:
+def _extract_barriers_from_mask(line: LineString, mask: list) -> BaseGeometry | None:
     """
     Extract barrier parts from the line using the provided barrier mask.
+
     The mask is expected to be a list of [start, end] intervals.
     """
     parts = []
@@ -427,15 +479,15 @@ def _extract_barriers_from_mask(line: LineString, mask: list) -> Optional[BaseGe
             parts.append(seg)
     if not parts:
         return None
-    elif len(parts) == 1:
+    if len(parts) == 1:
         return parts[0]
-    else:
-        return MultiLineString(parts)
+    return MultiLineString(parts)
 
 
-def _get_barrier_geometry(row):
+def _get_barrier_geometry(row: pd.Series) -> BaseGeometry | None:
     if "barrier_mask" not in row:
-        raise KeyError("Column 'barrier_mask' not found in input row")
+        msg = "Column 'barrier_mask' not found in input row"
+        raise KeyError(msg)
     barrier_mask = row["barrier_mask"]
 
     if barrier_mask is None:
@@ -454,7 +506,7 @@ def _get_barrier_geometry(row):
                     parts.extend(
                         clipped.geoms
                         if isinstance(clipped, MultiLineString)
-                        else [clipped]
+                        else [clipped],
                     )
             return (
                 None
@@ -464,14 +516,26 @@ def _get_barrier_geometry(row):
                 else MultiLineString(parts)
             )
 
-        else:
-            return _extract_barriers_from_mask(geom, barrier_mask)
+        return _extract_barriers_from_mask(geom, barrier_mask)
 
-    except Exception:
+    except (ValueError, AttributeError, TypeError):
         return None
 
 
 def get_barrier_geometry(gdf: gpd.GeoDataFrame) -> gpd.GeoSeries:
+    """
+    Extract barrier geometries from a GeoDataFrame based on barrier masks.
+
+    Parameters
+    ----------
+    gdf : gpd.GeoDataFrame
+        GeoDataFrame containing geometries and barrier_mask column
+
+    Returns
+    -------
+    gpd.GeoSeries
+        Series of barrier geometries extracted from the input geometries
+    """
     # Process each row of the GeoDataFrame
     barrier_geoms = gdf.apply(_get_barrier_geometry, axis=1)
     return gpd.GeoSeries(barrier_geoms, crs=gdf.crs)
@@ -480,8 +544,24 @@ def get_barrier_geometry(gdf: gpd.GeoDataFrame) -> gpd.GeoSeries:
 def identify_connector_mask(connectors_info: str) -> list:
     """
     Parse connectors_info and return a connector mask list.
-    Returns a list of floats starting with 0.0 and ending with 1.0.
-    If connectors_info is empty or invalid, returns [0.0, 1.0].
+
+    Parameters
+    ----------
+    connectors_info : str
+        JSON string containing connector information with "at" fields.
+        Example: '[{"connector_id": "123", "at": 0.5}]'
+
+    Returns
+    -------
+    list
+        List of floats starting with 0.0 and ending with 1.0.
+        If connectors_info is empty or invalid, returns [0.0, 1.0].
+
+    Examples
+    --------
+    >>> connectors_info = '[{"connector_id": "123", "at": 0.3}, {"connector_id": "456", "at": 0.7}]'
+    >>> identify_connector_mask(connectors_info)
+    [0.0, 0.3, 0.7, 1.0]
     """
     if not connectors_info or not str(connectors_info).strip():
         return [0.0, 1.0]
@@ -500,15 +580,14 @@ def identify_connector_mask(connectors_info: str) -> list:
                 if at_val is not None:
                     valid_ps.append(float(at_val))
         valid_ps.sort()
-        return [0.0] + valid_ps + [1.0]
-    except Exception:
+    except (json.JSONDecodeError, ValueError, TypeError):
         return [0.0, 1.0]
+    else:
+        return [0.0, *valid_ps, 1.0]
 
 
 def _recalc_barrier_mask(original_mask: list, sub_start: float, sub_end: float) -> list:
-    """
-    Recalculate barrier_mask for a subsegment defined by [sub_start, sub_end].
-    """
+    """Recalculate barrier_mask for a subsegment defined by [sub_start, sub_end]."""
     if original_mask == [[0.0, 1.0]] or not original_mask:
         return original_mask
     new_mask = []
@@ -521,12 +600,76 @@ def _recalc_barrier_mask(original_mask: list, sub_start: float, sub_end: float) 
                 [
                     (inter_start - sub_start) / seg_length,
                     (inter_end - sub_start) / seg_length,
-                ]
+                ],
             )
     return new_mask
 
 
-def _process_segment(row, valid_ids):
+def _parse_connectors_info(connectors_info: str | None) -> list[dict]:
+    """Parse and validate connectors info from row data."""
+    if not connectors_info or not str(connectors_info).strip():
+        return []
+
+    try:
+        parsed = json.loads(str(connectors_info).replace("'", '"'))
+        if isinstance(parsed, dict):
+            return [parsed]
+        if isinstance(parsed, list):
+            return parsed
+        return []
+    except (json.JSONDecodeError, ValueError, TypeError):
+        return []
+
+
+def _extract_valid_connectors(connectors_list: list[dict], valid_ids: set) -> list[float]:
+    """Extract valid connector positions from connector list."""
+    valid_connectors = set()
+    for item in connectors_list:
+        if not isinstance(item, dict):
+            continue
+
+        connector_id = item.get("connector_id")
+        at_value = item.get("at")
+
+        if connector_id is None or at_value is None or connector_id not in valid_ids:
+            continue
+
+        valid_connectors.add(float(at_value))
+
+    return sorted(valid_connectors)
+
+
+def _create_connector_mask(valid_connectors: list[float]) -> list[float]:
+    """Create connector mask from valid connector positions."""
+    mask = []
+    if not valid_connectors or valid_connectors[0] != 0.0:
+        mask.append(0.0)
+    mask.extend(valid_connectors)
+    if not mask or mask[-1] != 1.0:
+        mask.append(1.0)
+    return mask
+
+
+def _create_split_row(row: pd.Series,
+                      part: LineString,
+                      start_pct: float,
+                      end_pct: float,
+                      mask: list[float],
+                      barrier_mask: list,
+                      original_id: str | int,
+                      counter: int) -> pd.Series:
+    """Create a new row for a split segment part."""
+    new_row = row.copy()
+    new_row.geometry = part
+    new_row["split_from"] = start_pct
+    new_row["split_to"] = end_pct
+    new_row["connector_mask"] = mask
+    new_row["barrier_mask"] = _recalc_barrier_mask(barrier_mask, start_pct, end_pct)
+    new_row["id"] = f"{original_id}_{counter}"
+    return new_row
+
+
+def _process_segment(row: pd.Series, valid_ids: set) -> list[pd.Series]:
     """
     Process a single segment row for splitting by connectors.
 
@@ -539,51 +682,24 @@ def _process_segment(row, valid_ids):
 
     Returns
     -------
-    list
+    list[pd.Series]
         List of new rows created from splitting the segment
     """
     geom = row.geometry
     connectors_info = row.get("connectors")
-    # Skip rows without connectors data
-    if not connectors_info or not str(connectors_info).strip():
+
+    # Parse connectors info
+    connectors_list = _parse_connectors_info(connectors_info)
+    if not connectors_list:
         return [row]
 
-    # Parse JSON only once per row
-    try:
-        parsed = json.loads(str(connectors_info).replace("'", '"'))
-        if isinstance(parsed, dict):
-            connectors_list = [parsed]
-        elif isinstance(parsed, list):
-            connectors_list = parsed
-        else:
-            return [row]
-    except Exception:
-        return [row]
-
-    # Find valid connectors
-    valid_connectors = set()
-    for item in connectors_list:
-        if isinstance(item, dict):
-            connector_id = item.get("connector_id")
-            at_value = item.get("at")
-            if connector_id is None or at_value is None:
-                continue
-            # Use pre-indexed valid_ids for fast lookup
-            if connector_id not in valid_ids:
-                continue
-            valid_connectors.add(float(at_value))
-
-    valid_connectors = sorted(valid_connectors)
+    # Extract valid connectors
+    valid_connectors = _extract_valid_connectors(connectors_list, valid_ids)
     if not valid_connectors:
         return [row]
 
-    # Recompute connector_mask without duplicates
-    mask = []
-    if not valid_connectors or valid_connectors[0] != 0.0:
-        mask.append(0.0)
-    mask.extend(valid_connectors)
-    if not mask or mask[-1] != 1.0:
-        mask.append(1.0)
+    # Create connector mask
+    mask = _create_connector_mask(valid_connectors)
 
     # Generate split geometries
     split_rows = []
@@ -592,41 +708,30 @@ def _process_segment(row, valid_ids):
     original_id = row.get("id", row.name)
     barrier_mask = row["barrier_mask"]
 
+    # Process each connector split
     for at in valid_connectors:
         part = _get_substring(geom, start_pct, at)
         if part is not None and not part.is_empty:
-            # Create only the necessary data for each new row
-            new_row = row.copy()
-            new_row.geometry = part
-            new_row["split_from"] = start_pct
-            new_row["split_to"] = at
-            new_row["connector_mask"] = mask
-            new_row["barrier_mask"] = _recalc_barrier_mask(barrier_mask, start_pct, at)
-            new_row["id"] = f"{original_id}_{counter}"
+            split_row = _create_split_row(row, part, start_pct, at, mask, barrier_mask, original_id, counter)
+            split_rows.append(split_row)
             counter += 1
-            split_rows.append(new_row)
         start_pct = at
 
     # Process the last segment
     part = _get_substring(geom, start_pct, 1.0)
     if part is not None and not part.is_empty:
-        new_row = row.copy()
-        new_row.geometry = part
-        new_row["split_from"] = start_pct
-        new_row["split_to"] = 1.0
-        new_row["connector_mask"] = mask
-        new_row["barrier_mask"] = _recalc_barrier_mask(barrier_mask, start_pct, 1.0)
-        new_row["id"] = f"{original_id}_{counter}"
-        split_rows.append(new_row)
+        split_row = _create_split_row(row, part, start_pct, 1.0, mask, barrier_mask, original_id, counter)
+        split_rows.append(split_row)
 
     return split_rows
 
 
 def split_segments_by_connectors(
-    segments_gdf: gpd.GeoDataFrame, connectors_gdf: gpd.GeoDataFrame
+    segments_gdf: gpd.GeoDataFrame, connectors_gdf: gpd.GeoDataFrame,
 ) -> gpd.GeoDataFrame:
     """
     Split segments at connector points and update barrier masks accordingly.
+
     Optimized for performance with batch processing.
 
     Parameters
@@ -665,7 +770,7 @@ def split_segments_by_connectors(
     for i in range(0, len(segments_gdf), batch_size):
         batch = segments_gdf.iloc[i : i + batch_size]
         batch_results = batch.apply(
-            lambda row: _process_segment(row, valid_ids), axis=1
+            lambda row: _process_segment(row, valid_ids), axis=1,
         )
         for rows in batch_results:
             new_rows_data.extend(rows)
@@ -678,8 +783,9 @@ def split_segments_by_connectors(
 
 
 def _rebuild_geometry(
-    seg_id: Any, geom: LineString, pivot_df: pd.DataFrame
-) -> List[Tuple[float, float]]:
+    seg_id: str | int,
+    geom: LineString,
+    pivot_df: pd.DataFrame) -> list[tuple[float, float]]:
     """
     Rebuild the geometry of a segment by replacing its endpoints with quantized centroids.
 
@@ -706,15 +812,11 @@ def _rebuild_geometry(
         pivot_df.loc[seg_id, ("y_centroid", "end")],
     )
     coords = list(geom.coords)
-    if len(coords) > 2:
-        new_coords = [start] + coords[1:-1] + [end]
-    else:
-        new_coords = [start, end]
-    return new_coords
+    return [start] + coords[1:-1] + [end] if len(coords) > 2 else [start, end]
 
 
 def adjust_segment_connectors(
-    segments_gdf: gpd.GeoDataFrame, threshold: float
+    segments_gdf: gpd.GeoDataFrame, threshold: float,
 ) -> gpd.GeoDataFrame:
     """
     Adjust segment connector endpoints by clustering endpoints within a threshold distance.
@@ -766,13 +868,13 @@ def adjust_segment_connectors(
             "pos": ["start"] * len(valid) + ["end"] * len(valid),
             "x": [pt[0] for pt in starts] + [pt[0] for pt in ends],
             "y": [pt[1] for pt in starts] + [pt[1] for pt in ends],
-        }
+        },
     )
 
     # Quantize coordinates to bins based on threshold
     endpoints_df["bin_x"] = np.rint(endpoints_df["x"] / threshold).astype(int)
     endpoints_df["bin_y"] = np.rint(endpoints_df["y"] / threshold).astype(int)
-    endpoints_df["bin"] = list(zip(endpoints_df["bin_x"], endpoints_df["bin_y"]))
+    endpoints_df["bin"] = list(zip(endpoints_df["bin_x"], endpoints_df["bin_y"], strict=False))
 
     # Calculate centroids for each bin
     centroids = (
@@ -783,14 +885,14 @@ def adjust_segment_connectors(
     endpoints_df = endpoints_df.join(centroids, on="bin")
 
     # Pivot the dataframe to get centroid coordinates by segment and position
-    pivot_df = endpoints_df.pivot(
-        index="seg_id", columns="pos", values=["x_centroid", "y_centroid"]
+    pivot_df = endpoints_df.pivot_table(
+        index="seg_id", columns="pos", values=["x_centroid", "y_centroid"],
     )
 
     # Rebuild geometries using the centroid coordinates
     valid["geometry"] = valid.apply(
         lambda row: LineString(
-            _rebuild_geometry(row["seg_id"], row.geometry, pivot_df)
+            _rebuild_geometry(row["seg_id"], row.geometry, pivot_df),
         ),
         axis=1,
     )
@@ -801,23 +903,24 @@ def adjust_segment_connectors(
 
 
 def create_tessellation(
-    geometry: Union[gpd.GeoDataFrame, gpd.GeoSeries],
-    primary_barriers: Optional[Union[gpd.GeoDataFrame, gpd.GeoSeries]] = None,
+    geometry: gpd.GeoDataFrame | gpd.GeoSeries,
+    primary_barriers: gpd.GeoDataFrame | gpd.GeoSeries | None = None,
     shrink: float = 0.4,
     segment: float = 0.5,
     threshold: float = 0.05,
     n_jobs: int = -1,
-    **kwargs: Any,
-) -> gpd.GeoDataFrame:
+    **kwargs: Any) -> gpd.GeoDataFrame:  # noqa: ANN401
     """
     Create tessellations from the given geometries.
+
     If primary_barriers are provided, enclosed tessellations are created.
     If not, morphological tessellations are created.
     For more details, see momepy.enclosed_tessellation and momepy.morphological_tessellation.
 
     Parameters
     ----------
-    geometry : Union[geopandas.GeoDataFrame, geopandas.GeoSeriesgeopandas       Input gegeopandastries to create a tessellation for. Should contain the geometries to tessellate.
+    geometry : Union[geopandas.GeoDataFrame, geopandas.GeoSeries]
+        Input geometries to create a tessellation for. Should contain the geometries to tessellate.
     primary_barriers : Optional[Union[gpd.GeoDataFrame, gpd.GeoSeries]], default=None
         Optional GeoDataFrame or GeoSeries containing barriers to use for enclosed tessellation.
         If provided, the function will create enclosed tessellation using these barriers.
@@ -837,6 +940,7 @@ def create_tessellation(
     **kwargs : Any
         Additional keyword arguments to pass to momepy.enclosed_tessellation.
         These can include parameters specific to the tessellation method used.
+
     Returns
     -------
     geopandas.GeoDataFrame
@@ -847,13 +951,14 @@ def create_tessellation(
         # Convert primary_barriers to GeoDataFrame if it's a GeoSeries
         if isinstance(primary_barriers, gpd.GeoSeries):
             primary_barriers = gpd.GeoDataFrame(
-                geometry=primary_barriers, crs=primary_barriers.crs
+                geometry=primary_barriers, crs=primary_barriers.crs,
             )
 
         # Ensure the barriers are in the same CRS as the input geometry
         if geometry.crs != primary_barriers.crs:
+            msg = "CRS mismatch: geometry and barriers must have the same CRS."
             raise ValueError(
-                "CRS mismatch: geometry and barriers must have the same CRS."
+                msg,
             )
 
         # Create enclosures for enclosed tessellation
@@ -878,23 +983,23 @@ def create_tessellation(
         # Apply ID handling for enclosed tessellation
         tessellation["tess_id"] = [
             f"{i}_{j}"
-            for i, j in zip(tessellation["enclosure_index"], tessellation.index)
+            for i, j in zip(tessellation["enclosure_index"], tessellation.index, strict=False)
         ]
-        tessellation.reset_index(drop=True, inplace=True)
+        tessellation = tessellation.reset_index(drop=True)
     else:
         # Create morphological tessellation
         tessellation = momepy.morphological_tessellation(
-            geometry=geometry, clip="bounding_box", shrink=shrink, segment=segment
+            geometry=geometry, clip="bounding_box", shrink=shrink, segment=segment,
         )
         tessellation["tess_id"] = tessellation.index
 
     return tessellation
 
 
-def _get_nearest_node(point, nodes_gdf, node_id="node_id"):
-    """
-    Helper function to find the nearest node in a GeoDataFrame.
-    """
+def _get_nearest_node(point: Point | gpd.GeoSeries,
+                      nodes_gdf: gpd.GeoDataFrame,
+                      node_id: str = "node_id") -> str | int:
+    """Find the nearest node in a GeoDataFrame."""
     if isinstance(point, gpd.GeoSeries):
         point = point.iloc[0]
     nearest_idx = nodes_gdf.distance(point).idxmin()
@@ -902,15 +1007,16 @@ def _get_nearest_node(point, nodes_gdf, node_id="node_id"):
 
 
 def filter_network_by_distance(
-    network: Union[gpd.GeoDataFrame, nx.Graph],
-    center_point: Union[Point, gpd.GeoSeries, gpd.GeoDataFrame],
+    network: gpd.GeoDataFrame | nx.Graph,
+    center_point: Point | gpd.GeoSeries | gpd.GeoDataFrame,
     distance: float,
     edge_attr: str = "length",
-    node_id_col: Optional[str] = None,
-) -> Union[gpd.GeoDataFrame, nx.Graph]:
+    node_id_col: str | None = None,
+) -> gpd.GeoDataFrame | nx.Graph:
     """
-    Extracts a filtered network containing only elements
-    within a given shortest-path distance from specified center point(s).
+    Extract a filtered network containing only elements within a given shortest-path distance.
+
+    Filters network elements based on distance from specified center point(s).
 
     Parameters
     ----------
@@ -949,14 +1055,14 @@ def filter_network_by_distance(
         *[
             (nid, Point([attrs.get("x"), attrs.get("y")]))
             for nid, attrs in G.nodes(data=True)
-        ]
+        ], strict=False,
     )
 
     # Use provided node_id_col or default
     node_id_name = node_id_col or "node_id"
 
     nodes_gdf = gpd.GeoDataFrame(
-        {node_id_name: node_ids, "geometry": node_geometries}, crs=original_crs
+        {node_id_name: node_ids, "geometry": node_geometries}, crs=original_crs,
     )
 
     # Initialize a set to collect nodes within distance from any center point
@@ -964,9 +1070,7 @@ def filter_network_by_distance(
 
     # Handle different types of center_point input
     center_points = center_point
-    if isinstance(center_point, gpd.GeoSeries) or isinstance(
-        center_point, gpd.GeoDataFrame
-    ):
+    if isinstance(center_point, (gpd.GeoSeries, gpd.GeoDataFrame)):
         # If it's a GeoDataFrame, convert to GeoSeries
         if isinstance(center_point, gpd.GeoDataFrame):
             center_points = center_point.geometry
@@ -987,9 +1091,7 @@ def filter_network_by_distance(
                 k for k, v in distance_dict.items() if v < distance
             )
         except (nx.NetworkXNoPath, nx.NodeNotFound) as e:
-            warnings.warn(
-                f"Could not compute paths from a center point: {e}", RuntimeWarning
-            )
+            logger.warning("Could not compute paths from a center point: %s", e, stacklevel=2)
 
     # Extract subgraph for nodes within distance from any center
     if nodes_within_distance:
@@ -999,19 +1101,16 @@ def filter_network_by_distance(
         # Return the result in the same format as the input
         if is_graph_input:
             return subgraph
-        else:
-            filtered_gdf = momepy.nx_to_gdf(subgraph, points=False)
+        filtered_gdf = momepy.nx_to_gdf(subgraph, points=False)
 
-            # Ensure that the geometry column is properly set as GeoSeries
-            if not isinstance(filtered_gdf.geometry, gpd.GeoSeries):
-                filtered_gdf = gpd.GeoDataFrame(
-                    filtered_gdf, geometry="geometry", crs=original_crs
-                )
+        # Ensure that the geometry column is properly set as GeoSeries
+        if not isinstance(filtered_gdf.geometry, gpd.GeoSeries):
+            filtered_gdf = gpd.GeoDataFrame(
+                filtered_gdf, geometry="geometry", crs=original_crs,
+            )
 
-            return filtered_gdf
-    else:
-        # Return empty result in the same format as the input
-        if is_graph_input:
-            return nx.Graph()
-        else:
-            return gpd.GeoDataFrame(geometry=[], crs=original_crs)
+        return filtered_gdf
+    # Return empty result in the same format as the input
+    if is_graph_input:
+        return nx.Graph()
+    return gpd.GeoDataFrame(geometry=[], crs=original_crs)

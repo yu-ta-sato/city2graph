@@ -1,25 +1,26 @@
-import pytest
+"""Pytest configuration and fixtures for city2graph tests."""
+
 import geopandas as gpd
-import numpy as np
-import pandas as pd
-from shapely.geometry import LineString, Polygon, Point, MultiLineString
+import pytest
+from shapely.geometry import LineString
+from shapely.geometry import Polygon
 
 
 @pytest.fixture
-def simple_line():
-    """Create a simple horizontal line from (0,0) to (10,0)"""
+def simple_line() -> LineString:
+    """Create a simple horizontal line from (0,0) to (10,0)."""
     return LineString([(0, 0), (10, 0)])
 
 
 @pytest.fixture
-def complex_line():
-    """Create a more complex line with multiple segments"""
+def complex_line() -> LineString:
+    """Create a more complex line with multiple segments."""
     return LineString([(0, 0), (2, 3), (5, 2), (8, 5), (10, 0)])
 
 
 @pytest.fixture
-def tunnel_road_flags():
-    """Create sample road flags JSON with tunnel indicators"""
+def tunnel_road_flags() -> dict[str, str]:
+    """Create sample road flags JSON with tunnel indicators."""
     # Full tunnel
     full_tunnel = '[{"values": {"is_tunnel": true}}]'
 
@@ -44,8 +45,8 @@ def tunnel_road_flags():
 
 
 @pytest.fixture
-def grid_data():
-    """Create a simple grid of buildings, roads, and tessellations"""
+def grid_data() -> dict[str, gpd.GeoDataFrame]:
+    """Create a simple grid of buildings, roads, and tessellations."""
     # Buildings: 3x3 grid of 10x10 squares with 5-unit spacing
     buildings = []
     for i in range(3):
@@ -53,7 +54,7 @@ def grid_data():
             x = i * 15
             y = j * 15
             buildings.append(
-                Polygon([(x, y), (x + 10, y), (x + 10, y + 10), (x, y + 10)])
+                Polygon([(x, y), (x + 10, y), (x + 10, y + 10), (x, y + 10)]),
             )
 
     buildings_gdf = gpd.GeoDataFrame(
@@ -91,7 +92,7 @@ def grid_data():
             x = i * 15 - 1
             y = j * 15 - 1
             tessellations.append(
-                Polygon([(x, y), (x + 12, y), (x + 12, y + 12), (x, y + 12)])
+                Polygon([(x, y), (x + 12, y), (x + 12, y + 12), (x, y + 12)]),
             )
 
     tessellation_gdf = gpd.GeoDataFrame(

@@ -1,12 +1,13 @@
 """
 Module for creating heterogeneous graph representations of urban environments.
+
 Converts geodataframes containing spatial data into PyTorch Geometric HeteroData objects.
 """
 
 try:
     import torch
-    import torch.nn as nn
-    from torch_geometric.data import HeteroData, Data
+    from torch_geometric.data import Data
+    from torch_geometric.data import HeteroData
     from torch_geometric.utils import to_networkx as pyg_to_networkx
 
     TORCH_AVAILABLE = True
@@ -21,19 +22,22 @@ except ImportError:
         pass
 
 
-import numpy as np
+import logging
+from typing import Union
+
 import geopandas as gpd
-import warnings
-from typing import Optional, Union, List, Tuple, Dict
 import networkx as nx
+import numpy as np
+
+logger = logging.getLogger(__name__)
 
 # Define the public API for this module
 __all__ = [
-    "homogeneous_graph",
-    "heterogeneous_graph",
     "from_morphological_network",
-    "to_networkx",
+    "heterogeneous_graph",
+    "homogeneous_graph",
     "is_torch_available",
+    "to_networkx",
 ]
 
 
@@ -50,7 +54,7 @@ def is_torch_available() -> bool:
 
 
 def _get_device(
-    device: Optional[Union[str, "torch.device"]] = None,
+    device: Union[str, "torch.device"] | None = None,
 ) -> Union["torch.device", str]:
     """
     Get the appropriate torch device (CUDA if available, otherwise CPU).
@@ -74,28 +78,31 @@ def _get_device(
         If PyTorch is not installed
     """
     if not TORCH_AVAILABLE:
-        raise ImportError(
+        msg = (
             "PyTorch and PyTorch Geometric are required for this function. "
             "Please install them using: poetry install --with torch or "
             "pip install city2graph[torch]"
         )
+        raise ImportError(
+            msg,
+        )
 
     if device is None:
         return torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    elif isinstance(device, torch.device):
+    if isinstance(device, torch.device):
         return device
-    elif device in ["cuda", "cpu"]:
+    if device in ["cuda", "cpu"]:
         return torch.device(device)
-    else:
-        raise ValueError("Device must be 'cuda', 'cpu', a torch.device object, or None")
+    msg = "Device must be 'cuda', 'cpu', a torch.device object, or None"
+    raise ValueError(msg)
 
 
 def _detect_edge_columns(
     edge_gdf: gpd.GeoDataFrame,
-    id_col: Optional[str] = None,
-    source_hint: Optional[List[str]] = None,
-    target_hint: Optional[List[str]] = None,
-) -> Tuple[Optional[str], Optional[str]]:
+    id_col: str | None = None,
+    source_hint: list[str] | None = None,
+    target_hint: list[str] | None = None,
+) -> tuple[str | None, str | None]:
     """
     Detect appropriate source and target columns in an edge GeoDataFrame.
 
@@ -154,7 +161,7 @@ def _detect_edge_columns(
     # Fall back to first two columns if needed
     if len(edge_gdf.columns) >= 2 and "geometry" not in edge_gdf.columns[:2]:
         return edge_gdf.columns[0], edge_gdf.columns[1]
-    elif len(edge_gdf.columns) >= 3 and "geometry" in edge_gdf.columns[0]:
+    if len(edge_gdf.columns) >= 3 and "geometry" in edge_gdf.columns[0]:
         return edge_gdf.columns[1], edge_gdf.columns[2]
 
     return None, None
@@ -162,15 +169,13 @@ def _detect_edge_columns(
 
 def _get_edge_columns(
     edge_gdf: gpd.GeoDataFrame,
-    source_col: Optional[str],
-    target_col: Optional[str],
-    source_mapping: Dict[str, int],
-    target_mapping: Dict[str, int],
-    id_col: Optional[str] = None,
-) -> Tuple[Optional[str], Optional[str]]:
-    """
-    Consolidate logic for detecting or confirming source/target columns.
-    """
+    source_col: str | None,
+    target_col: str | None,
+    source_mapping: dict[str, int],
+    target_mapping: dict[str, int],
+    id_col: str | None = None,
+) -> tuple[str | None, str | None]:
+    """Consolidate logic for detecting or confirming source/target columns."""
     if source_col is None or target_col is None:
         detected_source, detected_target = _detect_edge_columns(
             edge_gdf,
@@ -186,8 +191,8 @@ def _get_edge_columns(
 
 
 def _extract_node_id_mapping(
-    node_gdf: gpd.GeoDataFrame, id_col: Optional[str] = None
-) -> Tuple[Dict[str, int], str]:
+    node_gdf: gpd.GeoDataFrame, id_col: str | None = None,
+) -> tuple[dict[str, int], str]:
     """
     Extract a mapping from node IDs to indices.
 
@@ -206,8 +211,9 @@ def _extract_node_id_mapping(
     """
     # If id_col is provided but not found, raise a ValueError to alert the user.
     if id_col is not None and id_col not in node_gdf.columns:
+        msg = f"Provided id_col '{id_col}' not found in node GeoDataFrame columns."
         raise ValueError(
-            f"Provided id_col '{id_col}' not found in node GeoDataFrame columns."
+            msg,
         )
     if id_col is None:
         # Use index if id_col is None.
@@ -224,8 +230,8 @@ def _extract_node_id_mapping(
 # Modified _create_node_features: renamed parameter "attribute_cols" to "feature_cols"
 def _create_node_features(
     node_gdf: gpd.GeoDataFrame,
-    feature_cols: Optional[List[str]] = None,
-    device: Optional[Union[str, "torch.device"]] = None,
+    feature_cols: list[str] | None = None,
+    device: Union[str, "torch.device"] | None = None,
 ) -> "torch.Tensor":
     """
     Create node feature tensors from attribute columns.
@@ -250,21 +256,21 @@ def _create_node_features(
         # Return empty feature tensor if no valid columns
         return torch.zeros((len(node_gdf), 0), dtype=torch.float, device=device)
 
-    else:
-        # Check which columns actually exist
-        valid_cols = [col for col in feature_cols if col in node_gdf.columns]
+    # Check which columns actually exist
+    valid_cols = [col for col in feature_cols if col in node_gdf.columns]
 
-        if valid_cols:
-            # Convert to tensor and move to appropriate device
-            return torch.tensor(
-                node_gdf[valid_cols].values, dtype=torch.float, device=device
-            )
+    if valid_cols:
+        # Convert to tensor and move to appropriate device
+        return torch.tensor(
+            node_gdf[valid_cols].values, dtype=torch.float, device=device,
+        )
+    return None
 
 
 def _create_edge_features(
     edge_gdf: gpd.GeoDataFrame,
-    feature_cols: Optional[List[str]] = None,
-    device: Optional[Union[str, "torch.device"]] = None,
+    feature_cols: list[str] | None = None,
+    device: Union[str, "torch.device"] | None = None,
 ) -> "torch.Tensor":
     """
     Create edge feature tensors from attribute columns in edge_gdf.
@@ -293,11 +299,9 @@ def _create_edge_features(
 
 
 def _map_edge_strings(
-    edge_gdf: gpd.GeoDataFrame, source_col: str, target_col: str
+    edge_gdf: gpd.GeoDataFrame, source_col: str, target_col: str,
 ) -> gpd.GeoDataFrame:
-    """
-    Convert source/target columns to string once for vectorized lookups.
-    """
+    """Convert source/target columns to string once for vectorized lookups."""
     edge_gdf[f"__{source_col}_str"] = edge_gdf[source_col].astype(str)
     edge_gdf[f"__{target_col}_str"] = edge_gdf[target_col].astype(str)
     return edge_gdf
@@ -305,11 +309,11 @@ def _map_edge_strings(
 
 def _create_edge_idx_pairs(
     edge_gdf: gpd.GeoDataFrame,
-    source_mapping: Dict[str, int],
-    target_mapping: Optional[Dict[str, int]] = None,
-    source_col: Optional[str] = None,
-    target_col: Optional[str] = None,
-) -> List[List[int]]:
+    source_mapping: dict[str, int],
+    target_mapping: dict[str, int] | None = None,
+    source_col: str | None = None,
+    target_col: str | None = None,
+) -> list[list[int]]:
     """
     Process edges to create edge indices.
 
@@ -336,7 +340,7 @@ def _create_edge_idx_pairs(
 
     # Detect columns if not provided
     source_col, target_col = _get_edge_columns(
-        edge_gdf, source_col, target_col, source_mapping, target_mapping
+        edge_gdf, source_col, target_col, source_mapping, target_mapping,
     )
 
     # Skip if we couldn't determine columns
@@ -365,10 +369,10 @@ def _create_edge_idx_pairs(
     edge_count = len(valid_edges)
 
     if edge_count == 0 and (missing_src_count > 0 or missing_dst_count > 0):
-        warnings.warn(
-            f"No valid edges were found with columns {source_col}, {target_col}",
-            category=UserWarning,
-            stacklevel=2,
+        logger.warning(
+            "No valid edges were found with columns %s, %s",
+            source_col,
+            target_col,
         )
 
     if not valid_edges.empty:
@@ -377,14 +381,13 @@ def _create_edge_idx_pairs(
         to_indices = valid_edges[f"__{target_col}_str"].map(target_mapping).values
 
         # Create edge list
-        edges = np.column_stack([from_indices, to_indices]).tolist()
-        return edges
+        return np.column_stack([from_indices, to_indices]).tolist()
 
     return []
 
 
 # New helper to check if an edge GeoDataFrame is valid
-def _is_valid_edge_df(edge_gdf: Optional[gpd.GeoDataFrame]) -> bool:
+def _is_valid_edge_df(edge_gdf: gpd.GeoDataFrame | None) -> bool:
     return edge_gdf is not None and not edge_gdf.empty
 
 
@@ -392,15 +395,15 @@ def _is_valid_edge_df(edge_gdf: Optional[gpd.GeoDataFrame]) -> bool:
 # Updated _build_graph_data to accept node_y_attribute_cols parameter
 # Modified _build_graph_data: renamed parameters and references
 def _build_graph_data(
-    nodes: Dict[str, gpd.GeoDataFrame],
-    edges: Dict[Tuple[str, str, str], gpd.GeoDataFrame],
-    node_id_cols: Dict[str, str],
-    node_feature_cols: Dict[str, List[str]],
-    node_label_cols: Optional[Dict[str, List[str]]],
-    edge_source_cols: Dict[Tuple[str, str, str], str],
-    edge_target_cols: Dict[Tuple[str, str, str], str],
-    edge_feature_cols: Optional[Dict[Tuple[str, str, str], List[str]]],
-    device: Optional[Union[str, "torch.device"]],
+    nodes: dict[str, gpd.GeoDataFrame],
+    edges: dict[tuple[str, str, str], gpd.GeoDataFrame],
+    node_id_cols: dict[str, str],
+    node_feature_cols: dict[str, list[str]],
+    node_label_cols: dict[str, list[str]] | None,
+    edge_source_cols: dict[tuple[str, str, str], str],
+    edge_target_cols: dict[tuple[str, str, str], str],
+    edge_feature_cols: dict[tuple[str, str, str], list[str]] | None,
+    device: Union[str, "torch.device"] | None,
 ) -> HeteroData:
     """
     Build a heterogeneous graph (HeteroData) from node and edge GeoDataFrames.
@@ -456,7 +459,7 @@ def _build_graph_data(
                             else [geom.centroid.x, geom.centroid.y]
                         )
                         for geom in node_gdf.geometry
-                    ]
+                    ],
                 ),
                 dtype=torch.float,
                 device=device,
@@ -466,30 +469,29 @@ def _build_graph_data(
         # Update: use label columns instead of y_attribute_cols
         if node_label_cols and node_label_cols.get(node_type):
             data[node_type].y = _create_node_features(
-                node_gdf, node_label_cols[node_type], device
+                node_gdf, node_label_cols[node_type], device,
             )
         elif "y" in node_gdf.columns:
             data[node_type].y = torch.tensor(
-                node_gdf["y"].values, dtype=torch.float, device=device
+                node_gdf["y"].values, dtype=torch.float, device=device,
             )
 
     # Process edges across types
     for edge_type, edge_gdf in edges.items():
         if not isinstance(edge_type, tuple) or len(edge_type) != 3:
-            warnings.warn(
-                f"Edge type key must be a tuple of (source_type, relation_type, target_type). Got {edge_type} instead. Skipping.",
-                category=UserWarning,
-                stacklevel=2,
+            logger.warning(
+                "Edge type key must be a tuple of (source_type, relation_type, "
+                "target_type). Got %s instead. Skipping.",
+                edge_type,
             )
             continue
 
         src_type, rel_type, dst_type = edge_type
 
         if src_type not in node_id_mappings or dst_type not in node_id_mappings:
-            warnings.warn(
-                f"Edge type {edge_type} references node type(s) not present in nodes. Skipping.",
-                category=UserWarning,
-                stacklevel=2,
+            logger.warning(
+                "Edge type %s references node type(s) not present in nodes. Skipping.",
+                edge_type,
             )
             continue
         src_mapping = node_id_mappings[src_type]["mapping"]
@@ -507,24 +509,24 @@ def _build_graph_data(
             )
             if pairs:
                 data[src_type, rel_type, dst_type].edge_index = torch.tensor(
-                    np.array(pairs).T, dtype=torch.long, device=device
+                    np.array(pairs).T, dtype=torch.long, device=device,
                 )
             else:
                 data[src_type, rel_type, dst_type].edge_index = torch.zeros(
-                    (2, 0), dtype=torch.long, device=device
+                    (2, 0), dtype=torch.long, device=device,
                 )
             feature_cols = (
                 edge_feature_cols.get(edge_type) if edge_feature_cols else None
             )
             data[src_type, rel_type, dst_type].edge_attr = _create_edge_features(
-                edge_gdf, feature_cols, device
+                edge_gdf, feature_cols, device,
             )
         else:
             data[src_type, rel_type, dst_type].edge_index = torch.zeros(
-                (2, 0), dtype=torch.long, device=device
+                (2, 0), dtype=torch.long, device=device,
             )
             data[src_type, rel_type, dst_type].edge_attr = torch.empty(
-                (0, 0), dtype=torch.float, device=device
+                (0, 0), dtype=torch.float, device=device,
             )
 
     # Set CRS metadata from node GeoDataFrames more efficiently
@@ -535,21 +537,22 @@ def _build_graph_data(
     elif all(crs == crs_values[0] for crs in crs_values):
         data.crs = crs_values[0]
     else:
-        raise ValueError("CRS mismatch among node GeoDataFrames.")
+        msg = "CRS mismatch among node GeoDataFrames."
+        raise ValueError(msg)
 
     return data
 
 
 def homogeneous_graph(
     nodes_gdf: gpd.GeoDataFrame,
-    edges_gdf: Optional[gpd.GeoDataFrame] = None,
-    node_id_col: Optional[str] = None,
-    node_feature_cols: Optional[List[str]] = None,
-    node_label_cols: Optional[List[str]] = None,
-    edge_source_col: Optional[str] = None,
-    edge_target_col: Optional[str] = None,
-    edge_feature_cols: Optional[List[str]] = None,
-    device: Optional[Union[str, "torch.device"]] = None,
+    edges_gdf: gpd.GeoDataFrame | None = None,
+    node_id_col: str | None = None,
+    node_feature_cols: list[str] | None = None,
+    node_label_cols: list[str] | None = None,
+    edge_source_col: str | None = None,
+    edge_target_col: str | None = None,
+    edge_feature_cols: list[str] | None = None,
+    device: Union[str, "torch.device"] | None = None,
 ) -> Data:
     """
     Create a homogeneous graph Data object from nodes and edges GeoDataFrames.
@@ -586,26 +589,29 @@ def homogeneous_graph(
         If PyTorch and PyTorch Geometric are not installed
     """
     if not TORCH_AVAILABLE:
-        raise ImportError(
+        msg = (
             "PyTorch and PyTorch Geometric are required for this function. "
             "Please install them using: poetry install --with torch or "
             "pip install city2graph[torch]"
         )
+        raise ImportError(msg)
 
     # Preprocess homogeneous graph inputs into dictionaries.
     # Ensure at least empty edge type entry for homogeneous graphs
     nodes_dict = {"node": nodes_gdf}
+
     # Use explicit None check to avoid ambiguous truth of GeoDataFrame
     edges_dict = {
         ("node", "edge", "node"): edges_gdf
         if edges_gdf is not None
-        else gpd.GeoDataFrame()
+        else gpd.GeoDataFrame(),
     }
     node_id_cols = {"node": node_id_col} if node_id_col else {}
     node_feature_cols = {"node": node_feature_cols} if node_feature_cols else {}
     node_label_cols = {"node": node_label_cols} if node_label_cols else None
     edge_source_cols = {("node", "edge", "node"): edge_source_col}
     edge_target_cols = {("node", "edge", "node"): edge_target_col}
+
     # Wrap edge features into dict mapping for builder
     edge_feature_map = (
         {("node", "edge", "node"): edge_feature_cols}
@@ -631,23 +637,25 @@ def homogeneous_graph(
         edge_attr=hetero_data[("node", "edge", "node")].edge_attr,
         pos=hetero_data["node"].get("pos", None),
     )
+
     # Assign "y" node attribute if exists
     data.y = hetero_data["node"].get("y", None)
+
     # Assign CRS metadata from hetero_data.
     data.crs = hetero_data.crs
     return data
 
 
 def heterogeneous_graph(
-    nodes_dict: Dict[str, gpd.GeoDataFrame],
-    edges_dict: Dict[Tuple[str, str, str], gpd.GeoDataFrame],
-    node_id_cols: Optional[Dict[str, str]] = None,
-    node_feature_cols: Optional[Dict[str, List[str]]] = None,
-    node_label_cols: Optional[Dict[str, List[str]]] = None,
-    edge_source_cols: Optional[Dict[Tuple[str, str, str], str]] = None,
-    edge_target_cols: Optional[Dict[Tuple[str, str, str], str]] = None,
-    edge_feature_cols: Optional[Dict[Tuple[str, str, str], List[str]]] = None,
-    device: Optional[Union[str, "torch.device"]] = None,
+    nodes_dict: dict[str, gpd.GeoDataFrame],
+    edges_dict: dict[tuple[str, str, str], gpd.GeoDataFrame],
+    node_id_cols: dict[str, str] | None = None,
+    node_feature_cols: dict[str, list[str]] | None = None,
+    node_label_cols: dict[str, list[str]] | None = None,
+    edge_source_cols: dict[tuple[str, str, str], str] | None = None,
+    edge_target_cols: dict[tuple[str, str, str], str] | None = None,
+    edge_feature_cols: dict[tuple[str, str, str], list[str]] | None = None,
+    device: Union[str, "torch.device"] | None = None,
 ) -> HeteroData:
     """
     Create a heterogeneous graph HeteroData object from node and edge dictionaries.
@@ -684,11 +692,12 @@ def heterogeneous_graph(
         If PyTorch and PyTorch Geometric are not installed
     """
     if not TORCH_AVAILABLE:
-        raise ImportError(
+        msg = (
             "PyTorch and PyTorch Geometric are required for this function. "
             "Please install them using: poetry install --with torch or "
             "pip install city2graph[torch]"
         )
+        raise ImportError(msg)
 
     if node_id_cols is None:
         node_id_cols = {}
@@ -699,7 +708,7 @@ def heterogeneous_graph(
     if edge_target_cols is None:
         edge_target_cols = {}
 
-    data = _build_graph_data(
+    return _build_graph_data(
         nodes=nodes_dict,
         edges=edges_dict,
         node_id_cols=node_id_cols,
@@ -711,17 +720,16 @@ def heterogeneous_graph(
         device=device,
     )
 
-    return data
 
 
 def from_morphological_network(
-    network_output: Dict,
+    network_output: dict,
     private_id_col: str = "tess_id",
     public_id_col: str = "id",
-    private_node_feature_cols: Optional[List[str]] = None,
-    public_node_feature_cols: Optional[List[str]] = None,
-    device: Optional[Union[str, "torch.device"]] = None,
-) -> Union[HeteroData, Data]:
+    private_node_feature_cols: list[str] | None = None,
+    public_node_feature_cols: list[str] | None = None,
+    device: Union[str, "torch.device"] | None = None,
+) -> HeteroData | Data:
     """
     Create a graph representation from the output of create_morphological_network.
 
@@ -760,20 +768,20 @@ def from_morphological_network(
         If required data is missing from the network_output dictionary
     """
     if not TORCH_AVAILABLE:
-        raise ImportError(
+        msg = (
             "PyTorch and PyTorch Geometric are required for this function. "
             "Please install them using: poetry install --with torch or "
             "pip install city2graph[torch]"
         )
+        raise ImportError(msg)
 
     # Validate device
     device = _get_device(device)
 
     # Extract data from network_output
     if not isinstance(network_output, dict):
-        raise ValueError(
-            "network_output must be a dictionary returned from create_morphological_network"
-        )
+        msg = "network_output must be a dictionary returned from create_morphological_network"
+        raise TypeError(msg)
 
     # Extract GeoDataFrames from the network output
     private_gdf = network_output.get("tessellations")
@@ -835,7 +843,7 @@ def from_morphological_network(
         )
 
     # Case 2: We only have private nodes - create homogeneous graph
-    elif has_private:
+    if has_private:
         return homogeneous_graph(
             nodes_gdf=private_gdf,
             edges_gdf=private_to_private_gdf,
@@ -849,7 +857,7 @@ def from_morphological_network(
         )
 
     # Case 3: We only have public nodes - create homogeneous graph
-    elif has_public:
+    if has_public:
         return homogeneous_graph(
             nodes_gdf=public_gdf,
             edges_gdf=public_to_public_gdf,
@@ -863,13 +871,11 @@ def from_morphological_network(
         )
 
     # Case 4: No valid nodes - raise an error to prevent unintended empty graphs.
-    else:
-        raise ValueError(
-            "No valid node data provided. Cannot create a graph without nodes."
-        )
+    msg = "No valid node data provided. Cannot create a graph without nodes."
+    raise ValueError(msg)
 
 
-def to_networkx(graph: Union[Data, HeteroData]) -> nx.Graph:
+def to_networkx(graph: Data | HeteroData) -> nx.Graph:
     """
     Convert PyTorch Geometric Data or HeteroData to a NetworkX graph.
 
@@ -885,7 +891,9 @@ def to_networkx(graph: Union[Data, HeteroData]) -> nx.Graph:
     """
     # Custom behavior for HeteroData
     if hasattr(graph, "node_types"):
+        # Create a MultiDiGraph for heterogeneous data
         nx_graph = nx.MultiDiGraph()
+
         # Add nodes from each node type
         for ntype in graph.node_types:
             num_nodes = graph[ntype].x.size(0) if "x" in graph[ntype] else 0
@@ -897,6 +905,7 @@ def to_networkx(graph: Union[Data, HeteroData]) -> nx.Graph:
                 if "pos" in graph[ntype]:
                     node_attr["pos"] = graph[ntype].pos[i].tolist()
                 nx_graph.add_node(node_id, **node_attr)
+
         # Add edges for each edge type
         for edge_type in graph.edge_types:
             src_type, rel_type, dst_type = edge_type
@@ -910,16 +919,16 @@ def to_networkx(graph: Union[Data, HeteroData]) -> nx.Graph:
                 if "edge_attr" in edge_data:
                     attr["edge_attr"] = edge_data.edge_attr[j].tolist()
                 nx_graph.add_edge(src, dst, **attr)
+
         # Preserve global attributes if present
         if "crs" in graph:
             nx_graph.graph["crs"] = graph["crs"]
         return nx_graph
+
     # Default behavior for Data
-    else:
-        nx_graph = pyg_to_networkx(
-            graph,
-            node_attrs=["x", "pos"],
-            edge_attrs=["edge_attr"],
-            graph_attrs=["crs"],
-        )
-        return nx_graph
+    return pyg_to_networkx(
+        graph,
+        node_attrs=["x", "pos"],
+        edge_attrs=["edge_attr"],
+        graph_attrs=["crs"],
+    )

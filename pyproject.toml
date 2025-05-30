@@ -5,9 +5,9 @@ build-backend = "hatchling.build"
 [project]
 name = "city2graph"
 version = "0.1.0"
-description = "A library that converts Overture Maps data into a graph representation using NetworkX"
+description = "Transform geospatial relations into graphs for spatial analysis and GNNs."
 authors = [
-    {name = "Yuta Sato", email = "stein.stone.ishi@gmail.com"}
+    {name = "Yuta Sato", email = "y.sato@liverpool.ac.uk"}
 ]
 readme = "README.md"
 license = {text = "BSD-3-Clause"}
@@ -18,6 +18,7 @@ classifiers = [
     "Programming Language :: Python",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
     "Programming Language :: Python :: 3 :: Only",
     "Topic :: Scientific/Engineering :: GIS",
 ]
@@ -39,6 +40,8 @@ torch = [
     "torch_geometric >=2.6.1",
     # PyG extensions need to be installed separately
 ]
+
+[dependency-groups]
 docs = [
     "sphinx",
     "sphinx-autodoc-typehints",
@@ -65,7 +68,6 @@ dev = [
     "folium >=0.19.6",
     "mapclassify >=2.8.1",
     "contextily>=1.6.2",
-    "ruff>=0.11.11"
 ]
 
 [project.urls]
@@ -78,3 +80,70 @@ default-groups = []
 
 [tool.hatch.build.targets.wheel]
 packages = ["city2graph"]
+
+[tool.ruff]
+cache-dir = "~/.cache/pre-commit/ruff"
+exclude = [
+    "docs/*",
+    "dev/*",
+    ".bzr",
+    ".direnv",
+    ".eggs",
+    ".git",
+    ".git-rewrite",
+    ".hg",
+    ".ipynb_checkpoints",
+    ".mypy_cache",
+    ".nox",
+    ".pants.d",
+    ".pyenv",
+    ".pytest_cache",
+    ".pytype",
+    ".ruff_cache",
+    ".svn",
+    ".tox",
+    ".venv",
+    ".vscode",
+    "__pypackages__",
+    "_build",
+    "buck-out",
+    "build",
+    "dist",
+    "node_modules",
+    "site-packages",
+    "venv",
+]
+
+line-length = 100
+
+[tool.ruff.lint]
+extend-ignore = [
+    "DTZ001",
+    "DTZ007",
+    "FBT001",
+    "FBT002",
+    "N803",
+    "N806",
+    "PLR2004",
+    "SLF001",
+    "S101",
+    "S603",
+    "TRY300",
+    ]
+extend-select = ["ALL"]
+
+[tool.ruff.lint.isort]
+force-single-line = true
+
+[tool.ruff.lint.mccabe]
+max-complexity = 14
+
+[tool.ruff.lint.pycodestyle]
+max-line-length = 110 # line length + 10% since it isn't a hard upper bound
+
+[tool.ruff.lint.pydocstyle]
+convention = "numpy"
+
+[tool.ruff.lint.pylint]
+max-args = 10
+max-branches = 14

@@ -11,15 +11,16 @@ import geopandas as gpd
 import networkx as nx
 import numpy as np
 from scipy.spatial import Delaunay
-from scipy.spatial.distance import pdist, squareform
+from scipy.spatial.distance import pdist
+from scipy.spatial.distance import squareform
 from sklearn.neighbors import NearestNeighbors
 
-__all__ = ["knn_graph", "delaunay_graph", "gilbert_graph", "waxman_graph"]
+__all__ = ["delaunay_graph", "gilbert_graph", "knn_graph", "waxman_graph"]
 
 
 def _build_knn_edges(
-    indices: np.ndarray, node_indices: list | None = None
-) -> list[tuple]:
+    indices: np.ndarray,
+    node_indices: list | None = None) -> list[tuple]:
     """
     Build k-nearest neighbor edges from indices array.
 
@@ -41,13 +42,13 @@ def _build_knn_edges(
             for i, neighbors in enumerate(indices)
             for j in neighbors[1:]
         ]  # Skip self (first neighbor)
-    else:
-        return [
-            (i, j) for i, neighbors in enumerate(indices) for j in neighbors[1:]
-        ]  # Skip self (first neighbor)
+    return [
+        (i, j) for i, neighbors in enumerate(indices) for j in neighbors[1:]
+    ]  # Skip self (first neighbor)
 
 
-def _build_delaunay_edges(coords: np.ndarray, node_indices: list) -> set[tuple]:
+def _build_delaunay_edges(coords: np.ndarray,
+                          node_indices: list) -> set[tuple]:
     """
     Build Delaunay triangulation edges from coordinates.
 
@@ -71,9 +72,7 @@ def _build_delaunay_edges(coords: np.ndarray, node_indices: list) -> set[tuple]:
     }
 
 
-def _extract_coords_and_attrs_from_gdf(
-    gdf: gpd.GeoDataFrame,
-) -> tuple[np.ndarray, dict]:
+def _extract_coords_and_attrs_from_gdf(gdf: gpd.GeoDataFrame) -> tuple[np.ndarray, dict]:
     """
     Extract centroid coordinates and prepare node attributes from GeoDataFrame.
 
@@ -93,15 +92,14 @@ def _extract_coords_and_attrs_from_gdf(
     # Vectorized node attributes preparation
     node_attrs = {
         idx: {"geometry": geom, "pos": (centroid.x, centroid.y)}
-        for idx, (geom, centroid) in zip(gdf.index, zip(gdf.geometry, centroids))
+        for idx, (geom, centroid) in zip(gdf.index, zip(gdf.geometry, centroids, strict=False), strict=False)
     }
 
     return coords, node_attrs
 
 
 def _init_graph_and_nodes(
-    data: gpd.GeoDataFrame,
-) -> tuple[nx.Graph, np.ndarray | None, list | None]:
+    data: gpd.GeoDataFrame) -> tuple[nx.Graph, np.ndarray | None, list | None]:
     """
     Initialize graph and extract nodes from GeoDataFrame.
 
@@ -127,9 +125,11 @@ def _init_graph_and_nodes(
         If GeoDataFrame lacks geometry or all geometries are null.
     """
     if not isinstance(data, gpd.GeoDataFrame):
-        raise TypeError("Input data must be a GeoDataFrame.")
+        msg = "Input data must be a GeoDataFrame."
+        raise TypeError(msg)
     if not hasattr(data, "geometry") or data.geometry.isna().all():
-        raise ValueError("GeoDataFrame must contain geometry.")
+        msg = "GeoDataFrame must contain geometry."
+        raise ValueError(msg)
 
     # Initialize graph with CRS
     G = nx.Graph()
@@ -149,7 +149,8 @@ def _init_graph_and_nodes(
     return G, coords, node_indices
 
 
-def knn_graph(gdf: gpd.GeoDataFrame, k: int = 5) -> nx.Graph:
+def knn_graph(gdf: gpd.GeoDataFrame,
+              k: int = 5) -> nx.Graph:
     """
     Generate k-nearest neighbor graph from points or polygon centroids.
 
@@ -213,7 +214,8 @@ def delaunay_graph(gdf: gpd.GeoDataFrame) -> nx.Graph:
     return graph
 
 
-def gilbert_graph(gdf: gpd.GeoDataFrame, radius: float) -> nx.Graph:
+def gilbert_graph(gdf: gpd.GeoDataFrame,
+                  radius: float) -> nx.Graph:
     """
     Generate Gilbert disc model graph from GeoDataFrame point geometries.
 
@@ -241,7 +243,7 @@ def gilbert_graph(gdf: gpd.GeoDataFrame, radius: float) -> nx.Graph:
     # Convert to node indices without loops
     edges = [
         (node_indices[i], node_indices[j])
-        for i, j in zip(edge_indices[0], edge_indices[1])
+        for i, j in zip(edge_indices[0], edge_indices[1], strict=False)
     ]
 
     graph.add_edges_from(edges)
@@ -250,9 +252,11 @@ def gilbert_graph(gdf: gpd.GeoDataFrame, radius: float) -> nx.Graph:
 
 
 def waxman_graph(
-    gdf: gpd.GeoDataFrame, beta: float, r0: float, seed: int | None = None
-) -> nx.Graph:
-    """
+    gdf: gpd.GeoDataFrame,
+    beta: float,
+    r0: float,
+    seed: int | None = None) -> nx.Graph:
+    r"""
     Generate Waxman random geometric graph with $H_{ij} = \beta e^{-d_{ij}/r_0}}$.
 
     Parameters
@@ -278,10 +282,7 @@ def waxman_graph(
     # Vectorized distance computation and probability calculation
     dists = squareform(pdist(coords))
     probs = beta * np.exp(-dists / r0)
-    if seed is not None:
-        rng = np.random.default_rng(seed)
-    else:
-        rng = np.random.default_rng()
+    rng = np.random.default_rng(seed) if seed is not None else np.random.default_rng()
     random_matrix = rng.random(probs.shape)
 
     # Create upper triangular mask for undirected edges
@@ -291,7 +292,7 @@ def waxman_graph(
     # Convert to node indices without loops
     edges = [
         (node_indices[i], node_indices[j])
-        for i, j in zip(edge_indices[0], edge_indices[1])
+        for i, j in zip(edge_indices[0], edge_indices[1], strict=False)
     ]
 
     graph.add_edges_from(edges)

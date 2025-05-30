@@ -1,26 +1,27 @@
-"""
-Module for loading and processing GTFS data, constructing transportation networks.
-"""
+"""Module for loading and processing GTFS data, constructing transportation networks."""
 
-import os
 import io
-import zipfile
 import logging
+import zipfile
+from collections.abc import Generator
+from datetime import datetime
+from datetime import timedelta
+from pathlib import Path
+
+import geopandas as gpd
 import numpy as np
 import pandas as pd
-import geopandas as gpd
-from shapely.geometry import Point, LineString
+from shapely.geometry import LineString
+from shapely.geometry import Point
 
-__all__ = ["load_gtfs", "get_od_pairs", "travel_summary_network"]
+__all__ = ["get_od_pairs", "load_gtfs", "travel_summary_network"]
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
-def _get_gtfs_df(gtfs_zip_path):
-    """
-    Load GTFS data from a zip file into a dictionary of pandas DataFrames.
-    """
+def _get_gtfs_df(gtfs_zip_path: str) -> pd.DataFrame:
+    """Load GTFS data from a zip file into a dictionary of pandas DataFrames."""
     gtfs_data = {}
     try:
         with zipfile.ZipFile(gtfs_zip_path, "r") as zip_ref:
@@ -31,23 +32,21 @@ def _get_gtfs_df(gtfs_zip_path):
                     continue
                 with zip_ref.open(file_name) as file:
                     try:
-                        base_name = os.path.basename(file_name).replace(".txt", "")
+                        base_name = Path(file_name).name.replace(".txt", "")
                         gtfs_data[base_name] = pd.read_csv(
                             io.BytesIO(file.read()),
                             encoding="utf-8-sig",
                             dtype=str,
                         )
-                    except Exception as e:
-                        logger.error(f"Error loading {file_name}: {e}")
-    except Exception as e:
-        logger.error(f"Failed to read GTFS zip file: {e}")
+                    except Exception:
+                        logger.exception("Error loading %s", file_name)
+    except Exception:
+        logger.exception("Failed to read GTFS zip file")
     return gtfs_data
 
 
-def _process_gtfs_df(gtfs_data):
-    """
-    Process GTFS DataFrames to apply appropriate data types and formats.
-    """
+def _process_gtfs_df(gtfs_data: dict) -> dict:
+    """Process GTFS DataFrames to apply appropriate data types and formats."""
     processed_data = gtfs_data.copy()
 
     # Process stops.txt - convert latitude and longitude columns to numeric
@@ -63,7 +62,7 @@ def _process_gtfs_df(gtfs_data):
     routes_df = processed_data.get("routes")
     if routes_df is not None and "route_type" in routes_df.columns:
         processed_data["routes"]["route_type"] = pd.to_numeric(
-            routes_df["route_type"], errors="coerce"
+            routes_df["route_type"], errors="coerce",
         )
 
     # Process calendar.txt - convert service day columns to boolean
@@ -90,7 +89,7 @@ def _process_gtfs_df(gtfs_data):
     return processed_data
 
 
-def _get_stops_geometry(stops_df):
+def _get_stops_geometry(stops_df: pd.DataFrame) -> gpd.GeoSeries | None:
     """
     Create a GeoSeries of Points for stops based on latitude and longitude.
 
@@ -118,14 +117,14 @@ def _get_stops_geometry(stops_df):
 
     # Create Point geometries
     geometries = [
-        Point(lon, lat) for lon, lat in zip(stops_df["stop_lon"], stops_df["stop_lat"])
+        Point(lon, lat) for lon, lat in zip(stops_df["stop_lon"], stops_df["stop_lat"], strict=False)
     ]
 
     # Create and return a GeoSeries indexed by stop_id
     return gpd.GeoSeries(geometries, crs="EPSG:4326")
 
 
-def _get_shapes_geometry(shapes_df):
+def _get_shapes_geometry(shapes_df: pd.DataFrame) -> gpd.GeoSeries | None:
     """
     Create a GeoSeries of LineStrings for shapes by aggregating points in sequence.
 
@@ -150,16 +149,16 @@ def _get_shapes_geometry(shapes_df):
     # Convert columns to numeric
     shapes_df = shapes_df.copy()
     shapes_df["shape_pt_lat"] = pd.to_numeric(
-        shapes_df["shape_pt_lat"], errors="coerce"
+        shapes_df["shape_pt_lat"], errors="coerce",
     )
     shapes_df["shape_pt_lon"] = pd.to_numeric(
-        shapes_df["shape_pt_lon"], errors="coerce"
+        shapes_df["shape_pt_lon"], errors="coerce",
     )
     shapes_df["shape_pt_sequence"] = pd.to_numeric(
-        shapes_df["shape_pt_sequence"], errors="coerce"
+        shapes_df["shape_pt_sequence"], errors="coerce",
     )
     shapes_df = shapes_df.dropna(
-        subset=["shape_pt_lat", "shape_pt_lon", "shape_pt_sequence"]
+        subset=["shape_pt_lat", "shape_pt_lon", "shape_pt_sequence"],
     )
     shapes_df = shapes_df.sort_values(["shape_id", "shape_pt_sequence"])
 
@@ -168,7 +167,7 @@ def _get_shapes_geometry(shapes_df):
     for shape_id, group in shapes_df.groupby("shape_id"):
         points = [
             Point(lon, lat)
-            for lon, lat in zip(group["shape_pt_lon"], group["shape_pt_lat"])
+            for lon, lat in zip(group["shape_pt_lon"], group["shape_pt_lat"], strict=False)
         ]
         if len(points) >= 2:
             linestrings[shape_id] = LineString(points)
@@ -179,7 +178,8 @@ def _get_shapes_geometry(shapes_df):
     return None
 
 
-def _create_route_trips_df(gtfs_data, shapes_geometry):
+def _create_route_trips_df(gtfs_data: dict,
+                           shapes_geometry: gpd.GeoSeries | None) -> gpd.GeoDataFrame | None:
     """
     Create a GeoDataFrame linking routes and trips with shape geometries.
 
@@ -208,7 +208,7 @@ def _create_route_trips_df(gtfs_data, shapes_geometry):
 
         # Create a DataFrame from the shapes GeoSeries
         shapes_df = pd.DataFrame(
-            {"shape_id": shapes_geometry.index, "geometry": shapes_geometry.values}
+            {"shape_id": shapes_geometry.index, "geometry": shapes_geometry.to_numpy()},
         )
 
         # Merge trips with shapes geometry
@@ -219,14 +219,14 @@ def _create_route_trips_df(gtfs_data, shapes_geometry):
 
         # Convert to GeoDataFrame
         return gpd.GeoDataFrame(
-            route_trips, geometry="geometry", crs=shapes_geometry.crs
+            route_trips, geometry="geometry", crs=shapes_geometry.crs,
         )
-    except Exception as e:
-        logger.error(f"Error creating route trips GeoDataFrame: {e}")
+    except Exception:
+        logger.exception("Error creating route trips GeoDataFrame")
     return None
 
 
-def load_gtfs(gtfs_zip_path):
+def load_gtfs(gtfs_zip_path: str | Path) -> dict:
     """
     Complete workflow to process a GTFS zip file into DataFrames with geometry columns and summary statistics.
 
@@ -240,9 +240,9 @@ def load_gtfs(gtfs_zip_path):
     dict
         Dictionary with processed GTFS data including geometry objects
     """
-    logger.info(f"Loading GTFS data from {gtfs_zip_path}...")
+    logger.info("Loading GTFS data from %s...", gtfs_zip_path)
     gtfs_data = _get_gtfs_df(gtfs_zip_path)
-    logger.info(f"Loaded {len(gtfs_data)} GTFS files")
+    logger.info("Loaded %d GTFS files", len(gtfs_data))
 
     logger.info("Processing GTFS DataFrames...")
     gtfs_data = _process_gtfs_df(gtfs_data)
@@ -254,7 +254,7 @@ def load_gtfs(gtfs_zip_path):
         if stops_geometry is not None:
             # Add the stops GeoSeries to the dictionary
             gtfs_data["stops"] = gpd.GeoDataFrame(
-                gtfs_data["stops"], geometry=stops_geometry, crs="EPSG:4326"
+                gtfs_data["stops"], geometry=stops_geometry, crs="EPSG:4326",
             )
 
     if gtfs_data["shapes"] is not None:
@@ -264,7 +264,7 @@ def load_gtfs(gtfs_zip_path):
         if shapes_geometry is not None:
             # Add the shapes GeoSeries to the dictionary
             gtfs_data["shapes"] = gpd.GeoDataFrame(
-                gtfs_data["shapes"], geometry=shapes_geometry, crs="EPSG:4326"
+                gtfs_data["shapes"], geometry=shapes_geometry, crs="EPSG:4326",
             )
 
     logger.info("GTFS data processing complete")
@@ -272,7 +272,7 @@ def load_gtfs(gtfs_zip_path):
 
 
 # Function to create origin-destination pairs from GTFS data
-def _create_od_pairs(gtfs_data):
+def _create_od_pairs(gtfs_data: dict) -> pd.DataFrame | None:
     """
     Create origin-destination pairs with timestamps from GTFS data.
 
@@ -288,11 +288,9 @@ def _create_od_pairs(gtfs_data):
     """
     stop_times = gtfs_data.get("stop_times")
     trips = gtfs_data.get("trips")
-    calendar = gtfs_data.get("calendar")
-    calendar_dates = gtfs_data.get("calendar_dates")
 
     if stop_times is None or trips is None:
-        print("Missing required GTFS data tables.")
+        logger.error("Missing required GTFS data tables.")
         return None
 
     # Process stop_times to convert arrival_time and departure_time to datetime
@@ -300,7 +298,7 @@ def _create_od_pairs(gtfs_data):
 
     # Ensure stop_sequence is numeric
     stop_times_copy["stop_sequence"] = pd.to_numeric(
-        stop_times_copy["stop_sequence"], errors="coerce"
+        stop_times_copy["stop_sequence"], errors="coerce",
     )
 
     # Sort by trip_id and stop_sequence to ensure correct order
@@ -314,14 +312,14 @@ def _create_od_pairs(gtfs_data):
             "arrival_time": "dest_arrival_time",
             "departure_time": "dest_departure_time",
             "stop_sequence": "dest_stop_sequence",
-        }
+        },
     )
 
     # Create origin-destination pairs within the same trip
     od_pairs = []
 
-    for trip_id, trip_stops in stop_times_copy.groupby("trip_id"):
-        trip_stops = trip_stops.sort_values("stop_sequence")
+    for trip_id, trip_stops_group in stop_times_copy.groupby("trip_id"):
+        trip_stops = trip_stops_group.sort_values("stop_sequence")
 
         # Skip trips with only one stop
         if len(trip_stops) <= 1:
@@ -347,12 +345,68 @@ def _create_od_pairs(gtfs_data):
     od_df = pd.DataFrame(od_pairs)
 
     # Merge with trips to get service_id
-    od_df = od_df.merge(trips[["trip_id", "service_id"]], on="trip_id", how="left")
-
-    return od_df
+    return od_df.merge(trips[["trip_id", "service_id"]], on="trip_id", how="left")
 
 
-def _get_service_dates(gtfs_data, start_date=None, end_date=None):
+
+def _process_calendar_service(calendar: pd.DataFrame,
+                              start_dt: datetime,
+                              end_dt: datetime) -> dict[str, list[datetime]]:
+    """Process regular service dates from calendar.txt."""
+    service_dates = {}
+    day_mapping = {
+        0: "monday", 1: "tuesday", 2: "wednesday", 3: "thursday",
+        4: "friday", 5: "saturday", 6: "sunday",
+    }
+
+    for _, row in calendar.iterrows():
+        service_id = row["service_id"]
+        service_start = datetime.strptime(str(row["start_date"]), "%Y%m%d")
+        service_end = datetime.strptime(str(row["end_date"]), "%Y%m%d")
+
+        date_range_start = max(start_dt, service_start)
+        date_range_end = min(end_dt, service_end)
+
+        if service_id not in service_dates:
+            service_dates[service_id] = []
+
+        current_date = date_range_start
+        while current_date <= date_range_end:
+            day_of_week = current_date.weekday()
+            day_column = day_mapping.get(day_of_week)
+            if row.get(day_column):
+                service_dates[service_id].append(current_date)
+            current_date += timedelta(days=1)
+
+    return service_dates
+
+
+def _process_calendar_exceptions(calendar_dates: pd.DataFrame,
+                                 service_dates: dict[str, list[datetime]]) -> None:
+    """Process service exceptions from calendar_dates.txt."""
+    for _, row in calendar_dates.iterrows():
+        service_id = row["service_id"]
+        date_str = row["date"]
+        exception_type = int(row["exception_type"]) if pd.notna(row["exception_type"]) else 0
+
+        try:
+            exception_date = datetime.strptime(str(date_str), "%Y%m%d")
+
+            if service_id not in service_dates:
+                service_dates[service_id] = []
+
+            if exception_type == 1 and exception_date not in service_dates[service_id]:
+                service_dates[service_id].append(exception_date)
+            elif exception_type == 2 and exception_date in service_dates[service_id]:
+                service_dates[service_id].remove(exception_date)
+        except (ValueError, TypeError):
+            logger.warning("Could not parse date %s for service_id %s", date_str, service_id)
+
+
+def _get_service_dates(
+    gtfs_data: dict,
+    start_date: str | None = None,
+    end_date: str | None = None) -> dict[str, list[datetime]]:
     """
     Get the dates when each service_id is active based on calendar and calendar_dates.
 
@@ -370,9 +424,6 @@ def _get_service_dates(gtfs_data, start_date=None, end_date=None):
     dict
         Dictionary mapping service_id to a list of dates (as datetime objects)
     """
-    import pandas as pd
-    from datetime import datetime, timedelta
-
     calendar = gtfs_data.get("calendar")
     calendar_dates = gtfs_data.get("calendar_dates")
 
@@ -380,7 +431,7 @@ def _get_service_dates(gtfs_data, start_date=None, end_date=None):
 
     # Process regular service from calendar.txt
     if calendar is not None:
-        # If start_date and end_date are not provided, use min and max from calendar
+        # Determine date range
         if start_date is None and "start_date" in calendar.columns:
             min_start_date = calendar["start_date"].min()
             start_date = min_start_date if pd.notna(min_start_date) else None
@@ -389,83 +440,22 @@ def _get_service_dates(gtfs_data, start_date=None, end_date=None):
             max_end_date = calendar["end_date"].max()
             end_date = max_end_date if pd.notna(max_end_date) else None
 
-        # Convert dates to datetime objects
         start_dt = datetime.strptime(str(start_date), "%Y%m%d")
         end_dt = datetime.strptime(str(end_date), "%Y%m%d")
 
-        # Map days of week to calendar columns
-        day_mapping = {
-            0: "monday",
-            1: "tuesday",
-            2: "wednesday",
-            3: "thursday",
-            4: "friday",
-            5: "saturday",
-            6: "sunday",
-        }
-
-        # Create a set of dates for each service_id
-        for _, row in calendar.iterrows():
-            service_id = row["service_id"]
-            service_start = datetime.strptime(str(row["start_date"]), "%Y%m%d")
-            service_end = datetime.strptime(str(row["end_date"]), "%Y%m%d")
-
-            # Use the intersection of our date range and the service date range
-            date_range_start = max(start_dt, service_start)
-            date_range_end = min(end_dt, service_end)
-
-            # Initialize empty list for this service_id
-            if service_id not in service_dates:
-                service_dates[service_id] = []
-
-            # Add each applicable date
-            current_date = date_range_start
-            while current_date <= date_range_end:
-                day_of_week = current_date.weekday()  # 0 = Monday, 6 = Sunday
-                day_column = day_mapping.get(day_of_week)
-
-                # If this service runs on this day of the week
-                if day_column in row and row[day_column]:
-                    service_dates[service_id].append(current_date)
-
-                current_date += timedelta(days=1)
+        service_dates = _process_calendar_service(calendar, start_dt, end_dt)
 
     # Process exceptions from calendar_dates.txt
     if calendar_dates is not None:
-        for _, row in calendar_dates.iterrows():
-            service_id = row["service_id"]
-            date_str = row["date"]
-            exception_type = (
-                int(row["exception_type"]) if pd.notna(row["exception_type"]) else 0
-            )
-
-            try:
-                exception_date = datetime.strptime(str(date_str), "%Y%m%d")
-
-                # Initialize if this service_id isn't in the dict yet
-                if service_id not in service_dates:
-                    service_dates[service_id] = []
-
-                # 1 = service added, 2 = service removed
-                if (
-                    exception_type == 1
-                    and exception_date not in service_dates[service_id]
-                ):
-                    service_dates[service_id].append(exception_date)
-                elif (
-                    exception_type == 2 and exception_date in service_dates[service_id]
-                ):
-                    service_dates[service_id].remove(exception_date)
-            except (ValueError, TypeError):
-                print(f"Could not parse date {date_str} for service_id {service_id}")
+        _process_calendar_exceptions(calendar_dates, service_dates)
 
     return service_dates
 
 
-def _create_timestamp(time_str, date_obj):
-    """Convert GTFS time string and date to a timestamp"""
-    from datetime import datetime, timedelta
-
+def _create_timestamp(time_str: str,
+                      date_obj: datetime) -> datetime | None:
+    """Convert GTFS time string and date to a timestamp."""
+    # Check if time_str is empty or NaN
     if pd.isna(time_str):
         return None
 
@@ -477,19 +467,26 @@ def _create_timestamp(time_str, date_obj):
 
         # Create the timestamp
         timestamp = datetime(
-            date_obj.year, date_obj.month, date_obj.day, hours, minutes, seconds
-        )
+            date_obj.year,
+            date_obj.month,
+            date_obj.day,
+            hours,
+            minutes,
+            seconds)
 
         # Add any days offset for times >24 hours
         if days_offset > 0:
             timestamp += timedelta(days=days_offset)
-
+            return timestamp
         return timestamp
+
+    # Handle cases where time_str is not in the expected format
     except (ValueError, AttributeError):
         return None
 
 
-def _expand_od_pairs_with_dates(od_pairs, service_dates):
+def _expand_od_pairs_with_dates(od_pairs: pd.DataFrame,
+                                service_dates: dict) -> pd.DataFrame:
     """
     Expand origin-destination pairs by combining with service dates.
 
@@ -540,7 +537,8 @@ def _expand_od_pairs_with_dates(od_pairs, service_dates):
 
 
 # Create a function to export the OD pairs to a GeoDataFrame for visualization
-def _create_od_gdf(expanded_od_pairs, gtfs_data):
+def _create_od_gdf(expanded_od_pairs: pd.DataFrame,
+                   gtfs_data: dict) -> gpd.GeoDataFrame | None:
     """
     Create a GeoDataFrame with LineString geometries for origin-destination pairs.
 
@@ -556,14 +554,11 @@ def _create_od_gdf(expanded_od_pairs, gtfs_data):
     geopandas.GeoDataFrame
         GeoDataFrame with LineString geometries for OD pairs
     """
-    import geopandas as gpd
-    from shapely.geometry import LineString, Point
-
     # Get stops dataframe with geometry
     stops = gtfs_data.get("stops")
 
     if stops is None or expanded_od_pairs is None or expanded_od_pairs.empty:
-        print("Missing required data to create GeoDataFrame")
+        logger.warning("Missing required data to create GeoDataFrame")
         return None
 
     # Create a dictionary mapping stop_id to Point geometry
@@ -586,14 +581,15 @@ def _create_od_gdf(expanded_od_pairs, gtfs_data):
             geometries.append(None)
 
     # Create GeoDataFrame
-    gdf = gpd.GeoDataFrame(expanded_od_pairs, geometry=geometries, crs="EPSG:4326")
-
-    return gdf
+    return gpd.GeoDataFrame(expanded_od_pairs, geometry=geometries, crs="EPSG:4326")
 
 
-def _expand_od_pairs_with_dates_gen(od_pairs, service_dates):
+
+def _expand_od_pairs_with_dates_gen(od_pairs: pd.DataFrame,
+                                    service_dates: dict) -> Generator[dict, None, None]:
     """
-    Generator version of expanding OD pairs with dates.
+    Expand OD pairs with dates as a generator.
+
     Yields one expanded row (as a dict) at a time.
     """
     for _, row in od_pairs.iterrows():
@@ -621,11 +617,12 @@ def _expand_od_pairs_with_dates_gen(od_pairs, service_dates):
 
 
 def _get_od_pairs_generator(
-    od_pairs, service_dates, gtfs_data, include_geometry, chunk_size
-):
-    """
-    Generator helper that yields chunks (as (Geo)DataFrames).
-    """
+    od_pairs: pd.DataFrame,
+    service_dates: dict,
+    gtfs_data: dict,
+    include_geometry: bool,
+    chunk_size: int = 10000) -> Generator[pd.DataFrame | gpd.GeoDataFrame, None, None]:
+    """Yield chunks of origin-destination pairs as (Geo)DataFrames."""
     od_rows_gen = _expand_od_pairs_with_dates_gen(od_pairs, service_dates)
     chunk = []
     for idx, row in enumerate(od_rows_gen, start=1):
@@ -646,13 +643,16 @@ def _get_od_pairs_generator(
 
 
 def get_od_pairs(
-    gtfs_data,
-    start_date=None,
-    end_date=None,
-    include_geometry=True,
-    as_generator=False,
-    chunk_size=10000,
-):
+    gtfs_data: dict,
+    start_date: str | None = None,
+    end_date: str | None = None,
+    include_geometry: bool = True,
+    as_generator: bool = False,
+    chunk_size: int = 10000) -> (
+    gpd.GeoDataFrame
+    | pd.DataFrame
+    | Generator[gpd.GeoDataFrame | pd.DataFrame, None, None]
+    | None):
     """
     Generate origin-destination pairs with timestamps from GTFS data.
 
@@ -696,21 +696,19 @@ def get_od_pairs(
 
     if as_generator:
         return _get_od_pairs_generator(
-            od_pairs, service_dates, gtfs_data, include_geometry, chunk_size
+            od_pairs, service_dates, gtfs_data, include_geometry, chunk_size,
         )
-    else:
-        # Fully materialize the expansion
-        expanded_od = _expand_od_pairs_with_dates(od_pairs, service_dates)
-        if include_geometry:
-            od_gdf = _create_od_gdf(expanded_od, gtfs_data)
-            logger.info("Origin-destination pair generation complete")
-            return od_gdf
-        else:
-            logger.info("Origin-destination pair generation complete")
-            return expanded_od
+    # Fully materialize the expansion
+    expanded_od = _expand_od_pairs_with_dates(od_pairs, service_dates)
+    if include_geometry:
+        od_gdf = _create_od_gdf(expanded_od, gtfs_data)
+        logger.info("Origin-destination pair generation complete")
+        return od_gdf
+    logger.info("Origin-destination pair generation complete")
+    return expanded_od
 
 
-def _time_to_seconds(time_str):
+def _time_to_seconds(time_str: str | float | None) -> float:
     if pd.isna(time_str):
         return np.nan
     if isinstance(time_str, (int, float)):
@@ -722,7 +720,8 @@ def _time_to_seconds(time_str):
     return np.nan
 
 
-def _create_travel_summary_gdf(result, stops):
+def _create_travel_summary_gdf(result: pd.DataFrame,
+                               stops: pd.DataFrame) -> gpd.GeoDataFrame:
     # Merge coordinates from origin stops
     result = result.merge(
         stops[["stop_lat", "stop_lon"]],
@@ -745,20 +744,19 @@ def _create_travel_summary_gdf(result, stops):
             [
                 (row["stop_lon_from"], row["stop_lat_from"]),
                 (row["stop_lon_to"], row["stop_lat_to"]),
-            ]
+            ],
         )
         for _, row in result.iterrows()
     ]
 
-    gdf = gpd.GeoDataFrame(
+    return gpd.GeoDataFrame(
         result[["from_stop_id", "to_stop_id", "travel_time", "frequency"]],
         geometry=geometries,
         crs="EPSG:4326",
     )
-    return gdf
 
 
-def _vectorized_time_to_seconds(time_series):
+def _vectorized_time_to_seconds(time_series: pd.Series) -> pd.Series:
     """
     Efficiently convert a series of GTFS time strings to seconds.
 
@@ -783,19 +781,17 @@ def _vectorized_time_to_seconds(time_series):
             result[mask] = time_parts[0] * 3600 + time_parts[1] * 60 + time_parts[2]
 
         return result
-    else:
-        # If already numeric, return as is
-        return time_series
+    # If already numeric, return as is
+    return time_series
 
 
 def travel_summary_network(
-    gtfs_data,
-    start_time=None,
-    end_time=None,
-    calendar_start=None,
-    calendar_end=None,
-    as_gdf=True,
-):
+    gtfs_data: dict,
+    start_time: str | None = None,
+    end_time: str | None = None,
+    calendar_start: str | None = None,
+    calendar_end: str | None = None,
+    as_gdf: bool = True) -> gpd.GeoDataFrame | dict:
     """
     Create a network representing travel times and frequencies between stops.
 
@@ -825,10 +821,10 @@ def travel_summary_network(
 
     # Convert time columns to seconds (vectorized for speed)
     stop_times["arrival_time_sec"] = _vectorized_time_to_seconds(
-        stop_times["arrival_time"]
+        stop_times["arrival_time"],
     )
     stop_times["departure_time_sec"] = _vectorized_time_to_seconds(
-        stop_times["departure_time"]
+        stop_times["departure_time"],
     )
 
     # Apply time-of-day filters efficiently
@@ -840,7 +836,7 @@ def travel_summary_network(
         stop_times = stop_times[stop_times["arrival_time_sec"] <= end_time_sec]
 
     # Merge with trips to get service_id (using optimal merge strategy)
-    stop_times = pd.merge(stop_times, trips, on="trip_id", how="inner")
+    stop_times = stop_times.merge(trips, on="trip_id", how="inner")
 
     # Handle calendar filtering
     if calendar_start is not None or calendar_end is not None:
@@ -872,7 +868,7 @@ def travel_summary_network(
 
     # Calculate travel times vectorized
     valid_pairs = stop_times.dropna(
-        subset=["next_stop_id", "next_arrival_time_sec"]
+        subset=["next_stop_id", "next_arrival_time_sec"],
     ).copy()
     valid_pairs["travel_time"] = (
         valid_pairs["next_arrival_time_sec"] - valid_pairs["departure_time_sec"]
@@ -913,11 +909,10 @@ def travel_summary_network(
 
     # Prepare for GeoDataFrame creation
     result = result.rename(
-        columns={"stop_id": "from_stop_id", "next_stop_id": "to_stop_id"}
+        columns={"stop_id": "from_stop_id", "next_stop_id": "to_stop_id"},
     )
     stops = gtfs_data["stops"].set_index("stop_id")
 
     # Create GeoDataFrame
-    gdf = _create_travel_summary_gdf(result, stops)
+    return _create_travel_summary_gdf(result, stops)
 
-    return gdf

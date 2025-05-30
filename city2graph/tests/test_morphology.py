@@ -1,33 +1,35 @@
-import pytest
+"""Tests for morphological network graph functions."""
+
 import geopandas as gpd
-from shapely.geometry import Point, LineString
-from city2graph.graph import (
-    homogeneous_graph,
-    heterogeneous_graph,
-    from_morphological_network,
-    to_networkx,
-    is_torch_available,
-)
 import networkx as nx
+from shapely.geometry import LineString
+from shapely.geometry import Point
+
+from city2graph.graph import from_morphological_network
+from city2graph.graph import heterogeneous_graph
+from city2graph.graph import homogeneous_graph
+from city2graph.graph import is_torch_available
+from city2graph.graph import to_networkx
 
 
-def create_nodes():
-    gdf = gpd.GeoDataFrame(
+def create_nodes() -> gpd.GeoDataFrame:
+    """Create a sample GeoDataFrame with nodes for testing."""
+    return gpd.GeoDataFrame(
         {"id": [1, 2, 3], "value": [0.1, 0.2, 0.3], "y": [0, 1, 0]},
         geometry=[Point(0, 0), Point(1, 1), Point(2, 2)],
     )
-    return gdf
 
 
-def create_edges():
-    gdf = gpd.GeoDataFrame(
+def create_edges() -> gpd.GeoDataFrame:
+    """Create a sample GeoDataFrame with edges for testing."""
+    return gpd.GeoDataFrame(
         {"from_id": [1, 2], "to_id": [2, 3], "weight": [1.0, 2.0]},
         geometry=[LineString([(0, 0), (1, 1)]), LineString([(1, 1), (2, 2)])],
     )
-    return gdf
 
 
-def test_homogeneous_graph_simple():
+def test_homogeneous_graph_simple() -> None:
+    """Test creation of a simple homogeneous graph."""
     nodes = create_nodes()
     edges = create_edges()
     data = homogeneous_graph(
@@ -48,7 +50,8 @@ def test_homogeneous_graph_simple():
     assert data.crs == nodes.crs or nodes.crs is None
 
 
-def test_heterogeneous_graph_simple():
+def test_heterogeneous_graph_simple() -> None:
+    """Test creation of a simple heterogeneous graph."""
     nodes_a = create_nodes()
     nodes_b = create_nodes()
     nodes_b = nodes_b.copy()
@@ -68,16 +71,18 @@ def test_heterogeneous_graph_simple():
         edge_target_cols={("a", "link", "b"): "target"},
         edge_feature_cols=None,
     )
-    assert "a" in data.node_types and "b" in data.node_types
+    assert "a" in data.node_types
+    assert "b" in data.node_types
     assert data["a"].x.shape == (3, 1)
     assert data["b"].x.shape == (3, 1)
     assert data[("a", "link", "b")].edge_index.shape[1] == 2
 
 
-def test_from_morphological_network_homo():
+def test_from_morphological_network_homo() -> None:
+    """Test creation of homogeneous graph from morphological network."""
     tess = create_nodes().rename(columns={"id": "tess_id"})
     private_to_private = create_edges().rename(
-        columns={"from_id": "from_private_id", "to_id": "to_private_id"}
+        columns={"from_id": "from_private_id", "to_id": "to_private_id"},
     )
     net = {
         "tessellations": tess,
@@ -92,11 +97,12 @@ def test_from_morphological_network_homo():
     assert data.edge_index.shape[0] == 2
 
 
-def test_to_networkx_homo():
+def test_to_networkx_homo() -> None:
+    """Test conversion of homogeneous graph to NetworkX."""
     nodes = create_nodes()
     edges = create_edges()
     data = homogeneous_graph(
-        nodes, edges, "id", ["value"], ["y"], "from_id", "to_id", ["weight"]
+        nodes, edges, "id", ["value"], ["y"], "from_id", "to_id", ["weight"],
     )
     G = to_networkx(data)
     assert isinstance(G, nx.Graph)
@@ -104,5 +110,6 @@ def test_to_networkx_homo():
     assert G.number_of_edges() == 2
 
 
-def test_is_torch_available():
+def test_is_torch_available() -> None:
+    """Test that is_torch_available returns a boolean value."""
     assert isinstance(is_torch_available(), bool)

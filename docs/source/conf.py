@@ -50,7 +50,7 @@ html_baseurl = "https://city2graph.net/"
 html_extra_path = ["robots.txt"]
 # Default meta description for pages
 html_meta = {
-    "description": "A Python package for transforming urban data into graphs for spatial analysis and Graph Neural Networks."
+    "description": "A Python package for transforming urban data into graphs for spatial analysis and Graph Neural Networks.",
 }
 # Sitemap settings
 sitemap_url_scheme = "{link}"
