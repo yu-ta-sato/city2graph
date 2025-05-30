@@ -132,12 +132,10 @@ def test_travel_summary_network(minimal_gtfs_zip: str) -> None:
 
 def test_timestamp_and_time_conversions() -> None:
     """Test timestamp creation and time conversion functions."""
-    from datetime import datetime
-
-    ts = _create_timestamp("25:00:00", datetime(2021, 1, 1, tzinfo=datetime.timezone.utc))
+    ts = _create_timestamp("25:00:00", datetime(2021, 1, 1))
     assert ts.hour == 1
     assert ts.day == 2
-    assert _create_timestamp(None, datetime(2021, 1, 1, tzinfo=datetime.timezone.utc)) is None
+    assert _create_timestamp(None, datetime(2021, 1, 1)) is None
     assert _time_to_seconds("01:02:03") == 3723
     assert np.isnan(_time_to_seconds(None))
     s = pd.Series(["00:00:10", "00:01:00", None])
@@ -149,7 +147,7 @@ def test_timestamp_and_time_conversions() -> None:
 
 def test_create_timestamp_invalid() -> None:
     """Test timestamp creation with invalid time format."""
-    assert _create_timestamp("ab:cd:ef", datetime(2021, 1, 1, tzinfo=datetime.timezone.utc)) is None
+    assert _create_timestamp("ab:cd:ef", datetime(2021, 1, 1)) is None
 
 
 def test_get_od_pairs_with_geometry(minimal_gtfs_zip: str) -> None:
