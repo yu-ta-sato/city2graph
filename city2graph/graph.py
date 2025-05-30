@@ -33,7 +33,7 @@ logger = logging.getLogger(__name__)
 
 # Define the public API for this module
 __all__ = [
-    "from_morphological_network",
+    "from_morphological_graph",
     "heterogeneous_graph",
     "homogeneous_graph",
     "is_torch_available",
@@ -722,7 +722,7 @@ def heterogeneous_graph(
 
 
 
-def from_morphological_network(
+def from_morphological_graph(
     network_output: dict,
     private_id_col: str = "tess_id",
     public_id_col: str = "id",
@@ -731,12 +731,12 @@ def from_morphological_network(
     device: Union[str, "torch.device"] | None = None,
 ) -> HeteroData | Data:
     """
-    Create a graph representation from the output of create_morphological_network.
+    Create a graph representation from the output of morphological_graph.
 
     Parameters
     ----------
     network_output : dict
-        Output dictionary from create_morphological_network containing:
+        Output dictionary from morphological_graph containing:
         - 'tessellation': GeoDataFrame of tessellation cells (private spaces)
         - 'segments': GeoDataFrame of road segments (public spaces)
         - 'private_to_private': GeoDataFrame of connections between tessellation cells
@@ -780,7 +780,7 @@ def from_morphological_network(
 
     # Extract data from network_output
     if not isinstance(network_output, dict):
-        msg = "network_output must be a dictionary returned from create_morphological_network"
+        msg = "network_output must be a dictionary returned from morphological_graph"
         raise TypeError(msg)
 
     # Extract GeoDataFrames from the network output
@@ -816,7 +816,7 @@ def from_morphological_network(
         if public_node_feature_cols is not None:
             node_feature_cols["public"] = public_node_feature_cols
 
-        # Prepare edge source/target column mappings based on morphological_network.py function output columns
+        # Prepare edge source/target column mappings based on morphological_graph output columns
         edge_source_cols = {
             ("private", "connects_to", "private"): "from_private_id",
             ("private", "adjacent_to", "public"): "private_id",

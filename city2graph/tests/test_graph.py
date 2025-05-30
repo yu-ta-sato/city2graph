@@ -17,7 +17,7 @@ from city2graph.graph import _get_device
 from city2graph.graph import _get_edge_columns
 from city2graph.graph import _is_valid_edge_df
 from city2graph.graph import _map_edge_strings
-from city2graph.graph import from_morphological_network
+from city2graph.graph import from_morphological_graph
 from city2graph.graph import heterogeneous_graph
 from city2graph.graph import homogeneous_graph
 from city2graph.graph import is_torch_available
@@ -309,19 +309,19 @@ def test_heterogeneous_graph_import_error(monkeypatch: pytest.MonkeyPatch) -> No
     monkeypatch.setattr(gr, "TORCH_AVAILABLE", True)
 
 
-def test_from_morphological_network_paths_and_errors() -> None:
-    """Test that from_morphological_network handles various inputs and raises errors as expected."""
+def test_from_morphological_graph_paths_and_errors() -> None:
+    """Test that from_morphological_graph handles various inputs and raises errors as expected."""
     # invalid type
     with pytest.raises(TypeError):
-        from_morphological_network(123)
+        from_morphological_graph(123)
     empty = gpd.GeoDataFrame()
     # no nodes => ValueError
     with pytest.raises(ValueError, match="no nodes"):
-        from_morphological_network({"tessellations": empty, "segments": empty})
+        from_morphological_graph({"tessellations": empty, "segments": empty})
     # only private
     priv = make_simple_nodes().rename(columns={"id": "tess_id"})
     edges = make_simple_edges().rename(columns={"src": "from_private_id", "dst": "to_private_id"})
-    data = from_morphological_network({
+    data = from_morphological_graph({
         "tessellations": priv,
         "segments": None,
         "private_to_private": edges,
@@ -331,7 +331,7 @@ def test_from_morphological_network_paths_and_errors() -> None:
     pub = make_simple_nodes().rename(columns={"id": "id"})
     edges2 = make_simple_edges().rename(columns={"src": "from_public_id", "dst": "to_public_id"})
     priv_to_pub = make_simple_edges().rename(columns={"src": "private_id", "dst": "public_id"})
-    het = from_morphological_network({
+    het = from_morphological_graph({
         "tessellations": priv,
         "segments": pub,
         "private_to_private": edges,
@@ -342,11 +342,11 @@ def test_from_morphological_network_paths_and_errors() -> None:
     assert hasattr(het, "edge_types")
 
 
-def test_from_morphological_network_public_only() -> None:
-    """Test that from_morphological_network works with public nodes and edges only."""
+def test_from_morphological_graph_public_only() -> None:
+    """Test that from_morphological_graph works with public nodes and edges only."""
     seg = make_simple_nodes().rename(columns={"id": "id"})
     edges = make_simple_edges().rename(columns={"src": "from_public_id", "dst": "to_public_id"})
-    data = from_morphological_network({"tessellations": None, "segments": seg, "public_to_public": edges})
+    data = from_morphological_graph({"tessellations": None, "segments": seg, "public_to_public": edges})
     assert hasattr(data, "edge_index")
     assert data.x.size(0) == 2
 

@@ -16,7 +16,7 @@ from city2graph.utils import filter_network_by_distance
 # Define the public API for this module
 __all__ = [
     "convert_gdf_to_dual",
-    "morphological_network",
+    "morphological_graph",
     "private_to_private_network",
     "private_to_public_network",
     "public_to_public_network",
@@ -945,7 +945,7 @@ def public_to_public_network(
     )
 
 
-def morphological_network(
+def morphological_graph(
     buildings_gdf: gpd.GeoDataFrame,
     segments_gdf: gpd.GeoDataFrame,
     center_point: gpd.GeoSeries | gpd.GeoDataFrame = None,
@@ -955,7 +955,7 @@ def morphological_network(
     public_geom_col: str = "barrier_geometry",
     contiguity: str = "queen") -> dict:
     """
-    Create a complete morphological network from buildings and road segments.
+    Create a morphological graph from buildings and road segments.
 
     The private spaces are represented as tessellations, and the public spaces are
     represented as a dual graph of road segments.

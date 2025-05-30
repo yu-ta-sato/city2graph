@@ -5,7 +5,7 @@ import networkx as nx
 from shapely.geometry import LineString
 from shapely.geometry import Point
 
-from city2graph.graph import from_morphological_network
+from city2graph.graph import from_morphological_graph
 from city2graph.graph import heterogeneous_graph
 from city2graph.graph import homogeneous_graph
 from city2graph.graph import is_torch_available
@@ -78,8 +78,8 @@ def test_heterogeneous_graph_simple() -> None:
     assert data[("a", "link", "b")].edge_index.shape[1] == 2
 
 
-def test_from_morphological_network_homo() -> None:
-    """Test creation of homogeneous graph from morphological network."""
+def test_from_morphological_graph_homo() -> None:
+    """Test creation of homogeneous graph from morphological graph."""
     tess = create_nodes().rename(columns={"id": "tess_id"})
     private_to_private = create_edges().rename(
         columns={"from_id": "from_private_id", "to_id": "to_private_id"},
@@ -91,7 +91,7 @@ def test_from_morphological_network_homo() -> None:
         "public_to_public": gpd.GeoDataFrame(),
         "private_to_public": gpd.GeoDataFrame(),
     }
-    data = from_morphological_network(net)
+    data = from_morphological_graph(net)
     # Should return homogeneous graph Data or HeteroData
     assert hasattr(data, "edge_index")
     assert data.edge_index.shape[0] == 2
