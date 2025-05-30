@@ -871,7 +871,7 @@ def from_morphological_network(
         )
 
     # Case 4: No valid nodes - raise an error to prevent unintended empty graphs.
-    msg = "No valid node data provided. Cannot create a graph without nodes."
+    msg = "No valid node data provided; no nodes found."
     raise ValueError(msg)
 
 
