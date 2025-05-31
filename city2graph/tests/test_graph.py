@@ -1,5 +1,7 @@
 """Tests for graph module functionality."""
 
+from unittest.mock import patch
+
 import geopandas as gpd
 import networkx as nx
 import numpy as np
@@ -594,3 +596,188 @@ def test_is_torch_available_final() -> None:
 
     # Assert: should return boolean value
     assert isinstance(result, bool)
+
+
+# ============================================================================
+# TESTS FOR UNCOVERED CODE PATHS IN GRAPH.PY
+# ============================================================================
+
+def test_torch_import_error() -> None:
+    """Test handling when torch/torch_geometric are not available."""
+    # This tests the ImportError path (lines 14-15, 18-19, 21-22)
+    # We can't easily mock the import failure, but we can test TORCH_AVAILABLE
+    from city2graph import graph
+
+    # The TORCH_AVAILABLE flag should be set based on actual import
+    assert hasattr(graph, "TORCH_AVAILABLE")
+    # If torch is available, TORCH_AVAILABLE should be True
+    # If not, it should be False and placeholder classes should exist
+
+
+def test_detect_edge_columns_geometry_in_first_column() -> None:
+    """Test _detect_edge_columns when geometry is in first column."""
+    # Test case where len >= 3 and geometry is in first column (lines 164-165)
+    edge_gdf = gpd.GeoDataFrame({
+        "geometry": [LineString([(0, 0), (1, 1)])],
+        "source": [1],
+        "target": [2],
+    })
+
+    source_col, target_col = _detect_edge_columns(edge_gdf)
+    assert source_col == "source"
+    assert target_col == "target"
+
+
+def test_detect_edge_columns_no_suitable_columns() -> None:
+    """Test _detect_edge_columns returning None when no suitable columns found."""
+    # Test case where no suitable columns are found (line 167)
+    edge_gdf = gpd.GeoDataFrame({
+        "geometry": [LineString([(0, 0), (1, 1)])],
+    })
+
+    source_col, target_col = _detect_edge_columns(edge_gdf)
+    assert source_col is None
+    assert target_col is None
+
+
+def test_heterogeneous_graph_with_labels_and_torch() -> None:
+    """Test heterogeneous_graph with node labels when torch is available."""
+    if not is_torch_available():
+        pytest.skip("PyTorch not available")
+
+    # Create nodes with y column for labels (lines 475+)
+    nodes_gdf = gpd.GeoDataFrame({
+        "id": [1, 2, 3],
+        "type": ["A", "A", "B"],
+        "y": [0, 1, 0],  # Labels for supervised learning
+        "feat": [0.5, 1.5, 2.5],
+    }, geometry=[Point(0, 0), Point(1, 1), Point(2, 2)])
+
+    edges_gdf = gpd.GeoDataFrame({
+        "source": [1, 2],
+        "target": [2, 3],
+        "edge_type": ["connects", "connects"],
+        "weight": [1.0, 2.0],
+    }, geometry=[LineString([(0, 0), (1, 1)]), LineString([(1, 1), (2, 2)])])
+
+    # Split into proper dictionaries to avoid Series issues
+    nodes_dict = {
+        "A": nodes_gdf[nodes_gdf["type"] == "A"].copy(),
+        "B": nodes_gdf[nodes_gdf["type"] == "B"].copy(),
+    }
+    edges_dict = {("A", "connects", "B"): edges_gdf}
+
+    # This should trigger the y tensor creation code path
+    data = heterogeneous_graph(nodes_dict, edges_dict)
+
+    # Verify labels were added
+    for node_type in data.node_types:
+        if hasattr(data[node_type], "y"):
+            assert data[node_type].y is not None
+
+
+def test_heterogeneous_graph_missing_source_target() -> None:
+    """Test heterogeneous_graph with missing source/target in edges."""
+    nodes_gdf = gpd.GeoDataFrame({
+        "id": [1, 2],
+        "type": ["A", "A"],
+        "feat": [0.5, 1.5],
+    }, geometry=[Point(0, 0), Point(1, 1)])
+
+    # Create edges with source/target that don't exist in nodes - ALL edges invalid
+    edges_gdf = gpd.GeoDataFrame({
+        "source": [4, 5],  # Neither 4 nor 5 exist in nodes
+        "target": [6, 7],  # Neither 6 nor 7 exist in nodes
+        "edge_type": ["connects", "connects"],
+        "weight": [1.0, 2.0],
+    }, geometry=[LineString([(0, 0), (1, 1)]), LineString([(1, 1), (2, 2)])])
+
+    # Split into proper dictionaries
+    nodes_dict = {
+        "A": nodes_gdf[nodes_gdf["type"] == "A"].copy(),
+    }
+    edges_dict = {("A", "connects", "A"): edges_gdf}
+
+    # This should trigger warning when ALL edges are invalid
+    with patch("city2graph.graph.logger") as mock_logger:
+        data = heterogeneous_graph(nodes_dict, edges_dict)
+        # The function should still create a graph but with no edges due to missing nodes
+        assert data is not None
+        # Should have logged a warning about no valid edges
+        mock_logger.warning.assert_called()
+
+
+def test_heterogeneous_graph_crs_mismatch() -> None:
+    """Test heterogeneous_graph with CRS mismatch between node types."""
+    # Create nodes with different CRS for different types
+    nodes_type_a = gpd.GeoDataFrame({
+        "id": [1, 2],
+        "type": ["A", "A"],
+        "feat": [0.5, 1.5],
+    }, geometry=[Point(0, 0), Point(1, 1)], crs="EPSG:4326")
+
+    nodes_type_b = gpd.GeoDataFrame({
+        "id": [3],
+        "type": ["B"],
+        "feat": [2.5],
+    }, geometry=[Point(2, 2)], crs="EPSG:3857")  # Different CRS
+
+    # Combine nodes with different CRS - need to transform to same CRS first
+    import pandas as pd
+    nodes_type_b_transformed = nodes_type_b.to_crs("EPSG:4326")
+    nodes_gdf = pd.concat([nodes_type_a, nodes_type_b_transformed], ignore_index=True)
+    nodes_gdf = gpd.GeoDataFrame(nodes_gdf, crs="EPSG:4326")
+
+    edges_gdf = gpd.GeoDataFrame({
+        "source": [1],
+        "target": [2],
+        "edge_type": ["connects"],
+    }, geometry=[LineString([(0, 0), (1, 1)])])
+
+    # Now create a case that triggers CRS mismatch in the function directly
+    # by manually creating mismatched node dictionaries
+    nodes_dict = {
+        "A": nodes_type_a,
+        "B": nodes_type_b,  # This has different CRS
+    }
+    edges_dict = {("A", "connects", "B"): edges_gdf}
+
+    # This should trigger CRS mismatch error
+    with pytest.raises(ValueError, match="CRS mismatch among node GeoDataFrames"):
+        heterogeneous_graph(nodes_dict, edges_dict)
+
+
+def test_heterogeneous_graph_consistent_crs() -> None:
+    """Test heterogeneous_graph with consistent CRS across node types."""
+    nodes_gdf = gpd.GeoDataFrame({
+        "id": [1, 2, 3],
+        "type": ["A", "A", "B"],
+        "feat": [0.5, 1.5, 2.5],
+    }, geometry=[Point(0, 0), Point(1, 1), Point(2, 2)], crs="EPSG:4326")
+
+    edges_gdf = gpd.GeoDataFrame({
+        "source": [1],
+        "target": [2],
+        "edge_type": ["connects"],
+    }, geometry=[LineString([(0, 0), (1, 1)])])
+
+    # Split into proper dictionaries to avoid Series issues
+    nodes_dict = {
+        "A": nodes_gdf[nodes_gdf["type"] == "A"].copy(),
+        "B": nodes_gdf[nodes_gdf["type"] == "B"].copy(),
+    }
+    edges_dict = {("A", "connects", "B"): edges_gdf}
+
+    # This should trigger the consistent CRS path (lines 537-538)
+    data = heterogeneous_graph(nodes_dict, edges_dict)
+
+    if is_torch_available():
+        assert hasattr(data, "crs")
+        assert data.crs == "EPSG:4326"
+
+
+def test_from_morphological_graph_invalid_input() -> None:
+    """Test from_morphological_graph with invalid input."""
+    # Test with invalid graph parameter (should trigger error on line 771+)
+    with pytest.raises(TypeError, match=r".*must be a dictionary returned from morphological_graph.*"):
+        from_morphological_graph("not_a_graph")

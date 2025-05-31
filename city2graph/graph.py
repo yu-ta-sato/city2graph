@@ -370,9 +370,9 @@ def _create_edge_idx_pairs(
 
     if edge_count == 0 and (missing_src_count > 0 or missing_dst_count > 0):
         logger.warning(
-            "No valid edges were found with columns %s, %s",
-            source_col,
-            target_col,
+            "No valid edges were found. Missing source IDs: %d, missing target IDs: %d",
+            missing_src_count,
+            missing_dst_count,
         )
 
     if not valid_edges.empty:
@@ -394,6 +394,121 @@ def _is_valid_edge_df(edge_gdf: gpd.GeoDataFrame | None) -> bool:
 # Remove the is_hetero parameter and always expect dictionaries for nodes and edges.
 # Updated _build_graph_data to accept node_y_attribute_cols parameter
 # Modified _build_graph_data: renamed parameters and references
+def _process_node_type(
+    node_type: str,
+    node_gdf: gpd.GeoDataFrame,
+    node_id_cols: dict[str, str],
+    node_feature_cols: dict[str, list[str]],
+    node_label_cols: dict[str, list[str]] | None,
+    device: Union[str, "torch.device"],
+    data: HeteroData,
+) -> dict[str, dict]:
+    """Process a single node type and add to HeteroData."""
+    if not isinstance(node_gdf, gpd.GeoDataFrame):
+        logger.warning("Expected GeoDataFrame for node type %s, got %s", node_type, type(node_gdf))
+        return {}
+
+    id_col = node_id_cols.get(node_type)
+    id_mapping, actual_id_col = _extract_node_id_mapping(node_gdf, id_col)
+
+    feature_cols = node_feature_cols.get(node_type)
+    data[node_type].x = _create_node_features(node_gdf, feature_cols, device)
+
+    # Add positional attributes if geometry is present
+    if "geometry" in node_gdf.columns:
+        pos = torch.tensor(
+            np.array(
+                [
+                    (
+                        [geom.x, geom.y]
+                        if hasattr(geom, "x")
+                        else [geom.centroid.x, geom.centroid.y]
+                    )
+                    for geom in node_gdf.geometry
+                ],
+            ),
+            dtype=torch.float,
+            device=device,
+        )
+        data[node_type].pos = pos
+
+    # Add label columns
+    if node_label_cols and node_label_cols.get(node_type):
+        data[node_type].y = _create_node_features(
+            node_gdf, node_label_cols[node_type], device,
+        )
+    elif "y" in node_gdf.columns:
+        data[node_type].y = torch.tensor(
+            node_gdf["y"].values, dtype=torch.float, device=device,
+        )
+
+    return {"mapping": id_mapping, "id_col": actual_id_col}
+
+
+def _process_edge_type(
+    edge_type: tuple[str, str, str],
+    edge_gdf: gpd.GeoDataFrame,
+    node_id_mappings: dict,
+    edge_source_cols: dict[tuple[str, str, str], str],
+    edge_target_cols: dict[tuple[str, str, str], str],
+    edge_feature_cols: dict[tuple[str, str, str], list[str]] | None,
+    device: Union[str, "torch.device"],
+    data: HeteroData,
+) -> None:
+    """Process a single edge type and add to HeteroData."""
+    if not isinstance(edge_type, tuple) or len(edge_type) != 3:
+        logger.warning(
+            "Edge type key must be a tuple of (source_type, relation_type, "
+            "target_type). Got %s instead. Skipping.",
+            edge_type,
+        )
+        return
+
+    src_type, rel_type, dst_type = edge_type
+
+    if src_type not in node_id_mappings or dst_type not in node_id_mappings:
+        logger.warning(
+            "Edge type %s references node type(s) not present in nodes. Skipping.",
+            edge_type,
+        )
+        return
+
+    src_mapping = node_id_mappings[src_type]["mapping"]
+    dst_mapping = node_id_mappings[dst_type]["mapping"]
+    source_col = edge_source_cols.get(edge_type)
+    target_col = edge_target_cols.get(edge_type)
+
+    if _is_valid_edge_df(edge_gdf):
+        pairs = _create_edge_idx_pairs(
+            edge_gdf,
+            source_mapping=src_mapping,
+            target_mapping=dst_mapping,
+            source_col=source_col,
+            target_col=target_col,
+        )
+        if pairs:
+            data[src_type, rel_type, dst_type].edge_index = torch.tensor(
+                np.array(pairs).T, dtype=torch.long, device=device,
+            )
+        else:
+            data[src_type, rel_type, dst_type].edge_index = torch.zeros(
+                (2, 0), dtype=torch.long, device=device,
+            )
+        feature_cols = (
+            edge_feature_cols.get(edge_type) if edge_feature_cols else None
+        )
+        data[src_type, rel_type, dst_type].edge_attr = _create_edge_features(
+            edge_gdf, feature_cols, device,
+        )
+    else:
+        data[src_type, rel_type, dst_type].edge_index = torch.zeros(
+            (2, 0), dtype=torch.long, device=device,
+        )
+        data[src_type, rel_type, dst_type].edge_attr = torch.empty(
+            (0, 0), dtype=torch.float, device=device,
+        )
+
+
 def _build_graph_data(
     nodes: dict[str, gpd.GeoDataFrame],
     edges: dict[tuple[str, str, str], gpd.GeoDataFrame],
@@ -440,96 +555,21 @@ def _build_graph_data(
 
     # Process nodes across types
     for node_type, node_gdf in nodes.items():
-        # ...existing node ID mapping and feature creation...
-        id_col = node_id_cols.get(node_type)
-        id_mapping, actual_id_col = _extract_node_id_mapping(node_gdf, id_col)
-        node_id_mappings[node_type] = {"mapping": id_mapping, "id_col": actual_id_col}
-        # Update: use feature columns instead of attribute_cols
-        feature_cols = node_feature_cols.get(node_type)
-        data[node_type].x = _create_node_features(node_gdf, feature_cols, device)
-
-        # Add positional attributes if geometry is present
-        if "geometry" in node_gdf.columns:
-            pos = torch.tensor(
-                np.array(
-                    [
-                        (
-                            [geom.x, geom.y]
-                            if hasattr(geom, "x")
-                            else [geom.centroid.x, geom.centroid.y]
-                        )
-                        for geom in node_gdf.geometry
-                    ],
-                ),
-                dtype=torch.float,
-                device=device,
-            )
-            data[node_type].pos = pos
-
-        # Update: use label columns instead of y_attribute_cols
-        if node_label_cols and node_label_cols.get(node_type):
-            data[node_type].y = _create_node_features(
-                node_gdf, node_label_cols[node_type], device,
-            )
-        elif "y" in node_gdf.columns:
-            data[node_type].y = torch.tensor(
-                node_gdf["y"].values, dtype=torch.float, device=device,
-            )
+        mapping_info = _process_node_type(
+            node_type, node_gdf, node_id_cols, node_feature_cols,
+            node_label_cols, device, data,
+        )
+        if mapping_info:
+            node_id_mappings[node_type] = mapping_info
 
     # Process edges across types
     for edge_type, edge_gdf in edges.items():
-        if not isinstance(edge_type, tuple) or len(edge_type) != 3:
-            logger.warning(
-                "Edge type key must be a tuple of (source_type, relation_type, "
-                "target_type). Got %s instead. Skipping.",
-                edge_type,
-            )
-            continue
+        _process_edge_type(
+            edge_type, edge_gdf, node_id_mappings, edge_source_cols,
+            edge_target_cols, edge_feature_cols, device, data,
+        )
 
-        src_type, rel_type, dst_type = edge_type
-
-        if src_type not in node_id_mappings or dst_type not in node_id_mappings:
-            logger.warning(
-                "Edge type %s references node type(s) not present in nodes. Skipping.",
-                edge_type,
-            )
-            continue
-        src_mapping = node_id_mappings[src_type]["mapping"]
-        dst_mapping = node_id_mappings[dst_type]["mapping"]
-        source_col = edge_source_cols.get(edge_type)
-        target_col = edge_target_cols.get(edge_type)
-
-        if _is_valid_edge_df(edge_gdf):
-            pairs = _create_edge_idx_pairs(
-                edge_gdf,
-                source_mapping=src_mapping,
-                target_mapping=dst_mapping,
-                source_col=source_col,
-                target_col=target_col,
-            )
-            if pairs:
-                data[src_type, rel_type, dst_type].edge_index = torch.tensor(
-                    np.array(pairs).T, dtype=torch.long, device=device,
-                )
-            else:
-                data[src_type, rel_type, dst_type].edge_index = torch.zeros(
-                    (2, 0), dtype=torch.long, device=device,
-                )
-            feature_cols = (
-                edge_feature_cols.get(edge_type) if edge_feature_cols else None
-            )
-            data[src_type, rel_type, dst_type].edge_attr = _create_edge_features(
-                edge_gdf, feature_cols, device,
-            )
-        else:
-            data[src_type, rel_type, dst_type].edge_index = torch.zeros(
-                (2, 0), dtype=torch.long, device=device,
-            )
-            data[src_type, rel_type, dst_type].edge_attr = torch.empty(
-                (0, 0), dtype=torch.float, device=device,
-            )
-
-    # Set CRS metadata from node GeoDataFrames more efficiently
+    # Set CRS metadata from node GeoDataFrames
     crs_values = [gdf.crs for gdf in nodes.values() if hasattr(gdf, "crs") and gdf.crs]
 
     if not crs_values:
@@ -646,9 +686,41 @@ def homogeneous_graph(
     return data
 
 
+def _process_single_nodes_gdf(nodes_gdf: gpd.GeoDataFrame) -> dict[str, gpd.GeoDataFrame]:
+    """Process a single nodes GeoDataFrame into a dictionary by type."""
+    if "type" in nodes_gdf.columns:
+        # Split by type column
+        nodes_dict = {}
+        for node_type in nodes_gdf["type"].unique():
+            subset = nodes_gdf[nodes_gdf["type"] == node_type].copy()
+            # Ensure we maintain GeoDataFrame type
+            if not isinstance(subset, gpd.GeoDataFrame):
+                geometry = subset.geometry if hasattr(subset, "geometry") else None
+                subset = gpd.GeoDataFrame(subset, geometry=geometry)
+            nodes_dict[node_type] = subset
+        return nodes_dict
+    # Default to single node type
+    return {"default": nodes_gdf}
+
+
+def _process_single_edges_gdf(edges_gdf: gpd.GeoDataFrame) -> dict[tuple[str, str, str], gpd.GeoDataFrame]:
+    """Process a single edges GeoDataFrame into a dictionary by edge type."""
+    if "edge_type" in edges_gdf.columns:
+        # Split by edge_type column - assume format is "source_relation_target"
+        edges_dict = {}
+        for edge_type_str in edges_gdf["edge_type"].unique():
+            # Try to parse edge type string
+            parts = str(edge_type_str).split("_", 2)
+            edge_key = tuple(parts) if len(parts) == 3 else ("default", "edge", "default")
+            edges_dict[edge_key] = edges_gdf[edges_gdf["edge_type"] == edge_type_str].copy()
+        return edges_dict
+    # Default to single edge type
+    return {("default", "edge", "default"): edges_gdf}
+
+
 def heterogeneous_graph(
-    nodes_dict: dict[str, gpd.GeoDataFrame],
-    edges_dict: dict[tuple[str, str, str], gpd.GeoDataFrame],
+    nodes_dict: dict[str, gpd.GeoDataFrame] | gpd.GeoDataFrame,
+    edges_dict: dict[tuple[str, str, str], gpd.GeoDataFrame] | gpd.GeoDataFrame,
     node_id_cols: dict[str, str] | None = None,
     node_feature_cols: dict[str, list[str]] | None = None,
     node_label_cols: dict[str, list[str]] | None = None,
@@ -662,10 +734,12 @@ def heterogeneous_graph(
 
     Parameters
     ----------
-    nodes_dict : dict
-        Dictionary of GeoDataFrames for each node type.
-    edges_dict : dict
-        Dictionary of GeoDataFrames for each edge type, with keys as (source_type, relation, target_type).
+    nodes_dict : dict or GeoDataFrame
+        Dictionary of GeoDataFrames for each node type, or a single GeoDataFrame
+        with a 'type' column to automatically split by node type.
+    edges_dict : dict or GeoDataFrame
+        Dictionary of GeoDataFrames for each edge type, with keys as (source_type, relation, target_type),
+        or a single GeoDataFrame with an 'edge_type' column.
     node_id_cols : dict, optional
         Dictionary mapping node types to their ID column.
     node_feature_cols : dict, optional
@@ -708,6 +782,14 @@ def heterogeneous_graph(
     if edge_target_cols is None:
         edge_target_cols = {}
 
+    # Handle case where nodes_dict is a single GeoDataFrame
+    if isinstance(nodes_dict, gpd.GeoDataFrame):
+        nodes_dict = _process_single_nodes_gdf(nodes_dict)
+
+    # Handle case where edges_dict is a single GeoDataFrame
+    if isinstance(edges_dict, gpd.GeoDataFrame):
+        edges_dict = _process_single_edges_gdf(edges_dict)
+
     return _build_graph_data(
         nodes=nodes_dict,
         edges=edges_dict,
@@ -719,6 +801,7 @@ def heterogeneous_graph(
         edge_feature_cols=edge_feature_cols,
         device=device,
     )
+
 
 
 

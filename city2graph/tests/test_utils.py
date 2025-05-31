@@ -1,5 +1,11 @@
 """Test module for city2graph utility functions."""
 
+import subprocess
+import tempfile
+from pathlib import Path
+from unittest.mock import Mock
+from unittest.mock import patch
+
 import geopandas as gpd
 import networkx as nx
 import pandas as pd
@@ -19,6 +25,7 @@ from city2graph.utils import _get_nearest_node
 from city2graph.utils import _get_substring
 from city2graph.utils import _parse_connectors_info
 from city2graph.utils import _prepare_polygon_area
+from city2graph.utils import _read_overture_data
 from city2graph.utils import _recalc_barrier_mask
 from city2graph.utils import _validate_overture_types
 from city2graph.utils import adjust_segment_connectors
@@ -1050,3 +1057,269 @@ def test_filter_graph_edge_cases() -> None:
     center_gdf = gpd.GeoDataFrame({"id": [1], "geometry": [Point(0, 0)]}, crs="EPSG:4326")
     result = filter_graph_by_distance(gdf, center_gdf, 2.0)
     assert isinstance(result, gpd.GeoDataFrame)
+
+
+# ============================================================================
+# TESTS FOR UNCOVERED CODE PATHS IN UTILS.PY
+# ============================================================================
+
+def test_prepare_polygon_area_with_crs() -> None:
+    """Test _prepare_polygon_area with a polygon that has CRS."""
+    # Create a GeoDataFrame with a polygon in a non-WGS84 CRS
+    polygon = Polygon([(0, 0), (1, 0), (1, 1), (0, 1)])
+    gdf = gpd.GeoDataFrame([{"geometry": polygon}], crs="EPSG:3857")
+    poly_with_crs = gdf.geometry.iloc[0]
+
+    # Test CRS transformation path (lines 76-77)
+    bbox, transformed_poly = _prepare_polygon_area(poly_with_crs)
+
+    assert isinstance(bbox, list)
+    assert len(bbox) == 4
+    assert transformed_poly is not None
+
+
+def test_read_overture_data_save_to_file_existing() -> None:
+    """Test _read_overture_data with save_to_file and existing file."""
+    with tempfile.TemporaryDirectory() as temp_dir:
+        # Create a test GeoJSON file
+        test_file = Path(temp_dir) / "test.geojson"
+        test_gdf = gpd.GeoDataFrame(
+            {"geometry": [Point(0, 0)]},
+            crs="EPSG:4326",
+        )
+        test_gdf.to_file(test_file, driver="GeoJSON")
+
+        # Mock process object
+        mock_process = Mock()
+        mock_process.stdout = None
+
+        # Test path where file exists and has content (lines 92-93)
+        result = _read_overture_data(
+            str(test_file), mock_process, save_to_file=True, data_type="building",
+        )
+
+        assert not result.empty
+        assert len(result) == 1
+
+
+def test_read_overture_data_save_to_file_no_data() -> None:
+    """Test _read_overture_data with save_to_file but no data returned."""
+    with tempfile.TemporaryDirectory() as temp_dir:
+        # Create an empty file
+        test_file = Path(temp_dir) / "empty.geojson"
+        test_file.touch()
+
+        # Mock process object
+        mock_process = Mock()
+        mock_process.stdout = None
+
+        # Test warning path when no data returned (line 94)
+        with patch("city2graph.utils.logger") as mock_logger:
+            _read_overture_data(
+                str(test_file), mock_process, save_to_file=True, data_type="building",
+            )
+            mock_logger.warning.assert_called_with("No data returned for %s", "building")
+
+
+def test_read_overture_data_stdout_success() -> None:
+    """Test _read_overture_data reading from stdout successfully."""
+    # Create valid GeoJSON string
+    geojson_str = (
+        '{"type": "FeatureCollection", "features": '
+        '[{"type": "Feature", "geometry": {"type": "Point", "coordinates": [0, 0]}, "properties": {}}]}'
+    )
+
+    # Mock process with stdout
+    mock_process = Mock()
+    mock_process.stdout = geojson_str
+
+    # Test successful reading from stdout (lines 96-98)
+    with patch("geopandas.read_file") as mock_read_file:
+        mock_read_file.return_value = gpd.GeoDataFrame({"geometry": [Point(0, 0)]}, crs="EPSG:4326")
+        _read_overture_data("", mock_process, save_to_file=False, data_type="building")
+        mock_read_file.assert_called_with(geojson_str)
+
+
+def test_read_overture_data_stdout_parsing_error() -> None:
+    """Test _read_overture_data with parsing error from stdout."""
+    # Mock process with invalid stdout
+    mock_process = Mock()
+    mock_process.stdout = "invalid geojson"
+
+    # Test exception handling path (lines 99-100)
+    with (
+        patch("geopandas.read_file", side_effect=ValueError("Invalid GeoJSON")),
+        patch("city2graph.utils.logger") as mock_logger,
+    ):
+        _read_overture_data("", mock_process, save_to_file=False, data_type="building")
+        # Check that warning was called with correct data_type
+        call_args = mock_logger.warning.call_args
+        assert call_args[0][0] == "Could not parse GeoJSON for %s: %s"
+        assert call_args[0][1] == "building"
+
+
+def test_read_overture_data_empty_return() -> None:
+    """Test _read_overture_data returning empty GeoDataFrame."""
+    # Mock process with no stdout
+    mock_process = Mock()
+    mock_process.stdout = None
+
+    # Test empty return path (line 102)
+    result = _read_overture_data("", mock_process, save_to_file=False, data_type="building")
+
+    assert result.empty
+    assert result.crs == "EPSG:4326"
+
+
+def test_clip_to_polygon_crs_conversion() -> None:
+    """Test _clip_to_polygon with CRS conversion needed."""
+    # Create GDF in different CRS
+    gdf = gpd.GeoDataFrame(
+        {"geometry": [Point(0, 0)]},
+        crs="EPSG:3857",
+    )
+
+    # Create polygon in WGS84
+    polygon = Polygon([(-1, -1), (1, -1), (1, 1), (-1, 1)])
+
+    # Test CRS conversion path (line 114)
+    with patch("geopandas.clip") as mock_clip:
+        mock_clip.return_value = gdf
+        _clip_to_polygon(gdf, polygon, "building")
+        # Verify that mask was converted to gdf.crs
+        assert mock_clip.called
+
+
+def test_clip_to_polygon_clipping_error() -> None:
+    """Test _clip_to_polygon with clipping error."""
+    gdf = gpd.GeoDataFrame({"geometry": [Point(0, 0)]}, crs="EPSG:4326")
+    polygon = Polygon([(-1, -1), (1, -1), (1, 1), (-1, 1)])
+
+    # Test exception handling path (lines 118-120)
+    with (
+        patch("geopandas.clip", side_effect=ValueError("Clipping error")),
+        patch("city2graph.utils.logger") as mock_logger,
+    ):
+        result = _clip_to_polygon(gdf, polygon, "building")
+
+        # Should return original gdf when clipping fails
+        assert result.equals(gdf)
+        # Check that warning was called with correct data_type
+        call_args = mock_logger.warning.call_args
+        assert call_args[0][0] == "Error clipping %s to polygon: %s"
+        assert call_args[0][1] == "building"
+
+
+def test_validate_overture_types_invalid_type() -> None:
+    """Test _validate_overture_types with invalid type."""
+    # Test invalid type validation (internally calls _raise_invalid_data_type)
+    with pytest.raises(ValueError, match="Invalid Overture Maps data type"):
+        _validate_overture_types(["invalid_type"])
+
+
+def test_process_single_overture_type_invalid_data_type() -> None:
+    """Test _process_single_overture_type with invalid data type."""
+    from city2graph.utils import _process_single_overture_type
+
+    # Test validation of invalid data type (lines 137-138, 146)
+    with pytest.raises(ValueError, match="Invalid data type: invalid_type"):
+        _process_single_overture_type(
+            data_type="invalid_type",
+            bbox_str="0,0,1,1",
+            output_dir=".",
+            prefix="",
+            save_to_file=False,
+            return_data=True,
+            original_polygon=None,
+        )
+
+
+def test_process_single_overture_type_invalid_bbox() -> None:
+    """Test _process_single_overture_type with invalid bbox format."""
+    from city2graph.utils import _process_single_overture_type
+
+    # Test invalid bbox format
+    with pytest.raises(ValueError, match="Invalid bbox format"):
+        _process_single_overture_type(
+            data_type="building",
+            bbox_str="invalid,bbox,format",
+            output_dir=".",
+            prefix="",
+            save_to_file=False,
+            return_data=True,
+            original_polygon=None,
+        )
+
+
+@patch("subprocess.run")
+def test_process_single_overture_type_subprocess_error(mock_run: Mock) -> None:
+    """Test _process_single_overture_type with subprocess error."""
+    from city2graph.utils import _process_single_overture_type
+
+    # Mock subprocess to raise CalledProcessError
+    mock_run.side_effect = subprocess.CalledProcessError(1, "overturemaps")
+
+    with patch("city2graph.utils.logger") as mock_logger:
+        result = _process_single_overture_type(
+            data_type="building",
+            bbox_str="0,0,1,1",
+            output_dir=".",
+            prefix="",
+            save_to_file=False,
+            return_data=True,
+            original_polygon=None,
+        )
+
+        # Should return empty GeoDataFrame on subprocess error
+        assert result.empty
+        assert result.crs == "EPSG:4326"
+        mock_logger.warning.assert_called()
+
+
+@patch("subprocess.run")
+def test_process_single_overture_type_processing_error(mock_run: Mock) -> None:
+    """Test _process_single_overture_type with processing error."""
+    from city2graph.utils import _process_single_overture_type
+
+    # Mock subprocess to succeed but cause processing error
+    mock_process = Mock()
+    mock_process.stdout = None
+    mock_run.return_value = mock_process
+
+    # Mock _read_overture_data to raise exception
+    with (
+        patch("city2graph.utils._read_overture_data", side_effect=OSError("Processing error")),
+        patch("city2graph.utils.logger") as mock_logger,
+    ):
+        result = _process_single_overture_type(
+            data_type="building",
+            bbox_str="0,0,1,1",
+            output_dir=".",
+            prefix="",
+            save_to_file=False,
+            return_data=True,
+            original_polygon=None,
+        )
+
+        # Should return empty GeoDataFrame on processing error
+        assert result.empty
+        assert result.crs == "EPSG:4326"
+        mock_logger.warning.assert_called()
+
+
+def test_load_overture_data_polygon_with_crs() -> None:
+    """Test load_overture_data with polygon that needs CRS transformation."""
+    # Create polygon in non-WGS84 CRS
+    polygon = Polygon([(0, 0), (1, 0), (1, 1), (0, 1)])
+    gdf = gpd.GeoDataFrame([{"geometry": polygon}], crs="EPSG:3857")
+    poly_with_crs = gdf.geometry.iloc[0]
+
+    # Mock the subprocess and file operations to avoid actual downloads
+    with patch("city2graph.utils._process_single_overture_type") as mock_process:
+        mock_process.return_value = gpd.GeoDataFrame({"geometry": []}, crs="EPSG:4326")
+
+        # This should trigger the CRS transformation in _prepare_polygon_area
+        result = load_overture_data(poly_with_crs, types=["building"], return_data=True)
+
+        assert isinstance(result, dict)
+        assert "building" in result
