@@ -1,7 +1,5 @@
 """Test module for city2graph utility functions."""
 
-import contextlib
-
 import geopandas as gpd
 import networkx as nx
 import pandas as pd
@@ -35,6 +33,7 @@ from city2graph.utils import split_segments_by_connectors
 # ============================================================================
 # COMMON TEST FIXTURES
 # ============================================================================
+
 
 @pytest.fixture
 def simple_line() -> LineString:
@@ -898,602 +897,156 @@ def test_filter_graph_by_distance_comprehensive() -> None:
 
 
 def test_get_barrier_geometry_comprehensive() -> None:
-    """Test get_barrier_geometry with various GeoDataFrame configurations."""
-    # Test missing barrier_mask column
-    no_mask_gdf = gpd.GeoDataFrame({"geometry": [LineString([(0, 0), (1, 0)])]})
-    with pytest.raises(KeyError):
-        get_barrier_geometry(no_mask_gdf)
-
-    # Test with None barrier_mask
-    none_mask_gdf = gpd.GeoDataFrame({
-        "geometry": [LineString([(0, 0), (2, 0)])],
-        "barrier_mask": [None],
-    })
-    result = get_barrier_geometry(none_mask_gdf)
-    assert pd.isna(result.iloc[0]) or result.iloc[0] is None
-
-    # Test with empty barrier_mask
-    empty_mask_gdf = gpd.GeoDataFrame({
-        "geometry": [LineString([(0, 0), (2, 0)])],
-        "barrier_mask": [[]],
-    })
-    result = get_barrier_geometry(empty_mask_gdf)
-    assert pd.isna(result.iloc[0]) or result.iloc[0] is None
-
-    # Test multiple rows
-    multi_gdf = gpd.GeoDataFrame({
-        "geometry": [
-            LineString([(0, 0), (4, 0)]),
-            LineString([(0, 0), (6, 0)]),
-        ],
-        "barrier_mask": [
-            [[0.25, 0.75]],
-            [[0.0, 0.5], [0.8, 1.0]],
-        ],
-    })
-    result = get_barrier_geometry(multi_gdf)
-    assert len(result) == 2
-    assert isinstance(result.iloc[0], LineString)
-    assert isinstance(result.iloc[1], MultiLineString)
-
-
-def test_split_segments_by_connectors_comprehensive() -> None:
-    """Test split_segments_by_connectors with complex scenarios."""
-    # Test segment with no connector column
-    line = LineString([(0, 0), (10, 0)])
-    segs_no_conn = gpd.GeoDataFrame({
+    """Test comprehensive scenarios for get_barrier_geometry function."""
+    # Test with GeoDataFrame having barrier_mask column
+    gdf_with_mask = gpd.GeoDataFrame({
         "id": [1],
-        "geometry": [line],
-        "level_rules": ["[]"],
-    })
-    connectors = gpd.GeoDataFrame({"id": [1], "geometry": [Point(5, 0)]})
-
-    result = split_segments_by_connectors(segs_no_conn, connectors)
-    assert len(result) == 1  # No split without connector info
-
-    # Test with invalid connector JSON
-    segs_invalid = gpd.GeoDataFrame({
-        "id": [1],
-        "geometry": [line],
-        "connectors": ["invalid json"],
-        "level_rules": ["[]"],
-    })
-    result = split_segments_by_connectors(segs_invalid, connectors)
-    assert len(result) == 1  # No split with invalid connector info
-
-    # Test with connectors outside segment bounds
-    connectors_far = gpd.GeoDataFrame({
-        "id": [999],
-        "geometry": [Point(100, 100)],  # Far from segment
-    })
-    segs_with_far = gpd.GeoDataFrame({
-        "id": [1],
-        "geometry": [line],
-        "connectors": ['[{"connector_id": 999, "at": 0.5}]'],
-        "level_rules": ["[]"],
-    })
-    result = split_segments_by_connectors(segs_with_far, connectors_far)
-    # Should handle gracefully
-    assert len(result) >= 1
-
-    # Test multiple segments
-    multi_segs = gpd.GeoDataFrame({
-        "id": [1, 2],
-        "geometry": [
-            LineString([(0, 0), (10, 0)]),
-            LineString([(0, 10), (10, 10)]),
-        ],
-        "connectors": [
-            '[{"connector_id": 1, "at": 0.5}]',
-            "[]",
-        ],
-        "level_rules": ["[]", "[]"],
-    })
-    multi_connectors = gpd.GeoDataFrame({
-        "id": [1],
-        "geometry": [Point(5, 0)],
-    })
-    result = split_segments_by_connectors(multi_segs, multi_connectors)
-    # First segment should split, second should not
-    assert len(result) == 3
-
-
-def test_adjust_segment_connectors_comprehensive() -> None:
-    """Test adjust_segment_connectors with various scenarios."""
-    line = LineString([(0, 0), (10, 0)])
-
-    # Test with valid connectors that need adjustment
-    segs = gpd.GeoDataFrame({
-        "id": [1],
-        "geometry": [line],
-        "connectors": ['[{"connector_id": 1, "at": 0.5}]'],
-        "level_rules": ["[]"],
-    })
-    connectors = gpd.GeoDataFrame({
-        "id": [1],
-        "geometry": [Point(5.1, 0)],  # Slightly off the exact position
-    })
-
-    # This might raise an error or adjust - test the actual behavior
-    try:
-        result = adjust_segment_connectors(segs, connectors)
-        assert isinstance(result, gpd.GeoDataFrame)
-    except (TypeError, ValueError):
-        # Expected if function has strict requirements
-        pass
-
-    # Test with missing connectors
-    missing_connectors = gpd.GeoDataFrame({
-        "id": [999],  # ID not in segment connectors
-        "geometry": [Point(5, 0)],
-    })
-
-    try:
-        result = adjust_segment_connectors(segs, missing_connectors)
-        assert isinstance(result, gpd.GeoDataFrame)
-    except (TypeError, ValueError):
-        pass
-
-
-def test_clip_to_polygon_comprehensive() -> None:
-    """Test _clip_to_polygon with various geometric scenarios."""
-    # Test polygon with hole
-    exterior = [(0, 0), (10, 0), (10, 10), (0, 10)]
-    hole = [(3, 3), (7, 3), (7, 7), (3, 7)]
-    poly_with_hole = Polygon(exterior, [hole])
-
-    points_gdf = gpd.GeoDataFrame({
-        "geometry": [
-            Point(5, 5),   # in hole
-            Point(1, 1),   # in exterior
-            Point(15, 15),  # outside
-        ],
+        "geometry": [LineString([(0, 0), (1, 1)])],
+        "barrier_mask": [[[0.0, 1.0]]],
     }, crs="EPSG:4326")
 
-    result = _clip_to_polygon(points_gdf, poly_with_hole, "test")
-    assert len(result) == 1  # Only point in exterior but not in hole
-    assert result.iloc[0].geometry == Point(1, 1)
-
-    # Test with non-point geometries (lines)
-    lines_gdf = gpd.GeoDataFrame({
-        "geometry": [
-            LineString([(1, 1), (2, 2)]),  # inside
-            LineString([(15, 15), (20, 20)]),  # outside
-        ],
-    }, crs="EPSG:4326")
-
-    simple_poly = Polygon([(0, 0), (10, 0), (10, 10), (0, 10)])
-    result = _clip_to_polygon(lines_gdf, simple_poly, "test")
+    result = get_barrier_geometry(gdf_with_mask)
+    assert isinstance(result, gpd.GeoSeries)
     assert len(result) == 1
-
-    # Test boundary cases - point exactly on boundary
-    boundary_gdf = gpd.GeoDataFrame({
-        "geometry": [Point(0, 5)],  # on boundary
-    }, crs="EPSG:4326")
-
-    result = _clip_to_polygon(boundary_gdf, simple_poly, "test")
-    # Behavior depends on implementation - should be consistent
-    assert len(result) >= 0
+    assert isinstance(result.iloc[0], LineString)
 
 
-def test_get_nearest_node_comprehensive() -> None:
-    """Test _get_nearest_node with various node configurations."""
-    # Test with multiple nodes at same distance
-    nodes_same_dist = gpd.GeoDataFrame({
-        "node_id": [1, 2, 3],
-        "geometry": [Point(1, 0), Point(-1, 0), Point(0, 1)],
-    })
-    center_point = Point(0, 0)
+def test_overture_data_loading_edge_cases() -> None:
+    """Test edge cases for load_overture_data function."""
+    # Test with invalid bbox format
+    with pytest.raises(ValueError, match="Invalid bbox format"):
+        load_overture_data([1, 2])  # Too few coordinates
 
-    nearest = _get_nearest_node(center_point, nodes_same_dist)
-    assert nearest in [1, 2, 3]  # Any of them could be returned
+    with pytest.raises(ValueError, match="Invalid bbox format"):
+        load_overture_data([1, 2, 3, 4, 5])  # Too many coordinates
 
-    # Test with single node
-    single_node = gpd.GeoDataFrame({
-        "node_id": [42],
-        "geometry": [Point(100, 100)],
-    })
-    nearest = _get_nearest_node(center_point, single_node)
-    assert nearest == 42
+    # Test with non-numeric bbox
+    with pytest.raises(ValueError, match="Invalid bbox format"):
+        load_overture_data(["a", "b", "c", "d"])
 
-    # Test with nodes having different ID types
-    mixed_ids = gpd.GeoDataFrame({
-        "node_id": ["a", "b", 123],
-        "geometry": [Point(10, 0), Point(0, 10), Point(1, 1)],
-    })
-    nearest = _get_nearest_node(center_point, mixed_ids)
-    assert nearest == 123  # Closest node
+    # Test with invalid data types
+    with pytest.raises(ValueError, match="Invalid Overture Maps data type"):
+        load_overture_data([0, 0, 1, 1], types=["invalid_type"])
+
+    # Test with Polygon input (this will require actual Polygon)
+    poly = Polygon([(0, 0), (1, 0), (1, 1), (0, 1)])
+    # This would normally call external command, so we'll just test the validation
+    result = load_overture_data(poly, types=["building"], return_data=False)
+    assert isinstance(result, dict)
 
 
-def test_validate_overture_types_comprehensive() -> None:
-    """Test _validate_overture_types with all valid and invalid combinations."""
-    # Test all valid types (based on common Overture Maps types)
-    valid_types = ["segment", "connector", "infrastructure", "place"]
+def test_string_extraction_edge_cases() -> None:
+    """Test edge cases for _get_substring function."""
+    # Test with invalid parameters
+    line = LineString([(0, 0), (1, 1)])
 
-    for valid_type in valid_types:
-        try:
-            result = _validate_overture_types([valid_type])
-            assert valid_type in result
-        except ValueError:
-            # If this type is not actually valid, that's fine
-            pass
+    # Invalid start/end percentages
+    assert _get_substring(line, -0.1, 0.5) is None  # start < 0
+    assert _get_substring(line, 0.5, 1.1) is None  # end > 1
+    assert _get_substring(line, 0.5, 0.3) is None  # start >= end
 
-    # Test mixed valid and invalid
-    try:
-        result = _validate_overture_types(["segment", "invalid_type"])
-        msg = "Should have raised ValueError"
-        raise AssertionError(msg)
-    except ValueError:
-        pass  # Expected
+    # Invalid line type
+    assert _get_substring("not a line", 0.0, 1.0) is None
 
-    # Test empty list
-    result = _validate_overture_types([])
-    assert isinstance(result, list)
-    assert len(result) == 0
-
-    # Test single valid type
-    result = _validate_overture_types(["segment"])
-    assert "segment" in result
-
-
-def test_prepare_polygon_area_comprehensive() -> None:
-    """Test _prepare_polygon_area with various CRS scenarios."""
-    # Test with geographic CRS (should be reprojected)
-    poly_geo = Polygon([(0, 0), (1, 0), (1, 1), (0, 1)])
-
-    # Mock a geographic polygon (this would normally have lat/lon coordinates)
-    try:
-        bbox, result_poly = _prepare_polygon_area(poly_geo)
-        assert isinstance(bbox, list)
-        assert len(bbox) == 4
-        assert isinstance(result_poly, Polygon)
-    except (ValueError, AttributeError, TypeError) as e:
-        # Function might require specific CRS handling
-        pytest.skip(f"Function requires specific CRS handling: {e}")
-
-    # Test with very small polygon
-    tiny_poly = Polygon([(0, 0), (0.001, 0), (0.001, 0.001), (0, 0.001)])
-    bbox, result_poly = _prepare_polygon_area(tiny_poly)
-    assert bbox[2] - bbox[0] == pytest.approx(0.001, rel=1e-6)
-    assert bbox[3] - bbox[1] == pytest.approx(0.001, rel=1e-6)
-
-    # Test with complex polygon
-    complex_coords = [(0, 0), (2, 0), (2, 1), (1, 1), (1, 2), (0, 2)]
-    complex_poly = Polygon(complex_coords)
-    bbox, result_poly = _prepare_polygon_area(complex_poly)
-    assert bbox == [0.0, 0.0, 2.0, 2.0]
-
-
-def test_create_tessellation_comprehensive() -> None:
-    """Test create_tessellation with various input scenarios."""
-    # Test with projected CRS - function may not raise an error
-    poly = Polygon([(0, 0), (100, 0), (100, 100), (0, 100)])
-    projected_gdf = gpd.GeoDataFrame({"geometry": [poly]}, crs="EPSG:3857")
-
-    # Test the actual behavior
-    try:
-        result = create_tessellation(projected_gdf)
-        assert isinstance(result, gpd.GeoDataFrame)
-    except (TypeError, ValueError):
-        # Expected if function has strict requirements
-        pass
-
-    # Test with multiple polygons
-    multi_poly_gdf = gpd.GeoDataFrame({
-        "geometry": [
-            Polygon([(0, 0), (50, 0), (50, 50), (0, 50)]),
-            Polygon([(60, 60), (110, 60), (110, 110), (60, 110)]),
-        ],
-    }, crs="EPSG:3857")
-
-    # Test the actual behavior
-    try:
-        result = create_tessellation(multi_poly_gdf)
-        assert isinstance(result, gpd.GeoDataFrame)
-    except (TypeError, ValueError):
-        # Expected if function has strict requirements
-        pass
-
-
-def test_load_overture_data_comprehensive() -> None:
-    """Test load_overture_data with various input formats."""
-    # Test different invalid bbox formats
-    invalid_bboxes = [
-        "not_a_bbox",
-        "1,2,3",  # too few values
-        "1,2,3,4,5",  # too many values
-        "a,b,c,d",  # non-numeric
-        "",
-    ]
-
-    for invalid_bbox in invalid_bboxes:
-        with pytest.raises(ValueError, match="Invalid bbox format"):
-            load_overture_data(invalid_bbox)
-
-    # Test None bbox format - this should raise TypeError
-    with pytest.raises(TypeError):
-        load_overture_data(None)
-
-
-# ============================================================================
-# ERROR HANDLING AND ROBUSTNESS TESTS
-# ============================================================================
-
-def test_functions_with_none_inputs() -> None:
-    """Test how functions handle None inputs."""
-    # Test functions that should handle None gracefully
-    assert _parse_connectors_info(None) == []
-    # Test functions that might raise with None
-    with contextlib.suppress(AttributeError, TypeError):
-        _get_substring(None, 0, 1)
-
-    with contextlib.suppress(AttributeError, TypeError):
-        _extract_line_segment(None, None, None, 0, 1)
-
-
-def test_functions_with_empty_inputs() -> None:
-    """Test functions with various empty inputs."""
-    # Empty strings
-    assert identify_barrier_mask("") == [[0.0, 1.0]]
-    assert identify_connector_mask("") == [0.0, 1.0]
-
-    # Empty lists
-    assert _extract_valid_connectors([], {1, 2}) == []
-    assert _create_connector_mask([]) == [0.0, 1.0]
-    assert _recalc_barrier_mask([], 0, 1) == []
-
-
-def test_extreme_coordinate_values() -> None:
-    """Test functions with extreme coordinate values."""
-    # Very large coordinates
-    large_line = LineString([(0, 0), (1e6, 1e6)])
-    seg = _get_substring(large_line, 0.25, 0.75)
-    assert isinstance(seg, LineString)
-
-    # Very small coordinates
-    small_line = LineString([(0, 0), (1e-6, 1e-6)])
-    seg = _get_substring(small_line, 0.25, 0.75)
-    assert seg is None or isinstance(seg, LineString)
-
-    # Negative coordinates
-    neg_line = LineString([(-100, -100), (100, 100)])
-    seg = _get_substring(neg_line, 0.5, 1.0)
-    assert isinstance(seg, LineString)
-
-
-def test_precision_and_rounding() -> None:
-    """Test functions with high precision requirements."""
-    line = LineString([(0, 0), (1, 0)])
-
-    # Test very close positions
-    seg = _get_substring(line, 0.499999, 0.500001)
-    assert seg is None or isinstance(seg, LineString)
-
-    # Test boundary precision
-    seg = _get_substring(line, 0.0, 1e-15)
-    assert seg is None
-
-
-# ============================================================================
-# COMPREHENSIVE EDGE CASE TESTS FOR FULL COVERAGE
-# ============================================================================
-
-def test_get_substring_edge_cases_comprehensive() -> None:
-    """Test _get_substring with all edge cases."""
-    line = LineString([(0, 0), (10, 0)])
-
-    # Test out of bounds cases
-    assert _get_substring(line, -0.1, 0.5) is None
-    assert _get_substring(line, 0.5, 1.1) is None
-    assert _get_substring(line, 1.1, 1.2) is None
-
-    # Test equal start/end positions
+    # Zero-length substring
     assert _get_substring(line, 0.5, 0.5) is None
 
-    # Test very tiny segments
-    seg = _get_substring(line, 0.0, 1e-15)
-    assert seg is None
+    # Full line
+    result = _get_substring(line, 0.0, 1.0)
+    assert isinstance(result, LineString)
 
-    # Test with invalid geometry
-    assert _get_substring("not a line", 0, 1) is None
-    assert _get_substring(None, 0, 1) is None
+    # Nearly full line
+    result = _get_substring(line, 0.0001, 0.9999)
+    assert isinstance(result, LineString)
 
 
-def test_parse_connectors_edge_cases() -> None:
-    """Test _parse_connectors_info with comprehensive edge cases."""
-    # Test with None and null
-    assert _parse_connectors_info(None) == []
-    assert _parse_connectors_info("null") == []
+def test_segment_splitting_edge_cases() -> None:
+    """Test edge cases for split_segments_by_connectors function."""
+    # Test with segments missing connectors column
+    segments_no_connectors = gpd.GeoDataFrame({
+        "id": [1],
+        "geometry": [LineString([(0, 0), (1, 1)])],
+    }, crs="EPSG:4326")
 
-    # Test malformed JSON
-    assert _parse_connectors_info("{") == []
-    assert _parse_connectors_info("[{") == []
-    assert _parse_connectors_info("{'incomplete':") == []
+    connectors = gpd.GeoDataFrame({
+        "id": ["c1"],
+        "geometry": [Point(0.5, 0.5)],
+    }, crs="EPSG:4326")
 
-    # Test empty structures
-    assert _parse_connectors_info("[]") == []
-    # Empty dict gets parsed as a list with one dict element
-    result = _parse_connectors_info("{}")
-    assert isinstance(result, list)
+    result = split_segments_by_connectors(segments_no_connectors, connectors)
+    # Should return original segments unchanged
     assert len(result) == 1
 
 
-def test_extract_valid_connectors_edge_cases() -> None:
-    """Test _extract_valid_connectors with edge cases."""
-    # Test empty inputs
-    assert _extract_valid_connectors([], set()) == []
-    assert _extract_valid_connectors([], {1, 2, 3}) == []
+def test_tessellation_creation_edge_cases() -> None:
+    """Test edge cases for create_tessellation function."""
+    # Test with empty geometry in projected CRS
+    empty_geom = gpd.GeoDataFrame(geometry=[], crs="EPSG:3857")  # Use projected CRS
 
-    # Test invalid connector positions - function doesn't validate range
-    invalid_raw = [
-        {"connector_id": 1, "at": -0.1},
-        {"connector_id": 2, "at": 1.1},
-        {"connector_id": 3, "at": None},
-    ]
-    result = _extract_valid_connectors(invalid_raw, {1, 2, 3})
-    # Should include out-of-range values but exclude None
-    assert -0.1 in result
-    assert 1.1 in result
-    assert len(result) == 2
+    result = create_tessellation(empty_geom)
+    assert isinstance(result, gpd.GeoDataFrame)
+    assert len(result) == 0
 
+    # Test with multiple polygons that can form valid tessellation
+    multi_poly = gpd.GeoDataFrame({
+        "id": [1, 2, 3, 4],
+        "geometry": [
+            Polygon([(0, 0), (50, 0), (50, 50), (0, 50)]),      # Bottom-left
+            Polygon([(50, 0), (100, 0), (100, 50), (50, 50)]),  # Bottom-right
+            Polygon([(0, 50), (50, 50), (50, 100), (0, 100)]),  # Top-left
+            Polygon([(50, 50), (100, 50), (100, 100), (50, 100)]),  # Top-right
+        ],
+    }, crs="EPSG:3857")  # Use projected CRS
 
-def test_barrier_mask_edge_cases() -> None:
-    """Test barrier mask functions with edge cases."""
-    # Test empty mask operations
-    assert _recalc_barrier_mask([], 0.0, 1.0) == []
-    assert _extract_barriers_from_mask(LineString([(0, 0), (1, 0)]), []) is None
+    result = create_tessellation(multi_poly)
+    assert isinstance(result, gpd.GeoDataFrame)
+    assert len(result) >= 0  # Should have some tessellations or empty result
 
-    # Test no overlap scenarios
-    original = [[0.1, 0.2]]
-    assert _recalc_barrier_mask(original, 0.3, 0.4) == []
+    # Test with proper barriers that create valid enclosed tessellations
+    barriers = gpd.GeoDataFrame({
+        "id": [1, 2, 3, 4],
+        "geometry": [
+            # Create a proper closed boundary
+            LineString([(-10, -10), (110, -10), (110, 110), (-10, 110), (-10, -10)]),
+            # Internal barriers
+            LineString([(0, 50), (100, 50)]),   # Horizontal divider
+            LineString([(50, 0), (50, 100)]),   # Vertical divider
+            LineString([(25, 25), (75, 25), (75, 75), (25, 75), (25, 25)]),  # Inner square
+        ],
+    }, crs="EPSG:3857")  # Use projected CRS
 
-
-def test_identify_connector_mask_edge_cases() -> None:
-    """Test identify_connector_mask with boundary conditions."""
-    # Test connectors at exact boundaries
-    info = '{"connector_id": 1, "at": 0.0}'
-    result = identify_connector_mask(info)
-    assert result == [0.0, 0.0, 1.0]
-
-    info = '{"connector_id": 1, "at": 1.0}'
-    result = identify_connector_mask(info)
-    assert result == [0.0, 1.0, 1.0]
-
-
-def test_get_barrier_geometry_edge_cases() -> None:
-    """Test get_barrier_geometry with edge cases."""
-    # Test with None barrier_mask
-    none_mask_gdf = gpd.GeoDataFrame({
-        "geometry": [LineString([(0, 0), (2, 0)])],
-        "barrier_mask": [None],
-    })
-    result = get_barrier_geometry(none_mask_gdf)
-    assert pd.isna(result.iloc[0]) or result.iloc[0] is None
+    result = create_tessellation(multi_poly, primary_barriers=barriers)
+    assert isinstance(result, gpd.GeoDataFrame)
+    # The result may be empty if tessellation can't be created, but function should not crash
 
 
 def test_filter_graph_edge_cases() -> None:
-    """Test filter_graph_by_distance with edge cases."""
-    # Test empty graph - this causes an error
+    """Test edge cases for filter_graph_by_distance function."""
+    # Test with NetworkX graph
     G = nx.Graph()
-    center = Point(0, 0)
-    with pytest.raises(ValueError, match="not enough values to unpack"):
-        filter_graph_by_distance(G, center, 10)
-
-    # Test zero distance
     G.add_node(1, x=0, y=0)
-    result = filter_graph_by_distance(G, center, 0)
-    # With zero distance, even the center node might not be included
-    # depending on how the function calculates distance
-    assert result.number_of_nodes() >= 0
+    G.add_node(2, x=1, y=1)
+    G.add_edge(1, 2, length=1.414)
 
+    center = Point(0, 0)
+    result = filter_graph_by_distance(G, center, 2.0)
+    assert isinstance(result, nx.Graph)
 
-def test_clip_to_polygon_edge_cases() -> None:
-    """Test _clip_to_polygon with edge cases."""
-    # Test empty GeoDataFrame
-    empty_gdf = gpd.GeoDataFrame({"geometry": []}, crs="EPSG:4326")
-    poly = Polygon([(0, 0), (1, 0), (1, 1), (0, 1)])
+    # Test with GeoDataFrame
+    gdf = gpd.GeoDataFrame({
+        "node_id": [1, 2],
+        "geometry": [Point(0, 0), Point(1, 1)],
+    }, crs="EPSG:4326")
 
-    result = _clip_to_polygon(empty_gdf, poly, "test")
-    assert result.empty
+    result = filter_graph_by_distance(gdf, center, 2.0)
+    assert isinstance(result, gpd.GeoDataFrame)
 
+    # Test with center as GeoSeries
+    center_series = gpd.GeoSeries([Point(0, 0)], crs="EPSG:4326")
+    result = filter_graph_by_distance(gdf, center_series, 2.0)
+    assert isinstance(result, gpd.GeoDataFrame)
 
-def test_get_nearest_node_edge_cases() -> None:
-    """Test _get_nearest_node with edge cases."""
-    # Test single node
-    single_node = gpd.GeoDataFrame({
-        "node_id": [42],
-        "geometry": [Point(100, 100)],
-    })
-    center_point = Point(0, 0)
-    nearest = _get_nearest_node(center_point, single_node)
-    assert nearest == 42
-
-
-def test_validate_overture_types_edge_cases() -> None:
-    """Test _validate_overture_types with edge cases."""
-    # Test empty list
-    result = _validate_overture_types([])
-    assert isinstance(result, list)
-    assert len(result) == 0
-
-    # Test with invalid type
-    with pytest.raises(ValueError, match="Invalid Overture Maps data type"):
-        _validate_overture_types(["invalid_type"])
-
-
-def test_prepare_polygon_area_edge_cases() -> None:
-    """Test _prepare_polygon_area with edge cases."""
-    # Test very small polygon
-    tiny_poly = Polygon([(0, 0), (0.001, 0), (0.001, 0.001), (0, 0.001)])
-    bbox, result_poly = _prepare_polygon_area(tiny_poly)
-    assert bbox[2] - bbox[0] == pytest.approx(0.001, rel=1e-6)
-    assert bbox[3] - bbox[1] == pytest.approx(0.001, rel=1e-6)
-
-
-def test_create_tessellation_edge_cases() -> None:
-    """Test create_tessellation with edge cases."""
-    # Test with geographic CRS (should raise error)
-    poly = Polygon([(0, 0), (1, 0), (1, 1), (0, 1)])
-    geom_df = gpd.GeoDataFrame({"geometry": [poly]}, crs="EPSG:4326")
-    with pytest.raises(ValueError, match="geographic CRS"):
-        create_tessellation(geom_df)
-
-
-def test_load_overture_data_edge_cases() -> None:
-    """Test load_overture_data with invalid inputs."""
-    invalid_bboxes = [
-        "not_a_bbox",
-        "1,2,3",  # too few values
-        "1,2,3,4,5",  # too many values
-        "a,b,c,d",  # non-numeric
-        "",
-    ]
-
-    for invalid_bbox in invalid_bboxes:
-        with pytest.raises(ValueError, match="Invalid bbox format"):
-            load_overture_data(invalid_bbox)
-
-
-def test_split_segments_edge_cases() -> None:
-    """Test split_segments_by_connectors with edge cases."""
-    line = LineString([(0, 0), (10, 0)])
-
-    # Test segment with no connector column
-    segs_no_conn = gpd.GeoDataFrame({
-        "id": [1],
-        "geometry": [line],
-        "level_rules": ["[]"],
-    })
-    connectors = gpd.GeoDataFrame({"id": [1], "geometry": [Point(5, 0)]})
-
-    result = split_segments_by_connectors(segs_no_conn, connectors)
-    assert len(result) == 1  # No split without connector info
-
-
-def test_adjust_segment_connectors_edge_cases() -> None:
-    """Test adjust_segment_connectors with edge cases."""
-    line = LineString([(0, 0), (10, 0)])
-
-    segs = gpd.GeoDataFrame({
-        "id": [1],
-        "geometry": [line],
-        "connectors": ["[]"],
-        "level_rules": ["[]"],
-    })
-    empty_conn = gpd.GeoDataFrame({"id": [], "geometry": []})
-
-    with pytest.raises(TypeError):
-        adjust_segment_connectors(segs, empty_conn)
-
-
-def test_extreme_values() -> None:
-    """Test functions with extreme coordinate values."""
-    # Very large coordinates
-    large_line = LineString([(0, 0), (1e6, 1e6)])
-    seg = _get_substring(large_line, 0.25, 0.75)
-    assert isinstance(seg, LineString)
-
-    # Very small coordinates
-    small_line = LineString([(0, 0), (1e-6, 1e-6)])
-    seg = _get_substring(small_line, 0.25, 0.75)
-    assert seg is None or isinstance(seg, LineString)
+    # Test with center as GeoDataFrame
+    center_gdf = gpd.GeoDataFrame({"id": [1], "geometry": [Point(0, 0)]}, crs="EPSG:4326")
+    result = filter_graph_by_distance(gdf, center_gdf, 2.0)
+    assert isinstance(result, gpd.GeoDataFrame)

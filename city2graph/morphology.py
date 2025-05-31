@@ -294,6 +294,10 @@ def _find_additional_connections(line_gdf: gpd.GeoDataFrame,
     if line_gdf.empty:
         return connections
 
+    # Ensure id_col exists on line_gdf
+    if id_col not in line_gdf.columns:
+        line_gdf[id_col] = line_gdf.index
+
     # Extract endpoints vectorized
     endpoints_data = []
 
@@ -303,16 +307,20 @@ def _find_additional_connections(line_gdf: gpd.GeoDataFrame,
             continue
 
         coords = list(row.geometry.coords)
+
+        # Safely get the ID value, using index if column doesn't exist
+        id_value = row[id_col] if id_col in row.index else idx
+
         endpoints_data.extend(
             [
                 {
                     "line_idx": idx,
-                    id_col: row[id_col],
+                    id_col: id_value,
                     "endpoint": shapely.Point(coords[0]),
                 },
                 {
                     "line_idx": idx,
-                    id_col: row[id_col],
+                    id_col: id_value,
                     "endpoint": shapely.Point(coords[-1]),
                 },
             ],
@@ -417,7 +425,11 @@ def convert_gdf_to_dual(gdf: gpd.GeoDataFrame,
     # Check for empty DataFrame
     if gdf.empty:
         warnings.warn("Input GeoDataFrame is empty", RuntimeWarning, stacklevel=2)
-        return (gpd.GeoDataFrame(columns=[id_col] if id_col else [], crs=gdf.crs), {})
+        return (gpd.GeoDataFrame(
+            {id_col: []} if id_col else [],
+            geometry=[],
+            crs=gdf.crs,
+        ), {})
 
     # Validate geometry types
     invalid_geoms = gdf.geometry.apply(
@@ -437,7 +449,10 @@ def convert_gdf_to_dual(gdf: gpd.GeoDataFrame,
         gdf = gdf.dropna(subset=["geometry"])
 
     # Handle ID column
-    if id_col is None:
+    if id_col is not None and id_col not in gdf.columns:
+        gdf = gdf.reset_index(drop=True)
+        gdf[id_col] = gdf.index
+    elif id_col is None:
         gdf = gdf.reset_index(drop=True)
         gdf["temp_id"] = gdf.index
         id_col = "temp_id"
@@ -1022,8 +1037,24 @@ def morphological_graph(
         public_geom_col = "geometry"
 
     # Create tessellations based on buildings and road barrier geometries
+    # Create a GeoDataFrame with the barrier geometry for tessellation
+    if public_geom_col == "geometry":
+        # If using the main geometry column, just use the segments as-is
+        barrier_gdf = segments_gdf.copy()
+    else:
+        # Create a completely new GeoDataFrame with the barrier geometry
+        barrier_gdf = gpd.GeoDataFrame(
+            segments_gdf.drop(columns=["geometry"]),
+            geometry=segments_gdf[public_geom_col].values,
+            crs=segments_gdf.crs,
+        )
+
+    # Ensure barrier_gdf has the same CRS as buildings_gdf
+    if barrier_gdf.crs != buildings_gdf.crs:
+        barrier_gdf = barrier_gdf.to_crs(buildings_gdf.crs)
+
     enclosed_tess = create_tessellation(
-        buildings_gdf, primary_barriers=segments_gdf[public_geom_col],
+        buildings_gdf, primary_barriers=barrier_gdf,
     )
 
     # Optionally filter the network by distance from a specified center point
@@ -1035,19 +1066,37 @@ def morphological_graph(
         segments_subset = segments_gdf.copy()
 
     # Get the enclosure indices that are adjacent to the segments using a spatial join
-    adjacent_enclosure_indices = gpd.sjoin(
-        enclosed_tess, segments_subset, how="inner", predicate="intersects",
-    )["enclosure_index"].unique()
+    if not enclosed_tess.empty and not segments_subset.empty:
+        adjacent_enclosure_indices = gpd.sjoin(
+            enclosed_tess, segments_subset, how="inner", predicate="intersects",
+        )
 
-    # Get enclosed tessellation for the adjacent enclosures
-    tess_subset = enclosed_tess[
-        enclosed_tess["enclosure_index"].isin(adjacent_enclosure_indices)
-    ]
+        # Check if the tessellation has an enclosure_index column (from enclosed tessellation)
+        # If not, use the tessellation index as the enclosure index
+        if "enclosure_index" in adjacent_enclosure_indices.columns:
+            enclosure_indices = adjacent_enclosure_indices["enclosure_index"].unique()
+        else:
+            # For morphological tessellation, use the tessellation index
+            enclosure_indices = adjacent_enclosure_indices.index.unique()
+
+        # Get enclosed tessellation for the adjacent enclosures
+        if "enclosure_index" in enclosed_tess.columns:
+            tess_subset = enclosed_tess[
+                enclosed_tess["enclosure_index"].isin(enclosure_indices)
+            ]
+        else:
+            # For morphological tessellation, filter by index
+            tess_subset = enclosed_tess[enclosed_tess.index.isin(enclosure_indices)]
+    else:
+        tess_subset = enclosed_tess.copy()  # Use all tessellations if spatial join fails
 
     # Filter buildings that intersect with the enclosed tessellation
-    buildings_subset = buildings_gdf[
-        buildings_gdf.geometry.intersects(tess_subset.unary_union)
-    ]
+    if not tess_subset.empty:
+        buildings_subset = buildings_gdf[
+            buildings_gdf.geometry.intersects(tess_subset.geometry.union_all())
+        ]
+    else:
+        buildings_subset = gpd.GeoDataFrame(geometry=[], crs=buildings_gdf.crs)
 
     # Create connections between adjacent private spaces (tessellation cells)
     private_to_private = private_to_private_graph(
@@ -1074,7 +1123,7 @@ def morphological_graph(
 
     # Return all created elements
     return {
-        "tessellations": tess_subset,
+        "tessellation": tess_subset,
         "segments": segments_subset,
         "buildings": buildings_subset,
         "private_to_private": private_to_private,

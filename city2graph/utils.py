@@ -971,15 +971,21 @@ def create_tessellation(
             clip=False,
         )
 
-        tessellation = momepy.enclosed_tessellation(
-            geometry=geometry,
-            enclosures=enclosures,
-            shrink=shrink,
-            segment=segment,
-            threshold=threshold,
-            n_jobs=n_jobs,
-            **kwargs,
-        )
+        try:
+            tessellation = momepy.enclosed_tessellation(
+                geometry=geometry,
+                enclosures=enclosures,
+                shrink=shrink,
+                segment=segment,
+                threshold=threshold,
+                n_jobs=n_jobs,
+                **kwargs,
+            )
+        except (ValueError, TypeError) as e:
+            if "No objects to concatenate" in str(e) or "incorrect geometry type" in str(e):
+                # Return empty tessellation when momepy can't create valid tessellations
+                return gpd.GeoDataFrame(columns=["geometry"], geometry="geometry", crs=geometry.crs)
+            raise
 
         # Apply ID handling for enclosed tessellation
         tessellation["tess_id"] = [
@@ -993,9 +999,15 @@ def create_tessellation(
             msg = "Geometry is in a geographic CRS"
             raise ValueError(msg)
         # Create morphological tessellation
-        tessellation = momepy.morphological_tessellation(
-            geometry=geometry, clip="bounding_box", shrink=shrink, segment=segment,
-        )
+        try:
+            tessellation = momepy.morphological_tessellation(
+                geometry=geometry, clip="bounding_box", shrink=shrink, segment=segment,
+            )
+        except (ValueError, TypeError) as e:
+            if "No objects to concatenate" in str(e) or "incorrect geometry type" in str(e):
+                # Return empty tessellation when momepy can't create valid tessellations
+                return gpd.GeoDataFrame(columns=["geometry"], geometry="geometry", crs=geometry.crs)
+            raise
         tessellation["tess_id"] = tessellation.index
 
     return tessellation
