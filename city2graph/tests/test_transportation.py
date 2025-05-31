@@ -15,78 +15,102 @@ from city2graph.transportation import get_od_pairs
 from city2graph.transportation import load_gtfs
 from city2graph.transportation import travel_summary_graph
 
+# ============================================================================
+# COMMON TEST FIXTURES
+# ============================================================================
+
 
 @pytest.fixture
-def minimal_gtfs_zip(tmp_path: str) -> str:
-    """Create a minimal GTFS zip file for testing."""
-    # create minimal GTFS zip
-    stops = pd.DataFrame(
-        {
-            "stop_id": ["a", "b"],
-            "stop_lat": ["0", "1"],
-            "stop_lon": ["0", "1"],
-        },
-    )
-    routes = pd.DataFrame({"route_id": ["r1"], "route_type": ["3"]})
-    shapes = pd.DataFrame(
-        {
-            "shape_id": ["s1", "s1"],
-            "shape_pt_lat": ["0", "1"],
-            "shape_pt_lon": ["0", "1"],
-            "shape_pt_sequence": ["1", "2"],
-        },
-    )
-    trips = pd.DataFrame(
-        {
-            "route_id": ["r1"],
-            "service_id": ["sv1"],
-            "trip_id": ["t1"],
-            "shape_id": ["s1"],
-        },
-    )
-    stop_times = pd.DataFrame(
-        {
-            "trip_id": ["t1", "t1"],
-            "stop_id": ["a", "b"],
-            "stop_sequence": ["1", "2"],
-            "departure_time": ["00:00:00", "00:05:00"],
-            "arrival_time": ["00:00:00", "00:05:00"],
-        },
-    )
-    calendar = pd.DataFrame(
-        {
-            "service_id": ["sv1"],
-            "start_date": ["20210101"],
-            "end_date": ["20210102"],
-            "monday": [1],
-            "tuesday": [1],
-            "wednesday": [1],
-            "thursday": [1],
-            "friday": [1],
-            "saturday": [0],
-            "sunday": [0],
-        },
-    )
+def sample_gtfs_data() -> dict:
+    """Create sample GTFS DataFrames for testing."""
+    stops = pd.DataFrame({
+        "stop_id": ["a", "b"],
+        "stop_lat": ["0", "1"],
+        "stop_lon": ["0", "1"],
+    })
+
+    routes = pd.DataFrame({
+        "route_id": ["r1"],
+        "route_type": ["3"],
+    })
+
+    shapes = pd.DataFrame({
+        "shape_id": ["s1", "s1"],
+        "shape_pt_lat": ["0", "1"],
+        "shape_pt_lon": ["0", "1"],
+        "shape_pt_sequence": ["1", "2"],
+    })
+
+    trips = pd.DataFrame({
+        "route_id": ["r1"],
+        "service_id": ["sv1"],
+        "trip_id": ["t1"],
+        "shape_id": ["s1"],
+    })
+
+    stop_times = pd.DataFrame({
+        "trip_id": ["t1", "t1"],
+        "stop_id": ["a", "b"],
+        "stop_sequence": ["1", "2"],
+        "departure_time": ["00:00:00", "00:05:00"],
+        "arrival_time": ["00:00:00", "00:05:00"],
+    })
+
+    calendar = pd.DataFrame({
+        "service_id": ["sv1"],
+        "start_date": ["20210101"],
+        "end_date": ["20210102"],
+        "monday": [1],
+        "tuesday": [1],
+        "wednesday": [1],
+        "thursday": [1],
+        "friday": [1],
+        "saturday": [0],
+        "sunday": [0],
+    })
+
     calendar_dates = pd.DataFrame(columns=["service_id", "date", "exception_type"])
+
+    return {
+        "stops": stops,
+        "routes": routes,
+        "shapes": shapes,
+        "trips": trips,
+        "stop_times": stop_times,
+        "calendar": calendar,
+        "calendar_dates": calendar_dates,
+    }
+
+
+@pytest.fixture
+def minimal_gtfs_zip(tmp_path: str, sample_gtfs_data: dict) -> str:
+    """Create a minimal GTFS zip file for testing."""
+    # Arrange: use the sample GTFS data
     zip_path = tmp_path / "gtfs.zip"
+
+    # Act: create zip file with GTFS text files
     with zipfile.ZipFile(zip_path, "w") as zf:
-        for name, df in [
-            ("stops", stops),
-            ("routes", routes),
-            ("shapes", shapes),
-            ("trips", trips),
-            ("stop_times", stop_times),
-            ("calendar", calendar),
-            ("calendar_dates", calendar_dates),
-        ]:
+        for name, df in sample_gtfs_data.items():
             data = df.to_csv(index=False).encode("utf-8")
             zf.writestr(f"{name}.txt", data)
-    return zip_path
+
+    return str(zip_path)
+
+
+# ============================================================================
+# GTFS LOADING AND BASIC FUNCTIONALITY TESTS
+# ============================================================================
 
 
 def test_load_gtfs(minimal_gtfs_zip: str) -> None:
     """Test loading GTFS data from a zip file."""
-    gtfs = load_gtfs(str(minimal_gtfs_zip))
+    # Arrange: prepare minimal GTFS zip file
+    gtfs_path = minimal_gtfs_zip
+
+    # Act: load GTFS data from zip file
+    gtfs = load_gtfs(gtfs_path)
+
+    # Assert: verify correct data structure and types
     assert isinstance(gtfs, dict)
     assert "stops" in gtfs
     assert isinstance(gtfs["stops"], gpd.GeoDataFrame)
@@ -98,8 +122,13 @@ def test_load_gtfs(minimal_gtfs_zip: str) -> None:
 
 def test_get_od_pairs(minimal_gtfs_zip: str) -> None:
     """Test getting origin-destination pairs from GTFS data."""
-    gtfs = load_gtfs(str(minimal_gtfs_zip))
+    # Arrange: load GTFS data
+    gtfs = load_gtfs(minimal_gtfs_zip)
+
+    # Act: generate origin-destination pairs without geometry
     od = get_od_pairs(gtfs, include_geometry=False)
+
+    # Assert: verify DataFrame structure and expected columns
     assert isinstance(od, pd.DataFrame)
     assert not od.empty
     expected = [
@@ -114,32 +143,66 @@ def test_get_od_pairs(minimal_gtfs_zip: str) -> None:
     ]
     for col in expected:
         assert col in od.columns
+
+    # Act: test generator functionality
     gen = get_od_pairs(gtfs, include_geometry=False, as_generator=True, chunk_size=1)
     chunks = list(gen)
+
+    # Assert: verify generator produces valid chunks
     assert all(isinstance(c, pd.DataFrame) for c in chunks)
     assert sum(len(c) for c in chunks) == len(od)
 
 
 def test_travel_summary_graph(minimal_gtfs_zip: str) -> None:
     """Test creating travel summary graph from GTFS data."""
+    # Arrange: load GTFS data
     gtfs = load_gtfs(minimal_gtfs_zip)
+
+    # Act: create travel summary as GeoDataFrame
     summary_gdf = travel_summary_graph(gtfs, as_gdf=True)
+
+    # Assert: verify GeoDataFrame has geometry
     assert hasattr(summary_gdf, "geometry")
+
+    # Act: create travel summary as dictionary
     summary_dict = travel_summary_graph(gtfs, as_gdf=False)
+
+    # Assert: verify dictionary structure
     assert isinstance(summary_dict, dict)
     assert next(iter(summary_dict)) in summary_dict
 
 
+# ============================================================================
+# TIME CONVERSION AND TIMESTAMP TESTS
+# ============================================================================
+
+
 def test_timestamp_and_time_conversions() -> None:
     """Test timestamp creation and time conversion functions."""
-    ts = _create_timestamp("25:00:00", datetime(2021, 1, 1))
+    # Arrange: test time after midnight (25:00:00)
+    base_date = datetime(2021, 1, 1)
+
+    # Act: create timestamp for time after midnight
+    ts = _create_timestamp("25:00:00", base_date)
+
+    # Assert: verify timestamp is correctly calculated for next day
     assert ts.hour == 1
     assert ts.day == 2
-    assert _create_timestamp(None, datetime(2021, 1, 1)) is None
+
+    # Act & Assert: test None input
+    assert _create_timestamp(None, base_date) is None
+
+    # Act & Assert: test time to seconds conversion
     assert _time_to_seconds("01:02:03") == 3723
     assert np.isnan(_time_to_seconds(None))
+
+    # Arrange: test vectorized time conversion
     s = pd.Series(["00:00:10", "00:01:00", None])
+
+    # Act: convert Series of times to seconds
     sec = _vectorized_time_to_seconds(s)
+
+    # Assert: verify correct conversion for each value
     assert sec.iloc[0] == 10
     assert sec.iloc[1] == 60
     assert np.isnan(sec.iloc[2])
@@ -147,26 +210,55 @@ def test_timestamp_and_time_conversions() -> None:
 
 def test_create_timestamp_invalid() -> None:
     """Test timestamp creation with invalid time format."""
-    assert _create_timestamp("ab:cd:ef", datetime(2021, 1, 1)) is None
+    # Arrange: invalid time format
+    invalid_time = "ab:cd:ef"
+    base_date = datetime(2021, 1, 1)
+
+    # Act & Assert: should return None for invalid format
+    assert _create_timestamp(invalid_time, base_date) is None
+
+
+# ============================================================================
+# GEOMETRY AND ADVANCED FUNCTIONALITY TESTS
+# ============================================================================
 
 
 def test_get_od_pairs_with_geometry(minimal_gtfs_zip: str) -> None:
     """Test getting origin-destination pairs with geometry included."""
+    # Arrange: load GTFS data
     gtfs = load_gtfs(minimal_gtfs_zip)
+
+    # Act: generate origin-destination pairs with geometry
     od_gdf = get_od_pairs(gtfs, include_geometry=True)
+
+    # Assert: verify GeoDataFrame structure
     assert hasattr(od_gdf, "geometry")
     assert len(od_gdf) > 0
 
 
 def test_get_od_pairs_generator_with_geometry(minimal_gtfs_zip: str) -> None:
     """Test getting origin-destination pairs with geometry using generator."""
+    # Arrange: load GTFS data
     gtfs = load_gtfs(minimal_gtfs_zip)
+
+    # Act: generate chunks with geometry using generator
     gen = get_od_pairs(gtfs, include_geometry=True, as_generator=True, chunk_size=1)
     chunks = list(gen)
+
+    # Assert: verify all chunks have geometry
     assert all(hasattr(c, "geometry") for c in chunks)
+
+
+# ============================================================================
+# ERROR HANDLING TESTS
+# ============================================================================
 
 
 def test_load_gtfs_invalid_path() -> None:
     """Test loading GTFS data with invalid file path."""
+    # Arrange: non-existent file path
+    invalid_path = "nonexistent.zip"
+
+    # Act & Assert: should raise KeyError for missing file
     with pytest.raises(KeyError):
-        load_gtfs("nonexistent.zip")
+        load_gtfs(invalid_path)

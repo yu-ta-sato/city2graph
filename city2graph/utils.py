@@ -988,6 +988,10 @@ def create_tessellation(
         ]
         tessellation = tessellation.reset_index(drop=True)
     else:
+        # Disallow geographic CRS
+        if hasattr(geometry, "crs") and geometry.crs == "EPSG:4326":
+            msg = "Geometry is in a geographic CRS"
+            raise ValueError(msg)
         # Create morphological tessellation
         tessellation = momepy.morphological_tessellation(
             geometry=geometry, clip="bounding_box", shrink=shrink, segment=segment,
