@@ -72,13 +72,14 @@ def _prepare_polygon_area(area: Polygon) -> tuple[list[float], Polygon | None]:
     original_polygon = area
 
     if hasattr(area, "crs") and area.crs and area.crs != wgs84_crs:
-        temp_gdf = gpd.GeoDataFrame(geometry=[area], crs=area.crs)
-        temp_gdf = temp_gdf.to_crs(wgs84_crs)
-        original_polygon = temp_gdf.geometry.iloc[0]
+        # Reproject polygon to WGS84
+        original_polygon = area.to_crs(wgs84_crs)
         logger.info("Transformed polygon from %s to WGS84 (EPSG:4326)", area.crs)
 
+    # Extract and round bounding box coordinates
     minx, miny, maxx, maxy = original_polygon.bounds
-    return [minx, miny, maxx, maxy], original_polygon
+    bbox = [round(minx, 10), round(miny, 10), round(maxx, 10), round(maxy, 10)]
+    return bbox, original_polygon
 
 
 def _read_overture_data(

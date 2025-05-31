@@ -19,7 +19,10 @@ def simple_points_gdf() -> gpd.GeoDataFrame:
 
 def test_knn_graph_basic(simple_points_gdf: gpd.GeoDataFrame) -> None:
     """Test basic functionality of knn_graph with k=2."""
+    # Act: call function under test
     G = knn_graph(simple_points_gdf, k=2)
+
+    # Assert: verify results
     assert isinstance(G, nx.Graph)
     assert G.number_of_nodes() == 4
     assert all(d >= 2 for _, d in G.degree())
@@ -27,14 +30,20 @@ def test_knn_graph_basic(simple_points_gdf: gpd.GeoDataFrame) -> None:
 
 def test_delaunay_graph_basic(simple_points_gdf: gpd.GeoDataFrame) -> None:
     """Test basic functionality of delaunay_graph."""
+    # Act: call function under test
     G = delaunay_graph(simple_points_gdf)
+
+    # Assert: verify results
     assert G.number_of_nodes() == 4
     assert G.number_of_edges() in (5, 6)
 
 
 def test_gilbert_graph_radius(simple_points_gdf: gpd.GeoDataFrame) -> None:
     """Test gilbert_graph with a specific radius parameter."""
+    # Act: call function under test
     G = gilbert_graph(simple_points_gdf, radius=1.5)
+
+    # Assert: verify results
     assert G.number_of_nodes() == 4
     assert G.number_of_edges() == 6
     assert G.graph.get("radius") == 1.5
@@ -42,8 +51,11 @@ def test_gilbert_graph_radius(simple_points_gdf: gpd.GeoDataFrame) -> None:
 
 def test_waxman_graph_reproducibility(simple_points_gdf: gpd.GeoDataFrame) -> None:
     """Test that waxman_graph produces reproducible results with the same seed."""
+    # Act: generate two graphs with same seed
     G1 = waxman_graph(simple_points_gdf, beta=1.0, r0=1.0, seed=42)
     G2 = waxman_graph(simple_points_gdf, beta=1.0, r0=1.0, seed=42)
+
+    # Assert: verify reproducibility and parameters
     assert sorted(G1.edges()) == sorted(G2.edges())
     assert G1.graph.get("beta") == 1.0
     assert G1.graph.get("r0") == 1.0
