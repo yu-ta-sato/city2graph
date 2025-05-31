@@ -75,6 +75,33 @@ def test_knn_graph_edge_cases(linear_points_gdf: gpd.GeoDataFrame) -> None:
     assert all(d >= 3 for _, d in G_k3.degree())
 
 
+def test_knn_graph_zero_k(simple_points_gdf: gpd.GeoDataFrame) -> None:
+    """Test knn_graph with k=0 returns no edges."""
+    # Arrange: use the simple 4-point square fixture
+    points_gdf = simple_points_gdf
+
+    # Act: create k-nearest neighbors graph with k=0
+    G0 = knn_graph(points_gdf, k=0)
+
+    # Assert: verify graph has 4 nodes and 0 edges
+    assert G0.number_of_nodes() == 4
+    assert G0.number_of_edges() == 0
+
+
+def test_knn_graph_large_k(simple_points_gdf: gpd.GeoDataFrame) -> None:
+    """Test knn_graph with k larger than n-1 connects to all neighbors."""
+    # Arrange: use the simple 4-point square fixture
+    points_gdf = simple_points_gdf
+
+    # Act: create k-nearest neighbors graph with k=10
+    G_large = knn_graph(points_gdf, k=10)
+
+    # Assert: verify graph has 4 nodes and each node is connected to all others
+    assert G_large.number_of_nodes() == 4
+    # effective k is n-1=3
+    assert all(d >= 3 for _, d in G_large.degree())
+
+
 # ============================================================================
 # DELAUNAY TRIANGULATION GRAPH TESTS
 # ============================================================================
@@ -115,6 +142,19 @@ def test_delaunay_graph_collinear(linear_points_gdf: gpd.GeoDataFrame) -> None:
     # Act & Assert: delaunay triangulation should fail with collinear points
     with pytest.raises((ValueError, Exception)):  # QhullError is wrapped
         delaunay_graph(points_gdf)
+
+
+def test_delaunay_graph_two_points() -> None:
+    """Test delaunay_graph with two points (edge case)."""
+    # Arrange: create GeoDataFrame with two points
+    gdf = gpd.GeoDataFrame(geometry=[Point(0, 0), Point(1, 1)])
+
+    # Act: create Delaunay triangulation graph
+    G = delaunay_graph(gdf)
+
+    # Assert: verify graph has 2 nodes and 0 edges (no triangulation possible)
+    assert G.number_of_nodes() == 2
+    assert G.number_of_edges() == 0
 
 
 # ============================================================================
@@ -165,6 +205,25 @@ def test_gilbert_graph_large_radius(triangle_points_gdf: gpd.GeoDataFrame) -> No
     # Assert: verify complete connectivity
     assert G.number_of_nodes() == 3
     assert G.number_of_edges() == 3  # Complete graph for 3 points
+
+
+def test_gilbert_graph_zero_and_negative_radius(simple_points_gdf: gpd.GeoDataFrame) -> None:
+    """Test gilbert_graph with zero and negative radius returns no edges and stores radius."""
+    # Arrange: use simple points
+
+    # Act: create Gilbert graph with zero radius
+    G_zero = gilbert_graph(simple_points_gdf, radius=0)
+
+    # Assert: verify no edges are created
+    assert G_zero.number_of_edges() == 0
+    assert G_zero.graph.get("radius") == 0
+
+    # Act: create Gilbert graph with negative radius
+    G_neg = gilbert_graph(simple_points_gdf, radius=-0.1)
+
+    # Assert: verify no edges are created and radius is stored
+    assert G_neg.number_of_edges() == 0
+    assert G_neg.graph.get("radius") == -0.1
 
 
 # ============================================================================
@@ -224,6 +283,29 @@ def test_waxman_graph_parameters(linear_points_gdf: gpd.GeoDataFrame) -> None:
     # Assert: verify parameter storage
     assert G_high_beta.graph.get("beta") == 2.0
     assert G_low_beta.graph.get("beta") == 0.1
+
+
+def test_waxman_graph_invalid_parameters(simple_points_gdf: gpd.GeoDataFrame) -> None:
+    """Test waxman_graph with unconventional parameters returns graphs with stored params."""
+    # Arrange: use simple points
+
+    # Act: create graph with negative beta
+    G_neg_beta = waxman_graph(simple_points_gdf, beta=-0.1, r0=1.0, seed=42)
+
+    # Assert: verify graph has no edges and beta is stored
+    assert G_neg_beta.graph.get("beta") == -0.1
+    assert G_neg_beta.number_of_edges() == 0
+
+    # Act: create graph with beta > 1 (should behave like complete graph)
+    G_gt1_beta = waxman_graph(simple_points_gdf, beta=1.1, r0=1.0, seed=42)
+    n = G_gt1_beta.number_of_nodes()
+    assert G_gt1_beta.graph.get("beta") == 1.1
+    assert 0 <= G_gt1_beta.number_of_edges() <= n*(n-1)//2
+
+    # Act: create graph with zero r0 (no edges, r0 should be stored)
+    G_zero_r0 = waxman_graph(simple_points_gdf, beta=0.5, r0=0, seed=42)
+    assert G_zero_r0.graph.get("r0") == 0
+    assert G_zero_r0.number_of_edges() == 0
 
 
 # ============================================================================
