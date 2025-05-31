@@ -8,7 +8,7 @@ from shapely.geometry import Point
 
 from city2graph.utils import _get_substring
 from city2graph.utils import _recalc_barrier_mask
-from city2graph.utils import filter_network_by_distance
+from city2graph.utils import filter_graph_by_distance
 from city2graph.utils import get_barrier_geometry
 from city2graph.utils import identify_barrier_mask
 from city2graph.utils import identify_connector_mask
@@ -67,18 +67,18 @@ def test_recalc_barrier_mask() -> None:
     assert new_mask == [[0.0, 1.0]]
 
 
-def test_filter_network_by_distance_graph() -> None:
-    """Test filter_network_by_distance function with a NetworkX graph."""
+def test_filter_graph_by_distance() -> None:
+    """Test filter_graph_by_distance function with a NetworkX graph."""
     G = nx.Graph()
     G.add_node(1, x=0, y=0)
     G.add_node(2, x=1, y=0)
     G.add_edge(1, 2, length=1)
     center = Point(0, 0)
-    sub1 = filter_network_by_distance(G, center, 0.5)
+    sub1 = filter_graph_by_distance(G, center, 0.5)
     assert isinstance(sub1, nx.Graph)
     assert list(sub1.nodes) == [1]
     assert sub1.number_of_edges() == 0
-    sub2 = filter_network_by_distance(G, center, 2)
+    sub2 = filter_graph_by_distance(G, center, 2)
     assert set(sub2.nodes) == {1, 2}
     assert sub2.number_of_edges() == 1
 

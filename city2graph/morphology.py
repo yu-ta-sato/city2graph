@@ -11,15 +11,15 @@ import pandas as pd
 import shapely
 
 from city2graph.utils import create_tessellation
-from city2graph.utils import filter_network_by_distance
+from city2graph.utils import filter_graph_by_distance
 
 # Define the public API for this module
 __all__ = [
     "convert_gdf_to_dual",
     "morphological_graph",
-    "private_to_private_network",
-    "private_to_public_network",
-    "public_to_public_network",
+    "private_to_private_graph",
+    "private_to_public_graph",
+    "public_to_public_graph",
 ]
 
 
@@ -669,7 +669,7 @@ def _prep_contiguity_graph(
     return w_nx, pos_to_id_mapping
 
 
-def private_to_private_network(
+def private_to_private_graph(
     private_gdf: gpd.GeoDataFrame,
     private_id_col: str | None = None,
     group_col: str | None = None,
@@ -806,7 +806,7 @@ def private_to_private_network(
     return gpd.GeoDataFrame(columns=cols, crs=private_gdf.crs)
 
 
-def private_to_public_network(
+def private_to_public_graph(
     private_gdf: gpd.GeoDataFrame,
     public_gdf: gpd.GeoDataFrame,
     private_id_col: str | None = None,
@@ -864,7 +864,7 @@ def private_to_public_network(
     )
 
 
-def public_to_public_network(
+def public_to_public_graph(
     public_gdf: gpd.GeoDataFrame,
     public_id_col: str | None = None,
     tolerance: float = 1e-8) -> gpd.GeoDataFrame:
@@ -1010,7 +1010,7 @@ def morphological_graph(
     - The barrier_geometry column should contain the processed geometries for road segments.
       If it doesn't exist, the function will use the column specified in public_geom_col.
     - The function requires the city2graph package and depends on create_tessellation,
-      filter_network_by_distance, create_private_to_private, create_public_to_public,
+      filter_graph_by_distance, create_private_to_private, create_public_to_public,
       and create_private_to_public functions.
     """
     # Check if public_geom_col exists in segments_gdf
@@ -1028,7 +1028,7 @@ def morphological_graph(
 
     # Optionally filter the network by distance from a specified center point
     if center_point is not None and distance is not None:
-        segments_subset = filter_network_by_distance(
+        segments_subset = filter_graph_by_distance(
             segments_gdf, center_point, distance=distance,
         )
     else:
@@ -1050,7 +1050,7 @@ def morphological_graph(
     ]
 
     # Create connections between adjacent private spaces (tessellation cells)
-    private_to_private = private_to_private_network(
+    private_to_private = private_to_private_graph(
         tess_subset,
         private_id_col=private_id_col,
         group_col="enclosure_index",
@@ -1058,13 +1058,13 @@ def morphological_graph(
     )
 
     # Create connections between street segments
-    public_to_public = public_to_public_network(
+    public_to_public = public_to_public_graph(
         segments_subset,
         public_id_col=public_id_col,
     )
 
     # Create connections between private spaces and public spaces
-    private_to_public = private_to_public_network(
+    private_to_public = private_to_public_graph(
         tess_subset,
         segments_subset,
         private_id_col=private_id_col,

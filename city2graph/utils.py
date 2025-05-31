@@ -21,7 +21,7 @@ from shapely.geometry.base import BaseGeometry
 __all__ = [
     "adjust_segment_connectors",
     "create_tessellation",
-    "filter_network_by_distance",
+    "filter_graph_by_distance",
     "get_barrier_geometry",
     "identify_barrier_mask",
     "identify_connector_mask",
@@ -1006,7 +1006,7 @@ def _get_nearest_node(point: Point | gpd.GeoSeries,
     return nodes_gdf.loc[nearest_idx, node_id]
 
 
-def filter_network_by_distance(
+def filter_graph_by_distance(
     network: gpd.GeoDataFrame | nx.Graph,
     center_point: Point | gpd.GeoSeries | gpd.GeoDataFrame,
     distance: float,
