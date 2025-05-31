@@ -13,7 +13,7 @@ from city2graph.transportation import _time_to_seconds
 from city2graph.transportation import _vectorized_time_to_seconds
 from city2graph.transportation import get_od_pairs
 from city2graph.transportation import load_gtfs
-from city2graph.transportation import travel_summary_network
+from city2graph.transportation import travel_summary_graph
 
 
 @pytest.fixture
@@ -120,12 +120,12 @@ def test_get_od_pairs(minimal_gtfs_zip: str) -> None:
     assert sum(len(c) for c in chunks) == len(od)
 
 
-def test_travel_summary_network(minimal_gtfs_zip: str) -> None:
-    """Test creating travel summary network from GTFS data."""
+def test_travel_summary_graph(minimal_gtfs_zip: str) -> None:
+    """Test creating travel summary graph from GTFS data."""
     gtfs = load_gtfs(minimal_gtfs_zip)
-    summary_gdf = travel_summary_network(gtfs, as_gdf=True)
+    summary_gdf = travel_summary_graph(gtfs, as_gdf=True)
     assert hasattr(summary_gdf, "geometry")
-    summary_dict = travel_summary_network(gtfs, as_gdf=False)
+    summary_dict = travel_summary_graph(gtfs, as_gdf=False)
     assert isinstance(summary_dict, dict)
     assert next(iter(summary_dict)) in summary_dict
 

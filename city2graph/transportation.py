@@ -14,7 +14,7 @@ import pandas as pd
 from shapely.geometry import LineString
 from shapely.geometry import Point
 
-__all__ = ["get_od_pairs", "load_gtfs", "travel_summary_network"]
+__all__ = ["get_od_pairs", "load_gtfs", "travel_summary_graph"]
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -785,7 +785,7 @@ def _vectorized_time_to_seconds(time_series: pd.Series) -> pd.Series:
     return time_series
 
 
-def travel_summary_network(
+def travel_summary_graph(
     gtfs_data: dict,
     start_time: str | None = None,
     end_time: str | None = None,
@@ -793,7 +793,7 @@ def travel_summary_network(
     calendar_end: str | None = None,
     as_gdf: bool = True) -> gpd.GeoDataFrame | dict:
     """
-    Create a network representing travel times and frequencies between stops.
+    Create a graph representing travel times and frequencies between stops.
 
     Parameters
     ----------
