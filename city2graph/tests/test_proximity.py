@@ -141,7 +141,7 @@ def test_delaunay_graph_collinear(linear_points_gdf: gpd.GeoDataFrame) -> None:
 
     # Act: delaunay triangulation should handle collinear points gracefully
     result = delaunay_graph(points_gdf)
-    
+
     # Assert: should return empty graph when triangulation fails
     assert isinstance(result, nx.Graph)
     assert len(result.edges()) == 0  # Empty graph due to QhullError handling
