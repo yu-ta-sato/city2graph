@@ -1,5 +1,6 @@
 """Tests for graph module functionality."""
 
+import contextlib
 from unittest.mock import patch
 
 import geopandas as gpd
@@ -720,7 +721,7 @@ def test_validate_nodes_dict_warnings() -> None:
     with patch("city2graph.graph.logger.warning") as mock_warning:
         # Use _process_node_type which calls the validation logic
         data = HeteroData()
-        try:
+        with contextlib.suppress(ValueError, AttributeError):
             _process_node_type(
                 "invalid_type",
                 nodes_dict["invalid_type"],
@@ -730,8 +731,6 @@ def test_validate_nodes_dict_warnings() -> None:
                 "cpu",
                 data,
             )
-        except (ValueError, AttributeError):
-            pass  # Expected for invalid input
 
         # Should warn about invalid type
         assert mock_warning.call_count >= 1
@@ -864,7 +863,7 @@ def test_from_morphological_graph_private_public_features() -> None:
     public_cols = ["public_feat"]
 
     with (
-        patch("city2graph.graph.TORCH_AVAILABLE", True),
+        patch("city2graph.graph.TORCH_AVAILABLE", new=True),
         patch("city2graph.graph._get_device") as mock_get_device,
         patch("city2graph.graph.torch") as mock_torch,
         patch("city2graph.graph.Data") as mock_data,
@@ -881,3 +880,251 @@ def test_from_morphological_graph_private_public_features() -> None:
 
         # Should process both private and public features
         assert mock_data.called
+
+
+# ============================================================================
+# COMPREHENSIVE TESTS FOR MISSING COVERAGE LINES
+# ============================================================================
+
+
+def test_detect_edge_columns_exact_three_columns() -> None:
+    """Test _detect_edge_columns with exactly 3 columns (lines 164-165)."""
+    from city2graph.graph import _detect_edge_columns
+
+    # Create edge dataframe with exactly 3 columns (and geometry)
+    edge_gdf = gpd.GeoDataFrame({
+        "src": [1, 2],
+        "dst": [2, 1],
+        "geometry": [
+            LineString([(0, 0), (1, 1)]),
+            LineString([(1, 1), (0, 0)]),
+        ],
+    })
+
+    src_col, dst_col = _detect_edge_columns(edge_gdf)
+
+    # Should return the first two non-geometry columns
+    assert src_col == "src"
+    assert dst_col == "dst"
+
+
+def test_detect_edge_columns_returns_none() -> None:
+    """Test _detect_edge_columns returns None when no valid columns (line 167)."""
+    from city2graph.graph import _detect_edge_columns
+
+    # Create edge dataframe with only geometry column
+    edge_gdf = gpd.GeoDataFrame({
+        "geometry": [LineString([(0, 0), (1, 1)])],
+    })
+
+    src_col, dst_col = _detect_edge_columns(edge_gdf)
+
+    # Should return None for both when insufficient columns
+    assert src_col is None
+    assert dst_col is None
+
+
+def test_create_node_features_with_target_column() -> None:
+    """Test _create_node_features with target column (line 441)."""
+    from city2graph.graph import _create_node_features
+
+    # Create node dataframe with target column
+    node_gdf = gpd.GeoDataFrame({
+        "id": [1, 2],
+        "feature": [0.5, 1.5],
+        "target": [0, 1],  # Target column
+    }, geometry=[Point(0, 0), Point(1, 1)])
+
+    # Test that _create_node_features works with valid feature columns
+    result = _create_node_features(node_gdf, ["feature"], device="cpu")
+
+    # Should create tensor with feature values
+    assert result is not None
+    assert result.shape == (2, 1)
+    np.testing.assert_allclose(result.cpu().numpy(), [[0.5], [1.5]])
+
+
+def test_create_edge_idx_pairs_warning_path() -> None:
+    """Test _create_edge_idx_pairs warning when no valid edges (lines 470, 474)."""
+    from city2graph.graph import _create_edge_idx_pairs
+
+    # Create edges with invalid source/destination IDs
+    edge_gdf = gpd.GeoDataFrame({
+        "src": [999, 998],  # IDs not in node mapping
+        "dst": [997, 996],
+        "w": [1.0, 2.0],
+    }, geometry=[
+        LineString([(0, 0), (1, 1)]),
+        LineString([(1, 1), (2, 2)]),
+    ])
+
+    # Create node mapping with different IDs
+    node_id_mapping = {1: 0, 2: 1, 3: 2}
+
+    with patch("city2graph.graph.logger") as mock_logger:
+        result = _create_edge_idx_pairs(edge_gdf, node_id_mapping, node_id_mapping, "src", "dst")
+
+        # Should warn about no valid edges and return early
+        mock_logger.warning.assert_called()
+        assert result == []
+
+
+def test_heterogeneous_graph_crs_consistency() -> None:
+    """Test heterogeneous_graph with consistent CRS (lines 577-578)."""
+    from city2graph.graph import heterogeneous_graph
+
+    if not is_torch_available():
+        pytest.skip("PyTorch not available")
+
+    # Create nodes with same CRS
+    nodes_dict = {
+        "type1": gpd.GeoDataFrame({
+            "id": [1, 2],
+            "feat": [0.5, 1.5],
+        }, geometry=[Point(0, 0), Point(1, 1)], crs="EPSG:4326"),
+        "type2": gpd.GeoDataFrame({
+            "id": [3, 4],
+            "feat": [2.5, 3.5],
+        }, geometry=[Point(2, 2), Point(3, 3)], crs="EPSG:4326"),
+    }
+
+    edges_dict = {}
+
+    data = heterogeneous_graph(nodes_dict, edges_dict)
+
+    # Should set consistent CRS
+    assert hasattr(data, "crs")
+    assert data.crs == "EPSG:4326"
+
+
+def test_heterogeneous_graph_crs_mismatch() -> None:
+    """Test heterogeneous_graph raises error on CRS mismatch (lines 580-581)."""
+    from city2graph.graph import heterogeneous_graph
+
+    if not is_torch_available():
+        pytest.skip("PyTorch not available")
+
+    # Create nodes with different CRS
+    nodes_dict = {
+        "type1": gpd.GeoDataFrame({
+            "id": [1, 2],
+            "feat": [0.5, 1.5],
+        }, geometry=[Point(0, 0), Point(1, 1)], crs="EPSG:4326"),
+        "type2": gpd.GeoDataFrame({
+            "id": [3, 4],
+            "feat": [2.5, 3.5],
+        }, geometry=[Point(2, 2), Point(3, 3)], crs="EPSG:3857"),  # Different CRS
+    }
+
+    edges_dict = {}
+
+    with pytest.raises(ValueError, match="CRS mismatch among node GeoDataFrames"):
+        heterogeneous_graph(nodes_dict, edges_dict)
+
+
+def test_heterogeneous_graph_node_type_processing() -> None:
+    """Test heterogeneous_graph node type processing (lines 698-699, 703)."""
+    from city2graph.graph import heterogeneous_graph
+
+    if not is_torch_available():
+        pytest.skip("PyTorch not available")
+
+    # Test with regular DataFrame (no geometry attribute)
+    import pandas as pd
+    nodes_regular_df = pd.DataFrame({
+        "id": [1, 2],
+        "feat": [0.5, 1.5],
+        "x": [0, 1],
+        "y": [0, 1],
+    })
+
+    # Convert to dict format that would trigger the conversion path
+    nodes_dict = {"regular": nodes_regular_df}
+    edges_dict = {}
+
+    data = heterogeneous_graph(nodes_dict, edges_dict)
+
+    # Should handle regular DataFrame and convert to GeoDataFrame
+    assert "regular" in data.node_types
+
+    # Test fallback to default node type
+    nodes_gdf = gpd.GeoDataFrame({
+        "id": [1, 2],
+        "feat": [0.5, 1.5],
+    }, geometry=[Point(0, 0), Point(1, 1)])
+
+    # Test without node_type column (should use "default")
+    data = heterogeneous_graph(nodes_gdf, {})
+    assert "default" in data.node_types
+
+
+def test_heterogeneous_graph_edge_type_processing() -> None:
+    """Test heterogeneous_graph edge type processing (lines 708, 710-715)."""
+    from city2graph.graph import heterogeneous_graph
+
+    if not is_torch_available():
+        pytest.skip("PyTorch not available")
+
+    nodes_dict = {
+        "node1": gpd.GeoDataFrame({
+            "id": [1, 2],
+            "feat": [0.5, 1.5],
+        }, geometry=[Point(0, 0), Point(1, 1)]),
+        "node2": gpd.GeoDataFrame({
+            "id": [3, 4],
+            "feat": [2.5, 3.5],
+        }, geometry=[Point(2, 2), Point(3, 3)]),
+    }
+
+    # Create edges with edge_type column
+    edges_gdf = gpd.GeoDataFrame({
+        "src": [1, 2],
+        "dst": [3, 4],
+        "w": [1.0, 2.0],
+        "edge_type": ["node1_connects_node2", "node1_links_node2"],  # Different edge types
+    }, geometry=[
+        LineString([(0, 0), (2, 2)]),
+        LineString([(1, 1), (3, 3)]),
+    ])
+
+    data = heterogeneous_graph(nodes_dict, edges_gdf)
+
+    # Should process edge types and create appropriate edge relationships
+    # The edge_type column should be parsed to create tuple keys
+    edge_types = data.edge_types
+    assert len(edge_types) >= 1
+
+    # Test edge type with exactly 3 parts (line 714)
+    edges_3_parts = gpd.GeoDataFrame({
+        "src": [1],
+        "dst": [3],
+        "w": [1.0],
+        "edge_type": ["node1_connects_node2"],  # Exactly 3 parts when split by "_"
+    }, geometry=[LineString([(0, 0), (2, 2)])])
+
+    data = heterogeneous_graph(nodes_dict, edges_3_parts)
+    # Should handle 3-part edge type names correctly
+    assert len(data.edge_types) >= 1
+
+
+def test_from_morphological_graph_error_handling() -> None:
+    """Test from_morphological_graph error handling for missing data."""
+    from city2graph.graph import from_morphological_graph
+
+    if not is_torch_available():
+        pytest.skip("PyTorch not available")
+
+    # Test with missing required keys in network_output
+    incomplete_network_output = {
+        "private_nodes": gpd.GeoDataFrame({
+            "id": [1, 2],
+        }, geometry=[Point(0, 0), Point(1, 1)]),
+        # Missing 'public_nodes' key
+    }
+
+    with pytest.raises((KeyError, ValueError)):
+        from_morphological_graph(
+            network_output=incomplete_network_output,
+            private_node_feature_cols=["feat"],
+            public_node_feature_cols=["feat"],
+        )

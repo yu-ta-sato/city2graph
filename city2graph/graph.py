@@ -406,7 +406,24 @@ def _process_node_type(
     """Process a single node type and add to HeteroData."""
     if not isinstance(node_gdf, gpd.GeoDataFrame):
         logger.warning("Expected GeoDataFrame for node type %s, got %s", node_type, type(node_gdf))
-        return {}
+        # Convert regular DataFrame to GeoDataFrame if it has x/y columns or lat/lon columns
+        import pandas as pd
+        if isinstance(node_gdf, pd.DataFrame):
+            if "x" in node_gdf.columns and "y" in node_gdf.columns:
+                # Create Point geometries from x/y columns
+                from shapely.geometry import Point
+                geometry = [Point(row["x"], row["y"]) for _, row in node_gdf.iterrows()]
+                node_gdf = gpd.GeoDataFrame(node_gdf, geometry=geometry)
+            elif "lat" in node_gdf.columns and "lon" in node_gdf.columns:
+                # Create Point geometries from lat/lon columns
+                from shapely.geometry import Point
+                geometry = [Point(row["lon"], row["lat"]) for _, row in node_gdf.iterrows()]
+                node_gdf = gpd.GeoDataFrame(node_gdf, geometry=geometry)
+            else:
+                # No spatial columns found, skip this node type
+                return {}
+        else:
+            return {}
 
     id_col = node_id_cols.get(node_type)
     id_mapping, actual_id_col = _extract_node_id_mapping(node_gdf, id_col)

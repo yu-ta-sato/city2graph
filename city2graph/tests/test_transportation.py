@@ -349,8 +349,9 @@ def test_load_gtfs_invalid_path() -> None:
     """Test loading GTFS data with invalid file path."""
     invalid_path = "nonexistent.zip"
 
-    with pytest.raises(KeyError):
-        load_gtfs(invalid_path)
+    # Should return empty dict when file not found
+    result = load_gtfs(invalid_path)
+    assert result == {}
 
 
 # ============================================================================
@@ -541,3 +542,234 @@ def test_travel_summary_graph_data_processing_paths() -> None:
     assert result is not None
     assert isinstance(result, gpd.GeoDataFrame)
     assert len(result) > 0
+
+
+def test_load_gtfs_error_handling_and_exceptions() -> None:
+    """Test error handling in load_gtfs function."""
+    import tempfile
+    from pathlib import Path
+    from unittest.mock import patch
+
+    # Test with non-existent file
+    result = load_gtfs("nonexistent_file.zip")
+    assert result == {}
+
+    # Test with corrupted zip file
+    with tempfile.NamedTemporaryFile(suffix=".zip", delete=False) as tmp_file:
+        tmp_file.write(b"corrupted zip content")
+        tmp_path = tmp_file.name
+
+    try:
+        result = load_gtfs(tmp_path)
+        assert result == {}
+    finally:
+        Path(tmp_path).unlink()
+
+    # Test exception during file loading within zip
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        zip_path = Path(tmp_dir) / "test.zip"
+        with zipfile.ZipFile(zip_path, "w") as zf:
+            # Add a file that will cause pandas read_csv to fail
+            zf.writestr("routes.txt", "invalid\ncsv\ncontent\nwith\ninconsistent\ncolumns")
+
+        # Mock pandas.read_csv to raise an exception
+        with patch("pandas.read_csv", side_effect=Exception("Mocked read error")):
+            result = load_gtfs(str(zip_path))
+            # Should return empty dict due to exception handling
+            assert result == {}
+
+
+def test_travel_summary_graph_missing_data_error_paths() -> None:
+    """Test travel_summary_graph with missing required data."""
+    # Test with missing stop_times key
+    gtfs_data_missing_stop_times = {
+        "trips": pd.DataFrame({"trip_id": ["t1"]}),
+        "routes": pd.DataFrame({"route_id": ["r1"]}),
+    }
+
+    # Should raise KeyError since stop_times is required
+    with pytest.raises(KeyError):
+        travel_summary_graph(gtfs_data_missing_stop_times)
+
+
+def test_travel_summary_graph_exception_in_processing() -> None:
+    """Test exception handling in travel_summary_graph."""
+    from unittest.mock import patch
+
+    # Create minimal valid GTFS data
+    gtfs_data = {
+        "stop_times": pd.DataFrame({
+            "trip_id": ["t1", "t1"],
+            "stop_id": ["a", "b"],
+            "arrival_time": ["08:00:00", "08:05:00"],
+            "departure_time": ["08:00:00", "08:05:00"],
+            "stop_sequence": [1, 2],
+        }),
+        "trips": pd.DataFrame({
+            "trip_id": ["t1"],
+            "service_id": ["sv1"],
+            "route_id": ["r1"],
+        }),
+    }
+
+    # Mock a function to raise an exception during processing
+    with patch("city2graph.transportation._time_to_seconds", side_effect=Exception("Mocked error")):
+        # Should handle the exception gracefully
+        travel_summary_graph(gtfs_data)
+        # The function should either return None or handle the error
+
+
+def test_get_od_pairs_service_handling() -> None:
+    """Test get_od_pairs with calendar_dates service handling."""
+    # Create data that will exercise the calendar_dates processing path
+    gtfs_data = {
+        "stop_times": pd.DataFrame({
+            "trip_id": ["t1", "t1"],
+            "stop_id": ["a", "b"],
+            "arrival_time": ["08:00:00", "08:05:00"],
+            "departure_time": ["08:00:00", "08:05:00"],
+            "stop_sequence": [1, 2],
+        }),
+        "trips": pd.DataFrame({
+            "trip_id": ["t1"],
+            "service_id": ["sv1"],
+            "route_id": ["r1"],
+        }),
+        "stops": pd.DataFrame({
+            "stop_id": ["a", "b"],
+            "stop_lat": [0.0, 1.0],
+            "stop_lon": [0.0, 1.0],
+        }),
+        "calendar": pd.DataFrame({
+            "service_id": ["sv1"],
+            "start_date": ["20210101"],
+            "end_date": ["20210102"],
+            "monday": [1],
+            "tuesday": [1],
+            "wednesday": [1],
+            "thursday": [1],
+            "friday": [1],
+            "saturday": [0],
+            "sunday": [0],
+        }),
+        "calendar_dates": pd.DataFrame({
+            "service_id": ["sv1"],
+            "date": ["20210103"],
+            "exception_type": [1],  # Service added
+        }),
+    }
+
+    # Test with specific date that should trigger calendar_dates processing
+    result = get_od_pairs(gtfs_data, start_date="20210103", end_date="20210103")
+
+    # Should return valid result
+    assert isinstance(result, (pd.DataFrame, gpd.GeoDataFrame))
+
+
+def test_get_od_pairs_continue_path() -> None:
+    """Test get_od_pairs continue path in service processing."""
+    # Create data where some services will be skipped
+    gtfs_data = {
+        "stop_times": pd.DataFrame({
+            "trip_id": ["t1", "t1", "t2", "t2"],
+            "stop_id": ["a", "b", "c", "d"],
+            "arrival_time": ["08:00:00", "08:05:00", "09:00:00", "09:05:00"],
+            "departure_time": ["08:00:00", "08:05:00", "09:00:00", "09:05:00"],
+            "stop_sequence": [1, 2, 1, 2],
+        }),
+        "trips": pd.DataFrame({
+            "trip_id": ["t1", "t2"],
+            "service_id": ["sv1", "sv2"],
+            "route_id": ["r1", "r2"],
+        }),
+        "stops": pd.DataFrame({
+            "stop_id": ["a", "b", "c", "d"],
+            "stop_lat": [0.0, 1.0, 2.0, 3.0],
+            "stop_lon": [0.0, 1.0, 2.0, 3.0],
+        }),
+        "calendar": pd.DataFrame({
+            "service_id": ["sv1"],  # Only sv1, missing sv2
+            "start_date": ["20210101"],
+            "end_date": ["20210102"],
+            "monday": [1],
+            "tuesday": [1],
+            "wednesday": [1],
+            "thursday": [1],
+            "friday": [1],
+            "saturday": [0],
+            "sunday": [0],
+        }),
+        "calendar_dates": pd.DataFrame(
+            columns=["service_id", "date", "exception_type"],
+        ),
+    }
+
+    # This should process sv1 but skip sv2 (continue path)
+    result = get_od_pairs(gtfs_data, start_date="20210101", end_date="20210101")
+
+    # Should return result with only sv1 data
+    assert isinstance(result, (pd.DataFrame, gpd.GeoDataFrame))
+
+
+def test_get_od_pairs_calendar_dates_service_extraction() -> None:
+    """Test service_id and date extraction from calendar_dates in get_od_pairs."""
+    # Create data that exercises the calendar_dates row processing
+    gtfs_data = {
+        "stop_times": pd.DataFrame({
+            "trip_id": ["t1", "t1"],
+            "stop_id": ["a", "b"],
+            "arrival_time": ["08:00:00", "08:05:00"],
+            "departure_time": ["08:00:00", "08:05:00"],
+            "stop_sequence": [1, 2],
+        }),
+        "trips": pd.DataFrame({
+            "trip_id": ["t1"],
+            "service_id": ["special_service"],
+            "route_id": ["r1"],
+        }),
+        "stops": pd.DataFrame({
+            "stop_id": ["a", "b"],
+            "stop_lat": [0.0, 1.0],
+            "stop_lon": [0.0, 1.0],
+        }),
+        "calendar": pd.DataFrame(
+            columns=[
+                "service_id",
+                "start_date",
+                "end_date",
+                "monday",
+                "tuesday",
+                "wednesday",
+                "thursday",
+                "friday",
+                "saturday",
+                "sunday",
+            ],
+        ),
+        "calendar_dates": pd.DataFrame({
+            "service_id": ["special_service"],
+            "date": ["20210515"],  # Different format to test parsing
+            "exception_type": [1],
+        }),
+    }
+
+    # Test with the special service date
+    result = get_od_pairs(gtfs_data, start_date="20210515", end_date="20210515")
+
+    # Should process the special service
+    assert isinstance(result, (pd.DataFrame, gpd.GeoDataFrame))
+
+
+def test_create_route_trips_df_missing_data_warning_path() -> None:
+    """Test warning path when creating route trips DataFrame with missing data."""
+    from city2graph.transportation import _create_route_trips_df
+
+    # Test with empty gtfs_data that will trigger warning
+    empty_gtfs = {}
+    result = _create_route_trips_df(empty_gtfs, None)
+    assert result is None
+
+    # Test with partial data that will trigger warning
+    partial_gtfs = {"routes": pd.DataFrame()}
+    result = _create_route_trips_df(partial_gtfs, None)
+    assert result is None

@@ -244,10 +244,14 @@ def load_gtfs(gtfs_zip_path: str | Path) -> dict:
     gtfs_data = _get_gtfs_df(gtfs_zip_path)
     logger.info("Loaded %d GTFS files", len(gtfs_data))
 
+    # Return empty dict if no data was loaded
+    if not gtfs_data:
+        return {}
+
     logger.info("Processing GTFS DataFrames...")
     gtfs_data = _process_gtfs_df(gtfs_data)
 
-    if gtfs_data["stops"] is not None:
+    if gtfs_data.get("stops") is not None:
         logger.info("Creating stops geometry...")
         stops_geometry = _get_stops_geometry(gtfs_data["stops"])
 
@@ -257,7 +261,7 @@ def load_gtfs(gtfs_zip_path: str | Path) -> dict:
                 gtfs_data["stops"], geometry=stops_geometry, crs="EPSG:4326",
             )
 
-    if gtfs_data["shapes"] is not None:
+    if gtfs_data.get("shapes") is not None:
         logger.info("Creating shapes geometry...")
         shapes_geometry = _get_shapes_geometry(gtfs_data["shapes"])
 
@@ -911,6 +915,12 @@ def travel_summary_graph(
     result = result.rename(
         columns={"stop_id": "from_stop_id", "next_stop_id": "to_stop_id"},
     )
+
+    # Check if stops data exists
+    if "stops" not in gtfs_data or gtfs_data["stops"] is None:
+        logger.warning("No stops data available for GeoDataFrame creation")
+        return result
+
     stops = gtfs_data["stops"].set_index("stop_id")
 
     # Create GeoDataFrame

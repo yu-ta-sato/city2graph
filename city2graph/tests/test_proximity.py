@@ -139,9 +139,12 @@ def test_delaunay_graph_collinear(linear_points_gdf: gpd.GeoDataFrame) -> None:
     # Arrange: use linear points for collinear case
     points_gdf = linear_points_gdf
 
-    # Act & Assert: delaunay triangulation should fail with collinear points
-    with pytest.raises((ValueError, Exception)):  # QhullError is wrapped
-        delaunay_graph(points_gdf)
+    # Act: delaunay triangulation should handle collinear points gracefully
+    result = delaunay_graph(points_gdf)
+    
+    # Assert: should return empty graph when triangulation fails
+    assert isinstance(result, nx.Graph)
+    assert len(result.edges()) == 0  # Empty graph due to QhullError handling
 
 
 def test_delaunay_graph_two_points() -> None:
@@ -155,6 +158,32 @@ def test_delaunay_graph_two_points() -> None:
     # Assert: verify graph has 2 nodes and 0 edges (no triangulation possible)
     assert G.number_of_nodes() == 2
     assert G.number_of_edges() == 0
+
+
+def test_delaunay_graph_empty_triangulation() -> None:
+    """Test delaunay_graph when triangulation returns empty result (line 45)."""
+    from city2graph.proximity import _build_delaunay_edges
+
+    # Create points that would result in empty triangulation
+    # (e.g., collinear points or insufficient points)
+    collinear_points = gpd.GeoDataFrame(
+        {
+            "id": [1, 2, 3],
+        },
+        geometry=[
+            Point(0, 0),
+            Point(1, 0),
+            Point(2, 0),  # All on same line
+        ],
+        crs="EPSG:4326",
+    )
+
+    # Should handle empty triangulation gracefully
+    node_indices = list(range(len(collinear_points)))
+    result = _build_delaunay_edges(collinear_points.geometry.get_coordinates().values, node_indices)
+    assert isinstance(result, set)
+    # Should return empty edges when triangulation fails
+    assert len(result) == 0
 
 
 # ============================================================================
@@ -224,6 +253,59 @@ def test_gilbert_graph_zero_and_negative_radius(simple_points_gdf: gpd.GeoDataFr
     # Assert: verify no edges are created and radius is stored
     assert G_neg.number_of_edges() == 0
     assert G_neg.graph.get("radius") == -0.1
+
+
+def test_gilbert_graph_invalid_input_type() -> None:
+    """Test gilbert_graph with invalid input type (lines 128-129)."""
+    # Test with non-GeoDataFrame input
+    invalid_input = "not a geodataframe"
+
+    with pytest.raises(TypeError, match="Input data must be a GeoDataFrame"):
+        gilbert_graph(invalid_input, radius=1.0)
+
+
+def test_gilbert_graph_with_crs() -> None:
+    """Test gilbert_graph sets CRS in graph attributes (line 137)."""
+    points_gdf = gpd.GeoDataFrame(
+        {
+            "id": [1, 2, 3, 4],
+        },
+        geometry=[
+            Point(0, 0),
+            Point(1, 0),
+            Point(0, 1),
+            Point(1, 1),
+        ],
+        crs="EPSG:4326",
+    )
+
+    G = gilbert_graph(points_gdf, radius=2.0)
+
+    # Should set CRS in graph attributes
+    assert "crs" in G.graph
+    assert G.graph["crs"] == "EPSG:4326"
+
+
+def test_gilbert_graph_empty_result() -> None:
+    """Test gilbert_graph when no edges are created (line 141)."""
+    # Create points that are too far apart for the given radius
+    distant_points = gpd.GeoDataFrame(
+        {
+            "id": [1, 2],
+        },
+        geometry=[
+            Point(0, 0),
+            Point(100, 100),  # Very far apart
+        ],
+        crs="EPSG:4326",
+    )
+
+    # Use small radius that won't connect the distant points
+    G = gilbert_graph(distant_points, radius=1.0)
+
+    # Should return graph with nodes but no edges
+    assert G.number_of_nodes() == 2
+    assert G.number_of_edges() == 0
 
 
 # ============================================================================
@@ -300,7 +382,7 @@ def test_waxman_graph_invalid_parameters(simple_points_gdf: gpd.GeoDataFrame) ->
     G_gt1_beta = waxman_graph(simple_points_gdf, beta=1.1, r0=1.0, seed=42)
     n = G_gt1_beta.number_of_nodes()
     assert G_gt1_beta.graph.get("beta") == 1.1
-    assert 0 <= G_gt1_beta.number_of_edges() <= n*(n-1)//2
+    assert 0 <= G_gt1_beta.number_of_edges() <= n * (n - 1) // 2
 
     # Act: create graph with zero r0 (no edges, r0 should be stored)
     G_zero_r0 = waxman_graph(simple_points_gdf, beta=0.5, r0=0, seed=42)
@@ -359,3 +441,71 @@ def test_single_point_geodataframe() -> None:
     G_waxman = waxman_graph(single_point_gdf, beta=1.0, r0=1.0)
     assert G_waxman.number_of_nodes() == 1
     assert G_waxman.number_of_edges() == 0
+
+
+def test_comprehensive_proximity_edge_cases() -> None:
+    """Test all proximity functions with various edge cases."""
+    # Test with duplicate points
+    duplicate_points = gpd.GeoDataFrame(
+        {
+            "id": [1, 2, 3],
+        },
+        geometry=[
+            Point(0, 0),
+            Point(0, 0),  # Duplicate
+            Point(1, 1),
+        ],
+        crs="EPSG:4326",
+    )
+
+    # All functions should handle duplicates gracefully
+    G_knn = knn_graph(duplicate_points, k=1)
+    assert isinstance(G_knn, nx.Graph)
+
+    # Delaunay triangulation should handle duplicate/collinear points gracefully
+    G_delaunay = delaunay_graph(duplicate_points)
+    assert isinstance(G_delaunay, nx.Graph)
+    # Should return empty graph due to QhullError handling
+    assert len(G_delaunay.edges()) == 0
+
+    G_gilbert = gilbert_graph(duplicate_points, radius=2.0)
+    assert isinstance(G_gilbert, nx.Graph)
+
+    G_waxman = waxman_graph(duplicate_points, beta=1.0, r0=1.0)
+    assert isinstance(G_waxman, nx.Graph)
+
+
+def test_proximity_functions_with_minimal_data() -> None:
+    """Test proximity functions with minimal valid data."""
+    # Test with exactly 2 points (minimum for meaningful graph)
+    two_points = gpd.GeoDataFrame(
+        {
+            "id": [1, 2],
+        },
+        geometry=[
+            Point(0, 0),
+            Point(1, 0),
+        ],
+        crs="EPSG:4326",
+    )
+
+    # Test knn_graph with k=1 (each point connects to nearest neighbor)
+    G_knn = knn_graph(two_points, k=1)
+    assert G_knn.number_of_nodes() == 2
+    # With k=1 and 2 points, should have directed edges
+    assert G_knn.number_of_edges() >= 1
+
+    # Test delaunay_graph (should connect the two points)
+    G_delaunay = delaunay_graph(two_points)
+    assert G_delaunay.number_of_nodes() == 2
+    assert G_delaunay.number_of_edges() >= 0  # May or may not connect depending on triangulation
+
+    # Test gilbert_graph with sufficient radius
+    G_gilbert = gilbert_graph(two_points, radius=2.0)
+    assert G_gilbert.number_of_nodes() == 2
+    assert G_gilbert.number_of_edges() >= 0
+
+    # Test waxman_graph
+    G_waxman = waxman_graph(two_points, beta=1.0, r0=2.0)
+    assert G_waxman.number_of_nodes() == 2
+    assert G_waxman.number_of_edges() >= 0

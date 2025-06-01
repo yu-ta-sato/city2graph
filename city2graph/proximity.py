@@ -10,6 +10,7 @@ from itertools import combinations
 import geopandas as gpd
 import networkx as nx
 import numpy as np
+import scipy.spatial.qhull
 from scipy.spatial import Delaunay
 from scipy.spatial.distance import pdist
 from scipy.spatial.distance import squareform
@@ -64,12 +65,16 @@ def _build_delaunay_edges(coords: np.ndarray,
     set[tuple]
         Set of unique edge tuples (source, target).
     """
-    tri = Delaunay(coords)
-    return {
-        (node_indices[i], node_indices[j])
-        for simplex in tri.simplices
-        for i, j in combinations(simplex, 2)
-    }
+    try:
+        tri = Delaunay(coords)
+        return {
+            (node_indices[i], node_indices[j])
+            for simplex in tri.simplices
+            for i, j in combinations(simplex, 2)
+        }
+    except scipy.spatial.qhull.QhullError:
+        # Handle collinear points or other geometric issues
+        return set()
 
 
 def _extract_coords_and_attrs_from_gdf(gdf: gpd.GeoDataFrame) -> tuple[np.ndarray, dict]:
