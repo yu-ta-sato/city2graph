@@ -19,9 +19,8 @@ from sklearn.neighbors import NearestNeighbors
 __all__ = ["delaunay_graph", "gilbert_graph", "knn_graph", "waxman_graph"]
 
 
-def _build_knn_edges(
-    indices: np.ndarray,
-    node_indices: list | None = None) -> list[tuple]:
+def _build_knn_edges(indices: np.ndarray,
+                     node_indices: list | None = None) -> list[tuple]:
     """
     Build k-nearest neighbor edges from indices array.
 
@@ -103,8 +102,7 @@ def _extract_coords_and_attrs_from_gdf(gdf: gpd.GeoDataFrame) -> tuple[np.ndarra
     return coords, node_attrs
 
 
-def _init_graph_and_nodes(
-    data: gpd.GeoDataFrame) -> tuple[nx.Graph, np.ndarray | None, list | None]:
+def _init_graph_and_nodes(data: gpd.GeoDataFrame) -> tuple[nx.Graph, np.ndarray | None, list | None]:
     """
     Initialize graph and extract nodes from GeoDataFrame.
 

@@ -28,6 +28,7 @@ from typing import Union
 import geopandas as gpd
 import networkx as nx
 import numpy as np
+from shapely.geometry import Point
 
 logger = logging.getLogger(__name__)
 
@@ -97,12 +98,10 @@ def _get_device(
     raise ValueError(msg)
 
 
-def _detect_edge_columns(
-    edge_gdf: gpd.GeoDataFrame,
-    id_col: str | None = None,
-    source_hint: list[str] | None = None,
-    target_hint: list[str] | None = None,
-) -> tuple[str | None, str | None]:
+def _detect_edge_columns(edge_gdf: gpd.GeoDataFrame,
+                         id_col: str | None = None,
+                         source_hint: list[str] | None = None,
+                         target_hint: list[str] | None = None) -> tuple[str | None, str | None]:
     """
     Detect appropriate source and target columns in an edge GeoDataFrame.
 
@@ -190,9 +189,8 @@ def _get_edge_columns(
     return source_col, target_col
 
 
-def _extract_node_id_mapping(
-    node_gdf: gpd.GeoDataFrame, id_col: str | None = None,
-) -> tuple[dict[str, int], str]:
+def _extract_node_id_mapping(node_gdf: gpd.GeoDataFrame,
+                             id_col: str | None = None) -> tuple[dict[str, int], str]:
     """
     Extract a mapping from node IDs to indices.
 
@@ -228,11 +226,9 @@ def _extract_node_id_mapping(
 
 
 # Modified _create_node_features: renamed parameter "attribute_cols" to "feature_cols"
-def _create_node_features(
-    node_gdf: gpd.GeoDataFrame,
-    feature_cols: list[str] | None = None,
-    device: Union[str, "torch.device"] | None = None,
-) -> "torch.Tensor":
+def _create_node_features(node_gdf: gpd.GeoDataFrame,
+                          feature_cols: list[str] | None = None,
+                          device: Union[str, "torch.device"] | None = None) -> "torch.Tensor":
     """
     Create node feature tensors from attribute columns.
 
@@ -267,11 +263,9 @@ def _create_node_features(
     return None
 
 
-def _create_edge_features(
-    edge_gdf: gpd.GeoDataFrame,
-    feature_cols: list[str] | None = None,
-    device: Union[str, "torch.device"] | None = None,
-) -> "torch.Tensor":
+def _create_edge_features(edge_gdf: gpd.GeoDataFrame,
+                          feature_cols: list[str] | None = None,
+                          device: Union[str, "torch.device"] | None = None) -> "torch.Tensor":
     """
     Create edge feature tensors from attribute columns in edge_gdf.
 
@@ -298,22 +292,20 @@ def _create_edge_features(
     return torch.tensor(edge_gdf[valid_cols].values, dtype=torch.float, device=device)
 
 
-def _map_edge_strings(
-    edge_gdf: gpd.GeoDataFrame, source_col: str, target_col: str,
-) -> gpd.GeoDataFrame:
+def _map_edge_strings(edge_gdf: gpd.GeoDataFrame,
+                      source_col: str,
+                      target_col: str) -> gpd.GeoDataFrame:
     """Convert source/target columns to string once for vectorized lookups."""
     edge_gdf[f"__{source_col}_str"] = edge_gdf[source_col].astype(str)
     edge_gdf[f"__{target_col}_str"] = edge_gdf[target_col].astype(str)
     return edge_gdf
 
 
-def _create_edge_idx_pairs(
-    edge_gdf: gpd.GeoDataFrame,
-    source_mapping: dict[str, int],
-    target_mapping: dict[str, int] | None = None,
-    source_col: str | None = None,
-    target_col: str | None = None,
-) -> list[list[int]]:
+def _create_edge_idx_pairs(edge_gdf: gpd.GeoDataFrame,
+                           source_mapping: dict[str, int],
+                           target_mapping: dict[str, int] | None = None,
+                           source_col: str | None = None,
+                           target_col: str | None = None) -> list[list[int]]:
     """
     Process edges to create edge indices.
 
@@ -394,15 +386,13 @@ def _is_valid_edge_df(edge_gdf: gpd.GeoDataFrame | None) -> bool:
 # Remove the is_hetero parameter and always expect dictionaries for nodes and edges.
 # Updated _build_graph_data to accept node_y_attribute_cols parameter
 # Modified _build_graph_data: renamed parameters and references
-def _process_node_type(
-    node_type: str,
-    node_gdf: gpd.GeoDataFrame,
-    node_id_cols: dict[str, str],
-    node_feature_cols: dict[str, list[str]],
-    node_label_cols: dict[str, list[str]] | None,
-    device: Union[str, "torch.device"],
-    data: HeteroData,
-) -> dict[str, dict]:
+def _process_node_type(node_type: str,
+                       node_gdf: gpd.GeoDataFrame,
+                       node_id_cols: dict[str, str],
+                       node_feature_cols: dict[str, list[str]],
+                       node_label_cols: dict[str, list[str]] | None,
+                       device: Union[str, "torch.device"],
+                       data: HeteroData) -> dict[str, dict]:
     """Process a single node type and add to HeteroData."""
     if not isinstance(node_gdf, gpd.GeoDataFrame):
         logger.warning("Expected GeoDataFrame for node type %s, got %s", node_type, type(node_gdf))
@@ -411,12 +401,10 @@ def _process_node_type(
         if isinstance(node_gdf, pd.DataFrame):
             if "x" in node_gdf.columns and "y" in node_gdf.columns:
                 # Create Point geometries from x/y columns
-                from shapely.geometry import Point
                 geometry = [Point(row["x"], row["y"]) for _, row in node_gdf.iterrows()]
                 node_gdf = gpd.GeoDataFrame(node_gdf, geometry=geometry)
             elif "lat" in node_gdf.columns and "lon" in node_gdf.columns:
                 # Create Point geometries from lat/lon columns
-                from shapely.geometry import Point
                 geometry = [Point(row["lon"], row["lat"]) for _, row in node_gdf.iterrows()]
                 node_gdf = gpd.GeoDataFrame(node_gdf, geometry=geometry)
             else:
@@ -462,16 +450,14 @@ def _process_node_type(
     return {"mapping": id_mapping, "id_col": actual_id_col}
 
 
-def _process_edge_type(
-    edge_type: tuple[str, str, str],
-    edge_gdf: gpd.GeoDataFrame,
-    node_id_mappings: dict,
-    edge_source_cols: dict[tuple[str, str, str], str],
-    edge_target_cols: dict[tuple[str, str, str], str],
-    edge_feature_cols: dict[tuple[str, str, str], list[str]] | None,
-    device: Union[str, "torch.device"],
-    data: HeteroData,
-) -> None:
+def _process_edge_type(edge_type: tuple[str, str, str],
+                       edge_gdf: gpd.GeoDataFrame,
+                       node_id_mappings: dict,
+                       edge_source_cols: dict[tuple[str, str, str], str],
+                       edge_target_cols: dict[tuple[str, str, str], str],
+                       edge_feature_cols: dict[tuple[str, str, str], list[str]] | None,
+                       device: Union[str, "torch.device"],
+                       data: HeteroData) -> None:
     """Process a single edge type and add to HeteroData."""
     if not isinstance(edge_type, tuple) or len(edge_type) != 3:
         logger.warning(
@@ -526,17 +512,15 @@ def _process_edge_type(
         )
 
 
-def _build_graph_data(
-    nodes: dict[str, gpd.GeoDataFrame],
-    edges: dict[tuple[str, str, str], gpd.GeoDataFrame],
-    node_id_cols: dict[str, str],
-    node_feature_cols: dict[str, list[str]],
-    node_label_cols: dict[str, list[str]] | None,
-    edge_source_cols: dict[tuple[str, str, str], str],
-    edge_target_cols: dict[tuple[str, str, str], str],
-    edge_feature_cols: dict[tuple[str, str, str], list[str]] | None,
-    device: Union[str, "torch.device"] | None,
-) -> HeteroData:
+def _build_graph_data(nodes: dict[str, gpd.GeoDataFrame],
+                      edges: dict[tuple[str, str, str], gpd.GeoDataFrame],
+                      node_id_cols: dict[str, str],
+                      node_feature_cols: dict[str, list[str]],
+                      node_label_cols: dict[str, list[str]] | None,
+                      edge_source_cols: dict[tuple[str, str, str], str],
+                      edge_target_cols: dict[tuple[str, str, str], str],
+                      edge_feature_cols: dict[tuple[str, str, str], list[str]] | None,
+                      device: Union[str, "torch.device"] | None) -> HeteroData:
     """
     Build a heterogeneous graph (HeteroData) from node and edge GeoDataFrames.
 
@@ -600,17 +584,15 @@ def _build_graph_data(
     return data
 
 
-def homogeneous_graph(
-    nodes_gdf: gpd.GeoDataFrame,
-    edges_gdf: gpd.GeoDataFrame | None = None,
-    node_id_col: str | None = None,
-    node_feature_cols: list[str] | None = None,
-    node_label_cols: list[str] | None = None,
-    edge_source_col: str | None = None,
-    edge_target_col: str | None = None,
-    edge_feature_cols: list[str] | None = None,
-    device: Union[str, "torch.device"] | None = None,
-) -> Data:
+def homogeneous_graph(nodes_gdf: gpd.GeoDataFrame,
+                      edges_gdf: gpd.GeoDataFrame | None = None,
+                      node_id_col: str | None = None,
+                      node_feature_cols: list[str] | None = None,
+                      node_label_cols: list[str] | None = None,
+                      edge_source_col: str | None = None,
+                      edge_target_col: str | None = None,
+                      edge_feature_cols: list[str] | None = None,
+                      device: Union[str, "torch.device"] | None = None) -> Data:
     """
     Create a homogeneous graph Data object from nodes and edges GeoDataFrames.
 
@@ -735,17 +717,15 @@ def _process_single_edges_gdf(edges_gdf: gpd.GeoDataFrame) -> dict[tuple[str, st
     return {("default", "edge", "default"): edges_gdf}
 
 
-def heterogeneous_graph(
-    nodes_dict: dict[str, gpd.GeoDataFrame] | gpd.GeoDataFrame,
-    edges_dict: dict[tuple[str, str, str], gpd.GeoDataFrame] | gpd.GeoDataFrame,
-    node_id_cols: dict[str, str] | None = None,
-    node_feature_cols: dict[str, list[str]] | None = None,
-    node_label_cols: dict[str, list[str]] | None = None,
-    edge_source_cols: dict[tuple[str, str, str], str] | None = None,
-    edge_target_cols: dict[tuple[str, str, str], str] | None = None,
-    edge_feature_cols: dict[tuple[str, str, str], list[str]] | None = None,
-    device: Union[str, "torch.device"] | None = None,
-) -> HeteroData:
+def heterogeneous_graph(nodes_dict: dict[str, gpd.GeoDataFrame] | gpd.GeoDataFrame,
+                        edges_dict: dict[tuple[str, str, str], gpd.GeoDataFrame] | gpd.GeoDataFrame,
+                        node_id_cols: dict[str, str] | None = None,
+                        node_feature_cols: dict[str, list[str]] | None = None,
+                        node_label_cols: dict[str, list[str]] | None = None,
+                        edge_source_cols: dict[tuple[str, str, str], str] | None = None,
+                        edge_target_cols: dict[tuple[str, str, str], str] | None = None,
+                        edge_feature_cols: dict[tuple[str, str, str], list[str]] | None = None,
+                        device: Union[str, "torch.device"] | None = None) -> HeteroData:
     """
     Create a heterogeneous graph HeteroData object from node and edge dictionaries.
 
@@ -822,14 +802,12 @@ def heterogeneous_graph(
 
 
 
-def from_morphological_graph(
-    network_output: dict,
-    private_id_col: str = "tess_id",
-    public_id_col: str = "id",
-    private_node_feature_cols: list[str] | None = None,
-    public_node_feature_cols: list[str] | None = None,
-    device: Union[str, "torch.device"] | None = None,
-) -> HeteroData | Data:
+def from_morphological_graph(network_output: dict,
+                             private_id_col: str = "tess_id",
+                             public_id_col: str = "id",
+                             private_node_feature_cols: list[str] | None = None,
+                             public_node_feature_cols: list[str] | None = None,
+                             device: Union[str, "torch.device"] | None = None) -> HeteroData | Data:
     """
     Create a graph representation from the output of morphological_graph.
 
