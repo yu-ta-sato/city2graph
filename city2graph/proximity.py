@@ -16,6 +16,8 @@ from scipy.spatial.distance import pdist
 from scipy.spatial.distance import squareform
 from sklearn.neighbors import NearestNeighbors
 
+from city2graph.utils import nx_to_gdf
+
 __all__ = ["delaunay_graph", "gilbert_graph", "knn_graph", "waxman_graph"]
 
 
@@ -153,7 +155,8 @@ def _init_graph_and_nodes(data: gpd.GeoDataFrame) -> tuple[nx.Graph, np.ndarray 
 
 
 def knn_graph(gdf: gpd.GeoDataFrame,
-              k: int = 5) -> nx.Graph:
+              k: int = 5,
+              as_gdf: bool = False) -> nx.Graph | gpd.GeoDataFrame:
     """
     Generate k-nearest neighbor graph from points or polygon centroids.
 
@@ -163,17 +166,22 @@ def knn_graph(gdf: gpd.GeoDataFrame,
         Input data as a GeoDataFrame. Centroids of geometries are used.
     k : int, default 5
         Number of nearest neighbors to connect to each node.
+    as_gdf : bool, default False
+        If True, return edges as a GeoDataFrame instead of NetworkX graph.
 
     Returns
     -------
-    networkx.Graph
+    networkx.Graph or geopandas.GeoDataFrame
         Graph with nodes and k-nearest neighbor edges.
         Node attributes include original data and 'pos' coordinates.
+        If as_gdf=True, returns GeoDataFrame of edges.
     """
     graph, coords, node_indices = _init_graph_and_nodes(gdf)
 
     # Early return for edge cases
     if k == 0 or coords is None or len(coords) <= 1:
+        if as_gdf:
+            return nx_to_gdf(graph, edges=True)
         return graph
 
     # Build k-nearest neighbor relationships
@@ -186,10 +194,13 @@ def knn_graph(gdf: gpd.GeoDataFrame,
     edges = _build_knn_edges(indices, node_indices)
     graph.add_edges_from(edges)
 
+    if as_gdf:
+        return nx_to_gdf(graph, edges=True)
     return graph
 
 
-def delaunay_graph(gdf: gpd.GeoDataFrame) -> nx.Graph:
+def delaunay_graph(gdf: gpd.GeoDataFrame,
+                   as_gdf: bool = False) -> nx.Graph | gpd.GeoDataFrame:
     """
     Generate Delaunay graph from points or polygon centroids.
 
@@ -197,28 +208,36 @@ def delaunay_graph(gdf: gpd.GeoDataFrame) -> nx.Graph:
     ----------
     gdf : geopandas.GeoDataFrame
         Input data as a GeoDataFrame. Centroids of geometries are used.
+    as_gdf : bool, default False
+        If True, return edges as a GeoDataFrame instead of NetworkX graph.
 
     Returns
     -------
-    networkx.Graph
+    networkx.Graph or geopandas.GeoDataFrame
         Graph with nodes and Delaunay triangulation edges.
         Node attributes include original data and 'pos' coordinates.
+        If as_gdf=True, returns GeoDataFrame of edges.
     """
     graph, coords, node_indices = _init_graph_and_nodes(gdf)
 
     # Early return for insufficient points
     if coords is None or len(coords) < 3:
+        if as_gdf:
+            return nx_to_gdf(graph, edges=True)
         return graph
 
     # Build Delaunay triangulation edges
     edges = _build_delaunay_edges(coords, node_indices)
     graph.add_edges_from(edges)
 
+    if as_gdf:
+        return nx_to_gdf(graph, edges=True)
     return graph
 
 
 def gilbert_graph(gdf: gpd.GeoDataFrame,
-                  radius: float) -> nx.Graph:
+                  radius: float,
+                  as_gdf: bool = False) -> nx.Graph | gpd.GeoDataFrame:
     """
     Generate Gilbert disc model graph from GeoDataFrame point geometries.
 
@@ -228,14 +247,19 @@ def gilbert_graph(gdf: gpd.GeoDataFrame,
         Input GeoDataFrame with point geometries.
     radius : float
         Connection radius.
+    as_gdf : bool, default False
+        If True, return edges as a GeoDataFrame instead of NetworkX graph.
 
     Returns
     -------
-    networkx.Graph
+    networkx.Graph or geopandas.GeoDataFrame
         Graph with nodes and edges connecting points within radius.
+        If as_gdf=True, returns GeoDataFrame of edges.
     """
     graph, coords, node_indices = _init_graph_and_nodes(gdf)
     if coords is None or len(coords) < 2:
+        if as_gdf:
+            return nx_to_gdf(graph, edges=True)
         return graph
 
     # Vectorized distance computation and edge creation
@@ -251,6 +275,9 @@ def gilbert_graph(gdf: gpd.GeoDataFrame,
 
     graph.add_edges_from(edges)
     graph.graph["radius"] = radius
+    
+    if as_gdf:
+        return nx_to_gdf(graph, edges=True)
     return graph
 
 
@@ -258,7 +285,8 @@ def waxman_graph(
     gdf: gpd.GeoDataFrame,
     beta: float,
     r0: float,
-    seed: int | None = None) -> nx.Graph:
+    seed: int | None = None,
+    as_gdf: bool = False) -> nx.Graph | gpd.GeoDataFrame:
     r"""
     Generate Waxman random geometric graph with $H_{ij} = \beta e^{-d_{ij}/r_0}}$.
 
@@ -272,14 +300,19 @@ def waxman_graph(
         Euclidean distance scale factor.
     seed : int | None, optional
         Random seed for reproducibility.
+    as_gdf : bool, default False
+        If True, return edges as a GeoDataFrame instead of NetworkX graph.
 
     Returns
     -------
-    networkx.Graph
+    networkx.Graph or geopandas.GeoDataFrame
         Stochastic Waxman graph with 'beta' and 'r0' in graph attributes.
+        If as_gdf=True, returns GeoDataFrame of edges.
     """
     graph, coords, node_indices = _init_graph_and_nodes(gdf)
     if coords is None or len(coords) < 2:
+        if as_gdf:
+            return nx_to_gdf(graph, edges=True)
         return graph
 
     # Vectorized distance computation and probability calculation
@@ -301,4 +334,7 @@ def waxman_graph(
     graph.add_edges_from(edges)
     graph.graph["beta"] = beta
     graph.graph["r0"] = r0
+    
+    if as_gdf:
+        return nx_to_gdf(graph, edges=True)
     return graph
