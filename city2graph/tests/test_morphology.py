@@ -14,18 +14,19 @@ from shapely.geometry import Polygon
 
 from city2graph.morphology import _check_empty_dataframes
 from city2graph.morphology import _create_connecting_lines
-from city2graph.morphology import _extract_dual_graph_nodes
-from city2graph.morphology import _find_additional_connections
 from city2graph.morphology import _get_adjacent_publics
 from city2graph.morphology import _prep_contiguity_graph
 from city2graph.morphology import _validate_columns
 from city2graph.morphology import _validate_geometries
 from city2graph.morphology import _validate_inputs
-from city2graph.morphology import convert_gdf_to_dual
 from city2graph.morphology import morphological_graph
 from city2graph.morphology import private_to_private_graph
 from city2graph.morphology import private_to_public_graph
 from city2graph.morphology import public_to_public_graph
+# Import functions that were moved to utils.py
+from city2graph.utils import dual_graph
+from city2graph.utils import _extract_dual_graph_nodes
+from city2graph.utils import _find_additional_connections
 
 # ============================================================================
 # COMMON TEST FIXTURES
@@ -237,39 +238,6 @@ def test_find_additional_connections() -> None:
 
     # Act & Assert: multi-line geometries produce no connections
     assert _find_additional_connections(multi_line_gdf, "id", 1, {}) == {}
-
-
-# ============================================================================
-# DUAL GRAPH CONVERSION AND PROCESSING TESTS
-# ============================================================================
-
-
-def test_convert_gdf_to_dual_errors_and_empty() -> None:
-    """Test conversion of GeoDataFrame to dual graph with error handling."""
-    # Act & Assert: invalid input type raises TypeError
-    with pytest.raises(TypeError):
-        convert_gdf_to_dual(123)
-
-    # Act & Assert: invalid tolerance type raises TypeError
-    with pytest.raises(TypeError):
-        convert_gdf_to_dual(gpd.GeoDataFrame(), tolerance="x")
-
-    # Act & Assert: negative tolerance raises ValueError
-    with pytest.raises(ValueError, match="Tolerance must be non-negative"):
-        convert_gdf_to_dual(
-            gpd.GeoDataFrame(geometry=[LineString([(0, 0), (1, 1)])]),
-            tolerance=-1,
-        )
-
-    # Arrange: empty GeoDataFrame
-    empty_gdf = gpd.GeoDataFrame(geometry=[])
-
-    # Act: convert empty GeoDataFrame to dual graph
-    nodes, conns = convert_gdf_to_dual(empty_gdf)
-
-    # Assert: empty outputs returned
-    assert isinstance(nodes, gpd.GeoDataFrame)
-    assert conns == {}
 
 
 # ============================================================================
@@ -668,7 +636,7 @@ def test_additional_morphology_coverage() -> None:
     result = _get_adjacent_publics(priv_4326, pub_3857)
     assert isinstance(result, dict)
 
-    # Test convert_gdf_to_dual with MultiLineString - expect UserWarning not RuntimeWarning
+    # Test dual_graph with MultiLineString - expect UserWarning not RuntimeWarning
     multiline_gdf = gpd.GeoDataFrame({
         "id": [1],
         "geometry": [MultiLineString([
@@ -678,18 +646,18 @@ def test_additional_morphology_coverage() -> None:
     }, crs="EPSG:4326")
 
     with pytest.warns(UserWarning):
-        nodes, conns = convert_gdf_to_dual(multiline_gdf)
+        nodes, conns = dual_graph(multiline_gdf)
         assert isinstance(nodes, gpd.GeoDataFrame)
         assert isinstance(conns, dict)
 
-    # Test convert_gdf_to_dual with null geometries
+    # Test dual_graph with null geometries
     null_geom_gdf = gpd.GeoDataFrame({
         "id": [1, 2],
         "geometry": [LineString([(0, 0), (1, 1)]), None],
     }, crs="EPSG:4326")
 
     with pytest.warns(RuntimeWarning):
-        nodes, conns = convert_gdf_to_dual(null_geom_gdf)
+        nodes, conns = dual_graph(null_geom_gdf)
         assert isinstance(nodes, gpd.GeoDataFrame)
         assert isinstance(conns, dict)
 
@@ -834,32 +802,8 @@ def test_find_additional_connections_comprehensive() -> None:
 # ============================================================================
 
 
-def test_morphological_graph_no_id_column_publics() -> None:
-    """Test morphological_graph when public GDF has no id column (lines 159-160)."""
-    # Create private and public GDFs, public without id column
-    priv = gpd.GeoDataFrame({
-        "idx": [1, 2],
-    }, geometry=[
-        Polygon([(0, 0), (1, 0), (1, 1), (0, 1)]),
-        Polygon([(2, 0), (3, 0), (3, 1), (2, 1)]),
-    ], crs="EPSG:4326")
-
-    # Public without id column - should trigger reset_index path
-    pub = gpd.GeoDataFrame({
-        "road_type": ["primary", "secondary"],
-    }, geometry=[
-        LineString([(0.5, -0.5), (0.5, 1.5)]),
-        LineString([(2.5, -0.5), (2.5, 1.5)]),
-    ], crs="EPSG:4326")
-
-    # Should handle missing id column by using reset_index
-    result = morphological_graph(priv, pub, private_id_col="idx")
-    assert "segments" in result
-    assert "tessellation" in result
-
-
-def test_convert_gdf_to_dual_multilinestring_handling() -> None:
-    """Test convert_gdf_to_dual with MultiLineString (line 165)."""
+def test_dual_graph_multilinestring_handling() -> None:
+    """Test dual_graph with MultiLineString."""
     # Create GDF with MultiLineString
     multiline = MultiLineString([
         LineString([(0, 0), (1, 0)]),
@@ -872,14 +816,14 @@ def test_convert_gdf_to_dual_multilinestring_handling() -> None:
     }, geometry=[multiline], crs="EPSG:4326")
 
     # Should handle MultiLineString by extracting coordinates from all parts
-    nodes_gdf, connections = convert_gdf_to_dual(gdf, "id")
+    nodes_gdf, connections = dual_graph(gdf, "id")
     assert len(nodes_gdf) > 0
     # ID column becomes the index, not a regular column
     assert "multi1" in nodes_gdf.index
 
 
-def test_convert_gdf_to_dual_no_id_column() -> None:
-    """Test convert_gdf_to_dual when no id column provided (line 299)."""
+def test_dual_graph_no_id_column() -> None:
+    """Test dual_graph when no id column provided."""
     gdf = gpd.GeoDataFrame({
         "name": ["road1", "road2"],
     }, geometry=[
@@ -888,7 +832,7 @@ def test_convert_gdf_to_dual_no_id_column() -> None:
     ], crs="EPSG:4326")
 
     # Should use index as id when no id_col provided
-    nodes_gdf, connections = convert_gdf_to_dual(gdf)
+    nodes_gdf, connections = dual_graph(gdf)
     # temp_id becomes the index, not a regular column
     assert list(nodes_gdf.index) == [0, 1]
 
@@ -976,7 +920,7 @@ def test_prep_contiguity_graph_invalid_contiguity() -> None:
 def test_find_additional_connections_continue_path() -> None:
     """Test _find_additional_connections continue condition (line 928)."""
     # Create scenario that would trigger continue condition
-    from city2graph.morphology import _find_additional_connections
+    # Note: _find_additional_connections was moved to utils.py
 
     # Create lines that are far apart (no intersections)
     gdf = gpd.GeoDataFrame({

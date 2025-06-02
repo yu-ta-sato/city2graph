@@ -11,11 +11,11 @@ import pandas as pd
 import shapely
 
 from city2graph.utils import create_tessellation
+from city2graph.utils import dual_graph
 from city2graph.utils import filter_graph_by_distance
 
 # Define the public API for this module
 __all__ = [
-    "convert_gdf_to_dual",
     "morphological_graph",
     "private_to_private_graph",
     "private_to_public_graph",
@@ -185,294 +185,6 @@ def _get_adjacent_publics(
         .to_dict()
     )
 
-
-
-def _extract_dual_graph_nodes(dual_graph: nx.Graph,
-                              id_col: str,
-                              gdf_crs: str | dict | None) -> gpd.GeoDataFrame:
-    """
-    Extract nodes from dual graph into a GeoDataFrame.
-
-    Parameters
-    ----------
-    dual_graph : networkx.Graph
-        Dual graph representation of the network
-    id_col : str
-        Column name for the node identifiers
-    gdf_crs : pyproj.CRS
-        Coordinate reference system for the output GeoDataFrame
-
-    Returns
-    -------
-    geopandas.GeoDataFrame
-        GeoDataFrame containing nodes from the dual graph
-    """
-    # Extract nodes data efficiently
-    nodes_data = pd.DataFrame.from_dict(
-        dict(dual_graph.nodes(data=True)), orient="index",
-    )
-
-    if nodes_data.empty:
-        return gpd.GeoDataFrame(
-            columns=[id_col, "geometry"], geometry="geometry", crs=gdf_crs,
-        )
-
-    # Check if id_col exists before filtering
-    if id_col in nodes_data.columns:
-        nodes_data = nodes_data[nodes_data[id_col].notna()]
-
-        # Create geometries from coordinates
-        nodes_data["geometry"] = [shapely.Point(coord) for coord in nodes_data.index]
-
-        # Create a GeoDataFrame
-        dual_node_gdf = gpd.GeoDataFrame(nodes_data, geometry="geometry", crs=gdf_crs)
-
-        # Set the index of the dual_gdf
-        return dual_node_gdf.set_index(dual_node_gdf[id_col]).drop(
-            columns=[id_col],
-        )
-
-    return gpd.GeoDataFrame(
-        columns=[id_col, "geometry"], geometry="geometry", crs=gdf_crs,
-    )
-
-
-def _extract_node_connections(dual_graph: nx.Graph,
-                              id_col: str) -> dict:
-    """
-    Extract connections between nodes from dual graph.
-
-    Parameters
-    ----------
-    dual_graph : networkx.Graph
-        Dual graph representation of the network
-    id_col : str
-        Column name for the node identifiers
-
-    Returns
-    -------
-    dict
-        Dictionary mapping node IDs to lists of connected node IDs
-    """
-    # Extract connections using dictionary comprehension
-    connections = {}
-    for node in dual_graph.nodes():
-        node_id = dual_graph.nodes[node].get(id_col, node)
-        connections[node_id] = [
-            dual_graph.nodes[n].get(id_col, n) for n in dual_graph.neighbors(node)
-        ]
-
-    return connections
-
-
-def _find_additional_connections(line_gdf: gpd.GeoDataFrame,
-                                 id_col: str,
-                                 tolerance: float,
-                                 connections: dict | None = None) -> dict:
-    """
-    Find additional connections between lines based on endpoint proximity.
-
-    Parameters
-    ----------
-    line_gdf : geopandas.GeoDataFrame
-        GeoDataFrame containing LineString geometries
-    id_col : str
-        Column name for the line identifiers
-    tolerance : float
-        Distance tolerance for endpoint connections
-    connections : dict, optional
-        Existing connections dictionary to update
-
-    Returns
-    -------
-    dict
-        Updated dictionary of connections
-    """
-    if connections is None:
-        connections = {}
-
-    if line_gdf.empty:
-        return connections
-
-    # Ensure id_col exists on line_gdf
-    if id_col not in line_gdf.columns:
-        line_gdf[id_col] = line_gdf.index
-
-    # Extract endpoints vectorized
-    endpoints_data = []
-
-    # This part builds a list of endpoints for each linestring
-    for idx, row in line_gdf.iterrows():
-        if not isinstance(row.geometry, shapely.geometry.LineString):
-            continue
-
-        coords = list(row.geometry.coords)
-
-        # Safely get the ID value, using index if column doesn't exist
-        id_value = row[id_col] if id_col in row.index else idx
-
-        endpoints_data.extend(
-            [
-                {
-                    "line_idx": idx,
-                    id_col: id_value,
-                    "endpoint": shapely.Point(coords[0]),
-                },
-                {
-                    "line_idx": idx,
-                    id_col: id_value,
-                    "endpoint": shapely.Point(coords[-1]),
-                },
-            ],
-        )
-
-    if not endpoints_data:
-        return connections
-
-    # Create GeoDataFrame of endpoints
-    endpoints_gdf = gpd.GeoDataFrame(
-        endpoints_data, geometry="endpoint", crs=line_gdf.crs,
-    )
-
-    # Create buffers around endpoints for spatial join
-    endpoints_gdf["buffer_geom"] = endpoints_gdf.endpoint.buffer(tolerance)
-
-    # Prepare lines for joining
-    lines_for_join = (
-        line_gdf[[id_col, "geometry"]]
-        .reset_index()
-        .rename(columns={"index": "line_index"})
-    )
-
-    # Spatial join buffered endpoints with lines
-    joined = gpd.sjoin(
-        endpoints_gdf.set_geometry("buffer_geom"),
-        lines_for_join,
-        predicate="intersects",
-        how="left",
-    )
-
-    # Filter out self-matches
-    joined = joined[joined.line_idx != joined.line_index]
-
-    # Update connections dictionary based on endpoint intersections
-    if not joined.empty:
-        # Determine column names
-        orig_id_col = f"{id_col}_left" if f"{id_col}_left" in joined.columns else id_col
-        other_id_col = (
-            f"{id_col}_right" if f"{id_col}_right" in joined.columns else id_col
-        )
-
-        # Process each valid connection
-        for _, row in joined.iterrows():
-            orig_id = row[orig_id_col]
-            other_id = row[other_id_col]
-
-            if orig_id not in connections:
-                connections[orig_id] = []
-            if other_id not in connections[orig_id]:
-                connections[orig_id].append(other_id)
-
-            if other_id not in connections:
-                connections[other_id] = []
-            if orig_id not in connections[other_id]:
-                connections[other_id].append(orig_id)
-
-    return connections
-
-
-def convert_gdf_to_dual(gdf: gpd.GeoDataFrame,
-                        id_col: str | None = None,
-                        tolerance: float = 1e-8) -> tuple[gpd.GeoDataFrame, dict]:
-    """
-    Convert a GeoDataFrame to a NetworkX graph and then back to a GeoDataFrame.
-
-    Also detects connections where endpoints of one linestring are on another linestring.
-
-    Parameters
-    ----------
-    gdf : geopandas.GeoDataFrame
-        GeoDataFrame containing LineString geometries to convert
-    id_col : str, default None
-        Column name that uniquely identifies each feature
-        If None, will use DataFrame index
-    tolerance : float, default 1e-8
-        Distance tolerance for detecting endpoint connections
-
-    Returns
-    -------
-    tuple
-        (GeoDataFrame of nodes, dict of connections)
-
-    Raises
-    ------
-    TypeError
-        If input is not a GeoDataFrame or if tolerance is not a number
-    ValueError
-        If GeoDataFrame is empty or contains invalid geometries
-    """
-    # Input validation
-    if not isinstance(gdf, gpd.GeoDataFrame):
-        msg = "Input must be a GeoDataFrame"
-        raise TypeError(msg)
-    if not isinstance(tolerance, (int, float)):
-        msg = "Tolerance must be a number"
-        raise TypeError(msg)
-    if tolerance < 0:
-        msg = "Tolerance must be non-negative"
-        raise ValueError(msg)
-
-    # Check for empty DataFrame
-    if gdf.empty:
-        warnings.warn("Input GeoDataFrame is empty", RuntimeWarning, stacklevel=2)
-        return (gpd.GeoDataFrame(
-            {id_col: []} if id_col else [],
-            geometry=[],
-            crs=gdf.crs,
-        ), {})
-
-    # Validate geometry types
-    invalid_geoms = gdf.geometry.apply(
-        lambda g: not isinstance(
-            g, (shapely.geometry.LineString, shapely.geometry.MultiLineString),
-        ),
-    )
-    if invalid_geoms.any():
-        warnings.warn(
-            f"Found {invalid_geoms.sum()} geometries that are not LineString or MultiLineString",
-            RuntimeWarning, stacklevel=2,
-        )
-
-    # Check for null geometries
-    if gdf.geometry.isna().any():
-        warnings.warn("Found null geometries in input GeoDataFrame", RuntimeWarning, stacklevel=2)
-        gdf = gdf.dropna(subset=["geometry"])
-
-    # Handle ID column
-    if id_col is not None and id_col not in gdf.columns:
-        gdf = gdf.reset_index(drop=True)
-        gdf[id_col] = gdf.index
-    elif id_col is None:
-        gdf = gdf.reset_index(drop=True)
-        gdf["temp_id"] = gdf.index
-        id_col = "temp_id"
-
-    # Convert to NetworkX graph
-    dual_graph = momepy.gdf_to_nx(gdf, approach="dual", preserve_index=True)
-
-    # Extract nodes as GeoDataFrame
-    dual_node_gdf = _extract_dual_graph_nodes(dual_graph, id_col, gdf.crs)
-
-    # Extract node connections from graph
-    connections = _extract_node_connections(dual_graph, id_col)
-
-    # Find additional connections based on endpoints
-    line_gdf = gdf[
-        gdf.geometry.apply(lambda g: isinstance(g, shapely.geometry.LineString))
-    ]
-    connections = _find_additional_connections(line_gdf, id_col, tolerance, connections)
-
-    return dual_node_gdf, connections
 
 
 def _create_connecting_lines(
@@ -854,8 +566,30 @@ def private_to_public_graph(
     geopandas.GeoDataFrame
         GeoDataFrame containing LineString connections between private and public spaces
     """
+    # Validate and filter public_gdf geometry types before creating dual graph
+    if not public_gdf.geometry.apply(
+        lambda g: isinstance(g, (shapely.geometry.LineString, shapely.geometry.MultiLineString))
+    ).all():
+        warnings.warn(
+            "Some geometries in public_gdf are not LineString or MultiLineString. "
+            "Filtering to valid geometries only.",
+            RuntimeWarning, stacklevel=2,
+        )
+        public_gdf = public_gdf[
+            public_gdf.geometry.apply(
+                lambda g: isinstance(g, (shapely.geometry.LineString, shapely.geometry.MultiLineString))
+            )
+        ]
+
+    # Check if we have any valid geometries left
+    if public_gdf.empty:
+        return gpd.GeoDataFrame(
+            {"private_id": [], "public_id": [], "geometry": []}, 
+            crs=private_gdf.crs if hasattr(private_gdf, 'crs') else None,
+        )
+
     # Create dual graph from publics
-    public_dual_gdf, _ = convert_gdf_to_dual(
+    public_dual_gdf, _ = dual_graph(
         public_gdf, id_col=public_id_col, tolerance=tolerance,
     )
 
@@ -901,8 +635,30 @@ def public_to_public_graph(
     geopandas.GeoDataFrame
         GeoDataFrame containing LineString connections between public spaces
     """
+    # Validate and filter public_gdf geometry types before creating dual graph
+    if not public_gdf.geometry.apply(
+        lambda g: isinstance(g, (shapely.geometry.LineString, shapely.geometry.MultiLineString))
+    ).all():
+        warnings.warn(
+            "Some geometries in public_gdf are not LineString or MultiLineString. "
+            "Filtering to valid geometries only.",
+            RuntimeWarning, stacklevel=2,
+        )
+        public_gdf = public_gdf[
+            public_gdf.geometry.apply(
+                lambda g: isinstance(g, (shapely.geometry.LineString, shapely.geometry.MultiLineString))
+            )
+        ]
+    
+    # Check if we have any valid geometries left
+    if public_gdf.empty:
+        return gpd.GeoDataFrame(
+            {"from_public_id": [], "to_public_id": [], "geometry": []},
+            crs=public_gdf.crs,
+        )
+
     # Create dual representation
-    public_dual_gdf, public_to_public_dict = convert_gdf_to_dual(
+    public_dual_gdf, public_to_public_dict = dual_graph(
         public_gdf, id_col=public_id_col, tolerance=tolerance,
     )
 
