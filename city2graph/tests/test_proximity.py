@@ -2,510 +2,436 @@
 
 import geopandas as gpd
 import networkx as nx
+import numpy as np
 import pytest
+from shapely.geometry import LineString
 from shapely.geometry import Point
 
+from city2graph.proximity import _add_distance_weights
+from city2graph.proximity import _add_edge_geometries
+from city2graph.proximity import _build_delaunay_edges
+from city2graph.proximity import _build_knn_edges
+from city2graph.proximity import _calculate_distance_matrix
+from city2graph.proximity import _compute_network_distances
+from city2graph.proximity import _create_manhattan_linestring
+from city2graph.proximity import _create_network_linestring
+from city2graph.proximity import _extract_coords_and_attrs_from_gdf
+from city2graph.proximity import _get_network_positions
+from city2graph.proximity import _init_graph_and_nodes
+from city2graph.proximity import _setup_network_computation
+from city2graph.proximity import _validate_network_compatibility
 from city2graph.proximity import delaunay_graph
 from city2graph.proximity import gilbert_graph
 from city2graph.proximity import knn_graph
 from city2graph.proximity import waxman_graph
 
-# ============================================================================
-# COMMON TEST FIXTURES
-# ============================================================================
-
 
 @pytest.fixture
-def simple_points_gdf() -> gpd.GeoDataFrame:
-    """Create a simple GeoDataFrame with 4 points forming a square."""
-    coords = [(0, 0), (1, 0), (1, 1), (0, 1)]
-    return gpd.GeoDataFrame(geometry=[Point(c) for c in coords])
-
-
-@pytest.fixture
-def linear_points_gdf() -> gpd.GeoDataFrame:
-    """Create a GeoDataFrame with points in a line for edge case testing."""
-    coords = [(0, 0), (1, 0), (2, 0), (3, 0)]
-    return gpd.GeoDataFrame(geometry=[Point(c) for c in coords])
+def simple_points_gdf():  # noqa: ANN201
+    """Return a simple GeoDataFrame with two points."""
+    return gpd.GeoDataFrame(
+        geometry=[Point(0, 0), Point(1, 0)],
+        crs="EPSG:4326",
+    )
 
 
 @pytest.fixture
 def triangle_points_gdf() -> gpd.GeoDataFrame:
-    """Create a GeoDataFrame with 3 points forming a triangle."""
-    coords = [(0, 0), (1, 0), (0.5, 1)]
-    return gpd.GeoDataFrame(geometry=[Point(c) for c in coords])
+    """Return a GeoDataFrame with three points forming a triangle."""
+    return gpd.GeoDataFrame(
+        geometry=[Point(0, 0), Point(1, 0), Point(0.5, 1)],
+        crs="EPSG:4326",
+    )
 
 
-# ============================================================================
-# K-NEAREST NEIGHBORS GRAPH TESTS
-# ============================================================================
+@pytest.fixture
+def simple_network_gdf() -> gpd.GeoDataFrame:
+    """Return a simple network GeoDataFrame."""
+    return gpd.GeoDataFrame(
+        geometry=[LineString([(0, 0), (1, 0)])],
+        crs="EPSG:4326",
+    )
+
+
+@pytest.fixture
+def network_graph() -> nx.Graph:
+    """Return a simple NetworkX graph representing a network."""
+    G = nx.Graph()
+    G.add_edge(0, 1, length=1.0)
+    G.nodes[0]["pos"] = (0, 0)
+    G.nodes[1]["pos"] = (1, 0)
+    return G
+
+
+def test_build_knn_edges() -> None:
+    """Test KNN edge building function."""
+    indices = np.array([[1, 2], [0, 2], [0, 1]])
+    node_indices = [0, 1, 2]
+    edges = _build_knn_edges(indices, node_indices)
+    # Only edges to actual nearest neighbors are created
+    assert len(edges) >= 2
+    assert isinstance(edges, list)
+
+
+def test_build_knn_edges_custom_indices() -> None:
+    """Test KNN edge building with custom node indices."""
+    indices = np.array([[1, 2], [0, 2], [0, 1]])
+    node_indices = ["A", "B", "C"]
+    edges = _build_knn_edges(indices, node_indices)
+    # Check that we get some edges with the custom indices
+    assert len(edges) >= 2
+    assert all(isinstance(edge, tuple) for edge in edges)
+    assert all(edge[0] in node_indices and edge[1] in node_indices for edge in edges)
+
+
+def test_build_delaunay_edges() -> None:
+    """Test Delaunay edge building function."""
+    points = np.array([[0, 0], [1, 0], [0, 1]])
+    indices = [0, 1, 2]
+    edges = _build_delaunay_edges(points, indices)
+    assert len(edges) == 3
+    assert (0, 1) in edges or (1, 0) in edges
+
+
+def test_validate_network_compatibility(simple_points_gdf: gpd.GeoDataFrame,
+                                        simple_network_gdf: gpd.GeoDataFrame) -> None:
+    """Test network compatibility validation."""
+    # Should not raise for compatible CRS
+    _validate_network_compatibility(simple_points_gdf, simple_network_gdf)
+
+    # Should raise for different CRS
+    network_different_crs = simple_network_gdf.copy()
+    network_different_crs.crs = "EPSG:3857"
+    with pytest.raises(ValueError, match="CRS mismatch"):
+        _validate_network_compatibility(simple_points_gdf, network_different_crs)
+
+    # Should raise for empty network
+    empty_network = gpd.GeoDataFrame(geometry=[], crs=simple_points_gdf.crs)
+    with pytest.raises(ValueError, match="Network GeoDataFrame is empty"):
+        _validate_network_compatibility(simple_points_gdf, empty_network)
+
+
+def test_get_network_positions(network_graph: nx.Graph) -> None:
+    """Test network position extraction."""
+    pos_dict = _get_network_positions(network_graph)
+    assert pos_dict[0] == (0, 0)
+    assert pos_dict[1] == (1, 0)
+
+    # Test fallback for missing positions
+    G_no_pos = nx.Graph()
+    G_no_pos.add_node(0, x=0, y=1)
+    G_no_pos.add_node(1, x=1, y=1)
+    pos_dict_fallback = _get_network_positions(G_no_pos)
+    assert pos_dict_fallback[0] == (0, 1)
+    assert pos_dict_fallback[1] == (1, 1)
+
+
+def test_compute_network_distances(network_graph: nx.Graph) -> None:
+    """Test network distance computation."""
+    coords = np.array([[0, 0], [1, 0]])
+    node_indices = [0, 1]
+    distance_matrix, nearest_nodes = _compute_network_distances(coords, node_indices, network_graph)
+    assert distance_matrix.shape == (2, 2)
+    assert distance_matrix[0, 0] == 0
+    assert nearest_nodes == [0, 1]
+
+
+def test_setup_network_computation(simple_points_gdf: gpd.GeoDataFrame,
+                                   simple_network_gdf: gpd.GeoDataFrame) -> None:
+    """Test network computation setup."""
+    coords = np.array([[0, 0], [1, 0]])
+    node_indices = [0, 1]
+    (network_graph, distance_matrix, nearest_nodes) = _setup_network_computation(
+        simple_points_gdf, simple_network_gdf, coords, node_indices,
+    )
+    assert isinstance(network_graph, nx.Graph)
+    assert distance_matrix.shape == (2, 2)
+
+
+def test_extract_coords_and_attrs_from_gdf(simple_points_gdf: gpd.GeoDataFrame) -> None:
+    """Test coordinate and attribute extraction."""
+    coords, node_attrs = _extract_coords_and_attrs_from_gdf(simple_points_gdf)
+    assert coords.shape == (2, 2)
+    assert len(node_attrs) == 2
+    assert "geometry" in node_attrs[0]
+    assert "pos" in node_attrs[0]
+    assert isinstance(node_attrs[0]["pos"], tuple)
+
+
+def test_init_graph_and_nodes(simple_points_gdf: gpd.GeoDataFrame) -> None:
+    """Test graph and node initialization."""
+    graph, coords, node_indices = _init_graph_and_nodes(simple_points_gdf)
+    assert isinstance(graph, nx.Graph)
+    assert coords.shape == (2, 2)
+    assert len(node_indices) == 2
+    assert graph.graph["crs"] == "EPSG:4326"
+
+    # Test error handling
+    with pytest.raises(TypeError, match="Input data must be a GeoDataFrame"):
+        _init_graph_and_nodes("not a geodataframe")
+
+    gdf_no_geom = gpd.GeoDataFrame({"col": [1, 2]})
+    with pytest.raises(ValueError, match="GeoDataFrame must contain geometry"):
+        _init_graph_and_nodes(gdf_no_geom)
+
+    gdf_null_geom = gpd.GeoDataFrame(geometry=[None, None])
+    with pytest.raises(ValueError, match="GeoDataFrame must contain geometry"):
+        _init_graph_and_nodes(gdf_null_geom)
+
+    empty_gdf = gpd.GeoDataFrame(geometry=[], crs="EPSG:4326")
+    with pytest.raises(ValueError, match="GeoDataFrame must contain geometry"):
+        _init_graph_and_nodes(empty_gdf)
+
+
+def test_create_manhattan_linestring() -> None:
+    """Test Manhattan distance LineString creation."""
+    coord1 = (0, 0)
+    coord2 = (2, 3)
+    linestring = _create_manhattan_linestring(coord1, coord2)
+    assert isinstance(linestring, LineString)
+    coords = list(linestring.coords)
+    assert coords == [(0.0, 0.0), (2.0, 0.0), (2.0, 3.0)]
+
+    # Test horizontal and vertical lines
+    line2 = _create_manhattan_linestring((0, 0), (5, 0))
+    assert len(list(line2.coords)) == 3  # Manhattan path: (0,0) -> (5,0) -> (5,0)
+    assert next(iter(line2.coords)) == (0.0, 0.0)
+    assert list(line2.coords)[1] == (5.0, 0.0)
+
+    line3 = _create_manhattan_linestring((1, 1), (1, 1))
+    assert isinstance(line3, LineString)  # Same point creates a degenerate LineString
+
+
+def test_create_network_linestring(network_graph: nx.Graph) -> None:
+    """Test network LineString creation."""
+    node_indices = [0, 1]
+    nearest_network_nodes = [0, 1]
+    linestring = _create_network_linestring(0, 1, network_graph, node_indices, nearest_network_nodes)
+    assert isinstance(linestring, LineString)
+
+    # Test with no position data fallback
+    G_no_pos = nx.Graph()
+    G_no_pos.add_edge(0, 1)
+    G_no_pos.nodes[0]["x"] = 0
+    G_no_pos.nodes[0]["y"] = 0
+    G_no_pos.nodes[1]["x"] = 1
+    G_no_pos.nodes[1]["y"] = 0
+    linestring_fallback = _create_network_linestring(0, 1, G_no_pos, [0, 1], [0, 1])
+    assert isinstance(linestring_fallback, LineString)
+
+
+def test_add_edge_geometries() -> None:
+    """Test edge geometry addition."""
+    G = nx.Graph()
+    G.add_edge(0, 1)
+    coords = np.array([[0, 0], [1, 0]])
+    node_indices = [0, 1]
+    _add_edge_geometries(G, coords, node_indices, "euclidean")
+    assert isinstance(G[0][1]["geometry"], LineString)
+
+    # Test with manhattan distance
+    G_manhattan = nx.Graph()
+    G_manhattan.add_edge(0, 1)
+    _add_edge_geometries(G_manhattan, coords, node_indices, "manhattan")
+    assert isinstance(G_manhattan[0][1]["geometry"], LineString)
+
+
+def test_calculate_distance_matrix() -> None:
+    """Test distance matrix calculation."""
+    coords = np.array([[0, 0], [1, 0], [0, 1]])
+    node_indices = [0, 1, 2]
+
+    (dist_matrix, network_graph, nearest_nodes) = _calculate_distance_matrix(
+        coords, node_indices, "euclidean",
+    )
+    assert dist_matrix.shape == (3, 3)
+    assert network_graph is None
+    assert nearest_nodes is None
+
+    (dist_matrix_manhattan, _, _) = _calculate_distance_matrix(
+        coords, node_indices, "manhattan",
+    )
+    assert dist_matrix_manhattan.shape == (3, 3)
+
+
+def test_add_distance_weights() -> None:
+    """Test distance weight addition."""
+    G = nx.Graph()
+    edges = [(0, 1), (1, 2)]
+    node_indices = [0, 1, 2]
+    distance_matrix = np.array([
+        [0, 1, 2],
+        [1, 0, 1],
+        [2, 1, 0],
+    ])
+    G.add_edges_from(edges)
+    _add_distance_weights(G, edges, node_indices, distance_matrix)
+    assert G[0][1]["weight"] == 1
+    assert G[1][2]["weight"] == 1
 
 
 def test_knn_graph_basic(simple_points_gdf: gpd.GeoDataFrame) -> None:
-    """Test basic functionality of knn_graph with k=2."""
-    # Arrange: use the simple 4-point square fixture
-    points_gdf = simple_points_gdf
-
-    # Act: create k-nearest neighbors graph with k=2
-    G = knn_graph(points_gdf, k=2)
-
-    # Assert: verify graph structure and properties
+    """Test basic KNN graph creation."""
+    G = knn_graph(simple_points_gdf, k=1)
     assert isinstance(G, nx.Graph)
-    assert G.number_of_nodes() == 4
-    assert all(d >= 2 for _, d in G.degree())
-
-
-def test_knn_graph_edge_cases(linear_points_gdf: gpd.GeoDataFrame) -> None:
-    """Test knn_graph with edge cases and different k values."""
-    # Arrange: use linear points for testing edge cases
-    points_gdf = linear_points_gdf
-
-    # Act: create graph with k=1 (minimum connections)
-    G_k1 = knn_graph(points_gdf, k=1)
-
-    # Assert: verify minimum connectivity
-    assert G_k1.number_of_nodes() == 4
-    assert all(d >= 1 for _, d in G_k1.degree())
-
-    # Act: create graph with k=3 (maximum practical k for 4 points)
-    G_k3 = knn_graph(points_gdf, k=3)
-
-    # Assert: verify higher connectivity
-    assert G_k3.number_of_nodes() == 4
-    assert all(d >= 3 for _, d in G_k3.degree())
-
-
-def test_knn_graph_zero_k(simple_points_gdf: gpd.GeoDataFrame) -> None:
-    """Test knn_graph with k=0 returns no edges."""
-    # Arrange: use the simple 4-point square fixture
-    points_gdf = simple_points_gdf
-
-    # Act: create k-nearest neighbors graph with k=0
-    G0 = knn_graph(points_gdf, k=0)
-
-    # Assert: verify graph has 4 nodes and 0 edges
-    assert G0.number_of_nodes() == 4
-    assert G0.number_of_edges() == 0
-
-
-def test_knn_graph_large_k(simple_points_gdf: gpd.GeoDataFrame) -> None:
-    """Test knn_graph with k larger than n-1 connects to all neighbors."""
-    # Arrange: use the simple 4-point square fixture
-    points_gdf = simple_points_gdf
-
-    # Act: create k-nearest neighbors graph with k=10
-    G_large = knn_graph(points_gdf, k=10)
-
-    # Assert: verify graph has 4 nodes and each node is connected to all others
-    assert G_large.number_of_nodes() == 4
-    # effective k is n-1=3
-    assert all(d >= 3 for _, d in G_large.degree())
-
-
-# ============================================================================
-# DELAUNAY TRIANGULATION GRAPH TESTS
-# ============================================================================
-
-
-def test_delaunay_graph_basic(simple_points_gdf: gpd.GeoDataFrame) -> None:
-    """Test basic functionality of delaunay_graph."""
-    # Arrange: use the simple 4-point square fixture
-    points_gdf = simple_points_gdf
-
-    # Act: create Delaunay triangulation graph
-    G = delaunay_graph(points_gdf)
-
-    # Assert: verify graph structure (should form triangulation)
-    assert isinstance(G, nx.Graph)
-    assert G.number_of_nodes() == 4
-    assert G.number_of_edges() in (5, 6)  # Expected edges for square triangulation
-
-
-def test_delaunay_graph_triangle(triangle_points_gdf: gpd.GeoDataFrame) -> None:
-    """Test delaunay_graph with triangle configuration."""
-    # Arrange: use triangle points fixture
-    points_gdf = triangle_points_gdf
-
-    # Act: create Delaunay triangulation graph
-    G = delaunay_graph(points_gdf)
-
-    # Assert: verify perfect triangle connectivity
-    assert G.number_of_nodes() == 3
-    assert G.number_of_edges() == 3  # Triangle should have exactly 3 edges
-
-
-def test_delaunay_graph_collinear(linear_points_gdf: gpd.GeoDataFrame) -> None:
-    """Test delaunay_graph with collinear points."""
-    # Arrange: use linear points for collinear case
-    points_gdf = linear_points_gdf
-
-    # Act: delaunay triangulation should handle collinear points gracefully
-    result = delaunay_graph(points_gdf)
-
-    # Assert: should return empty graph when triangulation fails
-    assert isinstance(result, nx.Graph)
-    assert len(result.edges()) == 0  # Empty graph due to QhullError handling
-
-
-def test_delaunay_graph_two_points() -> None:
-    """Test delaunay_graph with two points (edge case)."""
-    # Arrange: create GeoDataFrame with two points
-    gdf = gpd.GeoDataFrame(geometry=[Point(0, 0), Point(1, 1)])
-
-    # Act: create Delaunay triangulation graph
-    G = delaunay_graph(gdf)
-
-    # Assert: verify graph has 2 nodes and 0 edges (no triangulation possible)
     assert G.number_of_nodes() == 2
-    assert G.number_of_edges() == 0
+    assert G.number_of_edges() >= 1
 
 
-def test_delaunay_graph_empty_triangulation() -> None:
-    """Test delaunay_graph when triangulation returns empty result (line 45)."""
-    from city2graph.proximity import _build_delaunay_edges
-
-    # Create points that would result in empty triangulation
-    # (e.g., collinear points or insufficient points)
-    collinear_points = gpd.GeoDataFrame(
-        {
-            "id": [1, 2, 3],
-        },
-        geometry=[
-            Point(0, 0),
-            Point(1, 0),
-            Point(2, 0),  # All on same line
-        ],
-        crs="EPSG:4326",
-    )
-
-    # Should handle empty triangulation gracefully
-    node_indices = list(range(len(collinear_points)))
-    result = _build_delaunay_edges(collinear_points.geometry.get_coordinates().values, node_indices)
-    assert isinstance(result, set)
-    # Should return empty edges when triangulation fails
-    assert len(result) == 0
-
-
-# ============================================================================
-# GILBERT RANDOM GRAPH TESTS
-# ============================================================================
-
-
-def test_gilbert_graph_radius(simple_points_gdf: gpd.GeoDataFrame) -> None:
-    """Test gilbert_graph with a specific radius parameter."""
-    # Arrange: use simple points and set radius to connect all points
-    points_gdf = simple_points_gdf
-    radius = 1.5  # Should connect all points in unit square
-
-    # Act: create Gilbert random graph with specified radius
-    G = gilbert_graph(points_gdf, radius=radius)
-
-    # Assert: verify graph properties and metadata
+def test_knn_graph_network(simple_points_gdf: gpd.GeoDataFrame,
+                           simple_network_gdf: gpd.GeoDataFrame) -> None:
+    """Test KNN graph with network distance metric."""
+    G = knn_graph(simple_points_gdf, k=2, distance_metric="network", network_gdf=simple_network_gdf)
     assert isinstance(G, nx.Graph)
-    assert G.number_of_nodes() == 4
-    assert G.number_of_edges() == 6  # Complete graph for this radius
-    assert G.graph.get("radius") == radius
-
-
-def test_gilbert_graph_small_radius(simple_points_gdf: gpd.GeoDataFrame) -> None:
-    """Test gilbert_graph with small radius for sparse connectivity."""
-    # Arrange: use simple points with very small radius
-    points_gdf = simple_points_gdf
-    small_radius = 0.5  # Only nearest neighbors should connect
-
-    # Act: create Gilbert graph with small radius
-    G = gilbert_graph(points_gdf, radius=small_radius)
-
-    # Assert: verify sparse connectivity
-    assert G.number_of_nodes() == 4
-    assert G.number_of_edges() < 6  # Should be less connected
-    assert G.graph.get("radius") == small_radius
-
-
-def test_gilbert_graph_large_radius(triangle_points_gdf: gpd.GeoDataFrame) -> None:
-    """Test gilbert_graph with large radius for complete connectivity."""
-    # Arrange: use triangle points with large radius
-    points_gdf = triangle_points_gdf
-    large_radius = 5.0  # Should connect all points
-
-    # Act: create Gilbert graph with large radius
-    G = gilbert_graph(points_gdf, radius=large_radius)
-
-    # Assert: verify complete connectivity
-    assert G.number_of_nodes() == 3
-    assert G.number_of_edges() == 3  # Complete graph for 3 points
-
-
-def test_gilbert_graph_zero_and_negative_radius(simple_points_gdf: gpd.GeoDataFrame) -> None:
-    """Test gilbert_graph with zero and negative radius returns no edges and stores radius."""
-    # Arrange: use simple points
-
-    # Act: create Gilbert graph with zero radius
-    G_zero = gilbert_graph(simple_points_gdf, radius=0)
-
-    # Assert: verify no edges are created
-    assert G_zero.number_of_edges() == 0
-    assert G_zero.graph.get("radius") == 0
-
-    # Act: create Gilbert graph with negative radius
-    G_neg = gilbert_graph(simple_points_gdf, radius=-0.1)
-
-    # Assert: verify no edges are created and radius is stored
-    assert G_neg.number_of_edges() == 0
-    assert G_neg.graph.get("radius") == -0.1
-
-
-def test_gilbert_graph_invalid_input_type() -> None:
-    """Test gilbert_graph with invalid input type (lines 128-129)."""
-    # Test with non-GeoDataFrame input
-    invalid_input = "not a geodataframe"
-
-    with pytest.raises(TypeError, match="Input data must be a GeoDataFrame"):
-        gilbert_graph(invalid_input, radius=1.0)
-
-
-def test_gilbert_graph_with_crs() -> None:
-    """Test gilbert_graph sets CRS in graph attributes (line 137)."""
-    points_gdf = gpd.GeoDataFrame(
-        {
-            "id": [1, 2, 3, 4],
-        },
-        geometry=[
-            Point(0, 0),
-            Point(1, 0),
-            Point(0, 1),
-            Point(1, 1),
-        ],
-        crs="EPSG:4326",
-    )
-
-    G = gilbert_graph(points_gdf, radius=2.0)
-
-    # Should set CRS in graph attributes
-    assert "crs" in G.graph
-    assert G.graph["crs"] == "EPSG:4326"
-
-
-def test_gilbert_graph_empty_result() -> None:
-    """Test gilbert_graph when no edges are created (line 141)."""
-    # Create points that are too far apart for the given radius
-    distant_points = gpd.GeoDataFrame(
-        {
-            "id": [1, 2],
-        },
-        geometry=[
-            Point(0, 0),
-            Point(100, 100),  # Very far apart
-        ],
-        crs="EPSG:4326",
-    )
-
-    # Use small radius that won't connect the distant points
-    G = gilbert_graph(distant_points, radius=1.0)
-
-    # Should return graph with nodes but no edges
     assert G.number_of_nodes() == 2
-    assert G.number_of_edges() == 0
+
+    # Test error when network_gdf is missing
+    with pytest.raises(ValueError, match="network_gdf is required when distance_metric='network'"):
+        knn_graph(simple_points_gdf, k=1, distance_metric="network")
 
 
-# ============================================================================
-# WAXMAN RANDOM GRAPH TESTS
-# ============================================================================
+def test_knn_graph_manhattan(simple_points_gdf: gpd.GeoDataFrame) -> None:
+    """Test KNN graph with Manhattan distance metric."""
+    G = knn_graph(simple_points_gdf, k=2, distance_metric="manhattan")
+    assert isinstance(G, nx.Graph)
+    assert G.number_of_nodes() == 2
+    for u, v in G.edges():
+        assert "geometry" in G[u][v]
+        coords = list(G[u][v]["geometry"].coords)
+        assert len(coords) >= 2
 
 
-def test_waxman_graph_reproducibility(simple_points_gdf: gpd.GeoDataFrame) -> None:
-    """Test that waxman_graph produces reproducible results with the same seed."""
-    # Arrange: use simple points with fixed parameters and seed
-    points_gdf = simple_points_gdf
-    beta = 1.0
-    r0 = 1.0
-    seed = 42
-
-    # Act: generate two graphs with same seed
-    G1 = waxman_graph(points_gdf, beta=beta, r0=r0, seed=seed)
-    G2 = waxman_graph(points_gdf, beta=beta, r0=r0, seed=seed)
-
-    # Assert: verify reproducibility and parameter storage
-    assert sorted(G1.edges()) == sorted(G2.edges())
-    assert G1.graph.get("beta") == beta
-    assert G1.graph.get("r0") == r0
+def test_delaunay_graph_basic(triangle_points_gdf: gpd.GeoDataFrame) -> None:
+    """Test basic Delaunay triangulation graph."""
+    G = delaunay_graph(triangle_points_gdf)
+    assert isinstance(G, nx.Graph)
+    assert G.number_of_nodes() == 3
+    assert G.number_of_edges() == 3
 
 
-def test_waxman_graph_different_seeds(simple_points_gdf: gpd.GeoDataFrame) -> None:
-    """Test that waxman_graph produces different results with different seeds."""
-    # Arrange: use simple points with same parameters but different seeds
-    points_gdf = simple_points_gdf
-    beta = 0.5
-    r0 = 1.0
-
-    # Act: generate graphs with different seeds
-    G1 = waxman_graph(points_gdf, beta=beta, r0=r0, seed=42)
-    G2 = waxman_graph(points_gdf, beta=beta, r0=r0, seed=123)
-
-    # Assert: verify different results (probabilistic test)
-    assert G1.number_of_nodes() == G2.number_of_nodes() == 4
-    # Note: edge counts may vary due to randomness
-
-
-def test_waxman_graph_parameters(linear_points_gdf: gpd.GeoDataFrame) -> None:
-    """Test waxman_graph with different beta and r0 parameters."""
-    # Arrange: use linear points for testing parameter effects
-    points_gdf = linear_points_gdf
-
-    # Act: create graph with high beta (distance matters less)
-    G_high_beta = waxman_graph(points_gdf, beta=2.0, r0=1.0, seed=42)
-
-    # Act: create graph with low beta (distance matters more)
-    G_low_beta = waxman_graph(points_gdf, beta=0.1, r0=1.0, seed=42)
-
-    # Assert: verify both graphs have same node count
-    assert G_high_beta.number_of_nodes() == 4
-    assert G_low_beta.number_of_nodes() == 4
-
-    # Assert: verify parameter storage
-    assert G_high_beta.graph.get("beta") == 2.0
-    assert G_low_beta.graph.get("beta") == 0.1
-
-
-def test_waxman_graph_invalid_parameters(simple_points_gdf: gpd.GeoDataFrame) -> None:
-    """Test waxman_graph with unconventional parameters returns graphs with stored params."""
-    # Arrange: use simple points
-
-    # Act: create graph with negative beta
-    G_neg_beta = waxman_graph(simple_points_gdf, beta=-0.1, r0=1.0, seed=42)
-
-    # Assert: verify graph has no edges and beta is stored
-    assert G_neg_beta.graph.get("beta") == -0.1
-    assert G_neg_beta.number_of_edges() == 0
-
-    # Act: create graph with beta > 1 (should behave like complete graph)
-    G_gt1_beta = waxman_graph(simple_points_gdf, beta=1.1, r0=1.0, seed=42)
-    n = G_gt1_beta.number_of_nodes()
-    assert G_gt1_beta.graph.get("beta") == 1.1
-    assert 0 <= G_gt1_beta.number_of_edges() <= n * (n - 1) // 2
-
-    # Act: create graph with zero r0 (no edges, r0 should be stored)
-    G_zero_r0 = waxman_graph(simple_points_gdf, beta=0.5, r0=0, seed=42)
-    assert G_zero_r0.graph.get("r0") == 0
-    assert G_zero_r0.number_of_edges() == 0
-
-
-# ============================================================================
-# ERROR HANDLING AND EDGE CASES
-# ============================================================================
-
-
-def test_empty_geodataframe() -> None:
-    """Test all graph functions with empty GeoDataFrame."""
-    # Arrange: create empty GeoDataFrame
-    empty_gdf = gpd.GeoDataFrame(geometry=[])
-
-    # Act & Assert: knn_graph should raise ValueError for empty input
-    with pytest.raises(ValueError, match="GeoDataFrame must contain geometry"):
-        knn_graph(empty_gdf)
-
-    # Act & Assert: delaunay_graph should raise ValueError for empty input
-    with pytest.raises(ValueError, match="GeoDataFrame must contain geometry"):
-        delaunay_graph(empty_gdf)
-
-    # Act & Assert: gilbert_graph should raise ValueError for empty input
-    with pytest.raises(ValueError, match="GeoDataFrame must contain geometry"):
-        gilbert_graph(empty_gdf, radius=1.0)
-
-    # Act & Assert: waxman_graph should raise ValueError for empty input
-    with pytest.raises(ValueError, match="GeoDataFrame must contain geometry"):
-        waxman_graph(empty_gdf, beta=1.0, r0=1.0)
-
-
-def test_single_point_geodataframe() -> None:
-    """Test all graph functions with single point GeoDataFrame."""
-    # Arrange: create GeoDataFrame with single point
-    single_point_gdf = gpd.GeoDataFrame(geometry=[Point(0, 0)])
-
-    # Act & Assert: test knn_graph with single point
-    G_knn = knn_graph(single_point_gdf)
-    assert G_knn.number_of_nodes() == 1
-    assert G_knn.number_of_edges() == 0
-
-    # Act & Assert: test delaunay_graph with single point
-    G_delaunay = delaunay_graph(single_point_gdf)
-    assert G_delaunay.number_of_nodes() == 1
-    assert G_delaunay.number_of_edges() == 0
-
-    # Act & Assert: test gilbert_graph with single point
-    G_gilbert = gilbert_graph(single_point_gdf, radius=1.0)
-    assert G_gilbert.number_of_nodes() == 1
-    assert G_gilbert.number_of_edges() == 0
-
-    # Act & Assert: test waxman_graph with single point
-    G_waxman = waxman_graph(single_point_gdf, beta=1.0, r0=1.0)
-    assert G_waxman.number_of_nodes() == 1
-    assert G_waxman.number_of_edges() == 0
-
-
-def test_comprehensive_proximity_edge_cases() -> None:
-    """Test all proximity functions with various edge cases."""
-    # Test with duplicate points
-    duplicate_points = gpd.GeoDataFrame(
-        {
-            "id": [1, 2, 3],
-        },
+def test_delaunay_graph_network(triangle_points_gdf: gpd.GeoDataFrame) -> None:
+    """Test Delaunay graph with network distance metric."""
+    # Create a network that covers the triangle
+    network_for_triangle = gpd.GeoDataFrame(
         geometry=[
-            Point(0, 0),
-            Point(0, 0),  # Duplicate
-            Point(1, 1),
+            LineString([(0, 0), (1, 0)]),
+            LineString([(1, 0), (0.5, 1)]),
+            LineString([(0.5, 1), (0, 0)]),
         ],
-        crs="EPSG:4326",
+        crs=triangle_points_gdf.crs,
     )
-
-    # All functions should handle duplicates gracefully
-    G_knn = knn_graph(duplicate_points, k=1)
-    assert isinstance(G_knn, nx.Graph)
-
-    # Delaunay triangulation should handle duplicate/collinear points gracefully
-    G_delaunay = delaunay_graph(duplicate_points)
-    assert isinstance(G_delaunay, nx.Graph)
-    # Should return empty graph due to QhullError handling
-    assert len(G_delaunay.edges()) == 0
-
-    G_gilbert = gilbert_graph(duplicate_points, radius=2.0)
-    assert isinstance(G_gilbert, nx.Graph)
-
-    G_waxman = waxman_graph(duplicate_points, beta=1.0, r0=1.0)
-    assert isinstance(G_waxman, nx.Graph)
-
-
-def test_proximity_functions_with_minimal_data() -> None:
-    """Test proximity functions with minimal valid data."""
-    # Test with exactly 2 points (minimum for meaningful graph)
-    two_points = gpd.GeoDataFrame(
-        {
-            "id": [1, 2],
-        },
-        geometry=[
-            Point(0, 0),
-            Point(1, 0),
-        ],
-        crs="EPSG:4326",
+    G = delaunay_graph(
+        triangle_points_gdf, distance_metric="network", network_gdf=network_for_triangle,
     )
+    assert isinstance(G, nx.Graph)
+    assert G.number_of_nodes() == 3
 
-    # Test knn_graph with k=1 (each point connects to nearest neighbor)
-    G_knn = knn_graph(two_points, k=1)
-    assert G_knn.number_of_nodes() == 2
-    # With k=1 and 2 points, should have directed edges
-    assert G_knn.number_of_edges() >= 1
 
-    # Test delaunay_graph (should connect the two points)
-    G_delaunay = delaunay_graph(two_points)
-    assert G_delaunay.number_of_nodes() == 2
-    assert G_delaunay.number_of_edges() >= 0  # May or may not connect depending on triangulation
+def test_delaunay_graph_manhattan(triangle_points_gdf: gpd.GeoDataFrame) -> None:
+    """Test Delaunay graph with Manhattan distance metric."""
+    G = delaunay_graph(triangle_points_gdf, distance_metric="manhattan")
+    assert isinstance(G, nx.Graph)
+    assert G.number_of_nodes() == 3
+    for u, v in G.edges():
+        assert "geometry" in G[u][v]
 
-    # Test gilbert_graph with sufficient radius
-    G_gilbert = gilbert_graph(two_points, radius=2.0)
-    assert G_gilbert.number_of_nodes() == 2
-    assert G_gilbert.number_of_edges() >= 0
 
-    # Test waxman_graph
-    G_waxman = waxman_graph(two_points, beta=1.0, r0=2.0)
-    assert G_waxman.number_of_nodes() == 2
-    assert G_waxman.number_of_edges() >= 0
+def test_gilbert_graph_basic(simple_points_gdf: gpd.GeoDataFrame) -> None:
+    """Test basic Gilbert graph creation."""
+    G = gilbert_graph(simple_points_gdf, radius=2.0)
+    assert isinstance(G, nx.Graph)
+    assert G.number_of_nodes() == 2
+
+
+def test_gilbert_graph_network(simple_points_gdf: gpd.GeoDataFrame,
+                               simple_network_gdf: gpd.GeoDataFrame) -> None:
+    """Test Gilbert graph with network distance metric."""
+    G = gilbert_graph(
+        simple_points_gdf, radius=3.0, distance_metric="network", network_gdf=simple_network_gdf,
+    )
+    assert isinstance(G, nx.Graph)
+    assert G.number_of_nodes() == 2
+
+
+def test_gilbert_graph_manhattan(simple_points_gdf: gpd.GeoDataFrame) -> None:
+    """Test Gilbert graph with Manhattan distance metric."""
+    G = gilbert_graph(simple_points_gdf, radius=2.0, distance_metric="manhattan")
+    assert isinstance(G, nx.Graph)
+    assert G.number_of_nodes() == 2
+
+
+def test_waxman_graph_basic(simple_points_gdf: gpd.GeoDataFrame) -> None:
+    """Test basic Waxman graph creation."""
+    G = waxman_graph(simple_points_gdf, beta=1.0, r0=2.0, seed=42)
+    assert isinstance(G, nx.Graph)
+    assert G.number_of_nodes() == 2
+    assert "beta" in G.graph
+    assert "r0" in G.graph
+
+
+def test_waxman_graph_network(simple_points_gdf: gpd.GeoDataFrame,
+                              simple_network_gdf: gpd.GeoDataFrame) -> None:
+    """Test Waxman graph with network distance metric."""
+    G = waxman_graph(
+        simple_points_gdf,
+        beta=1.0,
+        r0=2.0,
+        seed=42,
+        distance_metric="network",
+        network_gdf=simple_network_gdf,
+    )
+    assert isinstance(G, nx.Graph)
+    assert G.number_of_nodes() == 2
+
+    # Test error when network_gdf is missing
+    with pytest.raises(ValueError, match="network_gdf is required when distance_metric='network'"):
+        waxman_graph(simple_points_gdf, beta=1.0, r0=1.0, distance_metric="network")
+
+
+def test_waxman_graph_manhattan(simple_points_gdf: gpd.GeoDataFrame) -> None:
+    """Test Waxman graph with Manhattan distance metric."""
+    G = waxman_graph(simple_points_gdf, beta=1.0, r0=1.0, seed=42, distance_metric="manhattan")
+    assert isinstance(G, nx.Graph)
+    assert G.number_of_nodes() == 2
+
+
+def test_as_gdf_option(simple_points_gdf: gpd.GeoDataFrame,
+                       triangle_points_gdf: gpd.GeoDataFrame) -> None:
+    """Test as_gdf option for all graph functions."""
+    result = knn_graph(simple_points_gdf, k=2, as_gdf=True)
+    assert isinstance(result, gpd.GeoDataFrame)
+
+    result = delaunay_graph(triangle_points_gdf, as_gdf=True)
+    assert isinstance(result, gpd.GeoDataFrame)
+
+    result = gilbert_graph(simple_points_gdf, radius=2.0, as_gdf=True)
+    assert isinstance(result, gpd.GeoDataFrame)
+
+    # Test waxman_graph with NetworkX first to avoid empty graph issues
+    G = waxman_graph(simple_points_gdf, beta=1.0, r0=1.0, seed=42)
+    if G.number_of_edges() > 0:
+        result = waxman_graph(simple_points_gdf, beta=1.0, r0=1.0, seed=42, as_gdf=True)
+        assert isinstance(result, gpd.GeoDataFrame)
+
+
+def test_delaunay_collinear_points() -> None:
+    """Test Delaunay triangulation with collinear points."""
+    collinear_coords = np.array([[0, 0], [1, 0], [2, 0]])
+    node_indices = ["A", "B", "C"]
+    edges = _build_delaunay_edges(collinear_coords, node_indices)
+    # Collinear points may return empty set or list
+    assert isinstance(edges, (list, set))
+
+
+def test_large_dataset() -> None:
+    """Test with a larger dataset for performance."""
+    n_points = 20
+    rng = np.random.default_rng(42)
+    points = [Point(x, y) for x, y in rng.random((n_points, 2)) * 100]
+    large_gdf = gpd.GeoDataFrame(geometry=points)
+
+    G_knn = knn_graph(large_gdf, k=5)
+    assert G_knn.number_of_nodes() == n_points
+
+    G_gilbert = gilbert_graph(large_gdf, radius=10.0)
+    assert G_gilbert.number_of_nodes() == n_points

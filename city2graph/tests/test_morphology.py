@@ -23,10 +23,9 @@ from city2graph.morphology import morphological_graph
 from city2graph.morphology import private_to_private_graph
 from city2graph.morphology import private_to_public_graph
 from city2graph.morphology import public_to_public_graph
-# Import functions that were moved to utils.py
-from city2graph.utils import dual_graph
 from city2graph.utils import _extract_dual_graph_nodes
 from city2graph.utils import _find_additional_connections
+from city2graph.utils import dual_graph
 
 # ============================================================================
 # COMMON TEST FIXTURES
