@@ -862,7 +862,7 @@ def from_morphological_graph(network_output: dict,
         raise TypeError(msg)
 
     # Extract GeoDataFrames from the network output
-    private_gdf = network_output.get("tessellations")
+    private_gdf = network_output.get("tessellation")
     public_gdf = network_output.get("segments")
     private_to_private_gdf = network_output.get("private_to_private")
     public_to_public_gdf = network_output.get("public_to_public")
@@ -879,9 +879,9 @@ def from_morphological_graph(network_output: dict,
 
         # Create edges dictionary with edge type tuples
         edges_dict = {
-            ("private", "connects_to", "private"): private_to_private_gdf,
-            ("private", "adjacent_to", "public"): private_to_public_gdf,
-            ("public", "connects_to", "public"): public_to_public_gdf,
+            ("private", "touched_to", "private"): private_to_private_gdf,
+            ("private", "faced_to", "public"): private_to_public_gdf,
+            ("public", "connected_to", "public"): public_to_public_gdf,
         }
 
         # Create node ID columns dictionary
@@ -896,15 +896,15 @@ def from_morphological_graph(network_output: dict,
 
         # Prepare edge source/target column mappings based on morphological_graph output columns
         edge_source_cols = {
-            ("private", "connects_to", "private"): "from_private_id",
-            ("private", "adjacent_to", "public"): "private_id",
-            ("public", "connects_to", "public"): "from_public_id",
+            ("private", "touched_to", "private"): "from_private_id",
+            ("private", "faced_to", "public"): "private_id",
+            ("public", "connected_to", "public"): "from_public_id",
         }
 
         edge_target_cols = {
-            ("private", "connects_to", "private"): "to_private_id",
-            ("private", "adjacent_to", "public"): "public_id",
-            ("public", "connects_to", "public"): "to_public_id",
+            ("private", "touched_to", "private"): "to_private_id",
+            ("private", "faced_to", "public"): "public_id",
+            ("public", "connected_to", "public"): "to_public_id",
         }
 
         # Create the heterogeneous graph

@@ -568,7 +568,7 @@ def private_to_public_graph(
     """
     # Validate and filter public_gdf geometry types before creating dual graph
     if not public_gdf.geometry.apply(
-        lambda g: isinstance(g, (shapely.geometry.LineString, shapely.geometry.MultiLineString))
+        lambda g: isinstance(g, (shapely.geometry.LineString, shapely.geometry.MultiLineString)),
     ).all():
         warnings.warn(
             "Some geometries in public_gdf are not LineString or MultiLineString. "
@@ -577,15 +577,15 @@ def private_to_public_graph(
         )
         public_gdf = public_gdf[
             public_gdf.geometry.apply(
-                lambda g: isinstance(g, (shapely.geometry.LineString, shapely.geometry.MultiLineString))
+                lambda g: isinstance(g, (shapely.geometry.LineString, shapely.geometry.MultiLineString)),
             )
         ]
 
     # Check if we have any valid geometries left
     if public_gdf.empty:
         return gpd.GeoDataFrame(
-            {"private_id": [], "public_id": [], "geometry": []}, 
-            crs=private_gdf.crs if hasattr(private_gdf, 'crs') else None,
+            {"private_id": [], "public_id": [], "geometry": []},
+            crs=private_gdf.crs if hasattr(private_gdf, "crs") else None,
         )
 
     # Create dual graph from publics
@@ -637,7 +637,7 @@ def public_to_public_graph(
     """
     # Validate and filter public_gdf geometry types before creating dual graph
     if not public_gdf.geometry.apply(
-        lambda g: isinstance(g, (shapely.geometry.LineString, shapely.geometry.MultiLineString))
+        lambda g: isinstance(g, (shapely.geometry.LineString, shapely.geometry.MultiLineString)),
     ).all():
         warnings.warn(
             "Some geometries in public_gdf are not LineString or MultiLineString. "
@@ -646,10 +646,10 @@ def public_to_public_graph(
         )
         public_gdf = public_gdf[
             public_gdf.geometry.apply(
-                lambda g: isinstance(g, (shapely.geometry.LineString, shapely.geometry.MultiLineString))
+                lambda g: isinstance(g, (shapely.geometry.LineString, shapely.geometry.MultiLineString)),
             )
         ]
-    
+
     # Check if we have any valid geometries left
     if public_gdf.empty:
         return gpd.GeoDataFrame(

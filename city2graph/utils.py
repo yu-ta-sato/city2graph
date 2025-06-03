@@ -226,20 +226,20 @@ def _create_empty_result(is_graph_input: bool, original_crs: str | int | None) -
     return gpd.GeoDataFrame(geometry=[], crs=original_crs)
 
 
-def filter_graph_by_distance(network: gpd.GeoDataFrame | nx.Graph,
+def filter_graph_by_distance(graph: gpd.GeoDataFrame | nx.Graph,
                              center_point: Point | gpd.GeoSeries | gpd.GeoDataFrame,
                              distance: float,
                              edge_attr: str = "length",
                              node_id_col: str | None = None) -> gpd.GeoDataFrame | nx.Graph:
     """
-    Extract a filtered network containing only elements within a given shortest-path distance.
+    Extract a filtered graph containing only elements within a given shortest-path distance.
 
-    Filters network elements based on distance from specified center point(s).
+    Filters graph elements based on distance from specified center point(s).
 
     Parameters
     ----------
-    network : Union[gpd.GeoDataFrame, nx.Graph]
-        Input network data as either a GeoDataFrame of edges or a NetworkX graph.
+    graph : Union[gpd.GeoDataFrame, nx.Graph]
+        Input graph data as either a GeoDataFrame of edges or a NetworkX graph.
     center_point : Union[Point, gpd.GeoSeries, gpd.GeoDataFrame]
         Center point(s) for distance calculation.
         Can be a single Point, GeoSeries of points, or GeoDataFrame with point geometries.
@@ -254,18 +254,18 @@ def filter_graph_by_distance(network: gpd.GeoDataFrame | nx.Graph,
     Returns
     -------
     Union[gpd.GeoDataFrame, nx.Graph]
-        Filtered network containing only elements within distance of any center point.
+        Filtered graph containing only elements within distance of any center point.
         Returns the same type as the input (either GeoDataFrame or NetworkX graph).
     """
-    is_graph_input = isinstance(network, nx.Graph)
+    is_graph_input = isinstance(graph, nx.Graph)
 
     # Convert input to graph and preserve CRS
     if is_graph_input:
-        graph = network
-        original_crs = None
+        _validate_nx(graph)
+        original_crs = graph.graph.get("crs")
     else:
-        graph = momepy.gdf_to_nx(network)
-        original_crs = network.crs
+        graph = gdf_to_nx(edges=graph)
+        original_crs = graph.graph["crs"]
 
     # Extract node positions or return empty result if not available
     pos_dict = _extract_node_positions(graph)
@@ -294,7 +294,7 @@ def filter_graph_by_distance(network: gpd.GeoDataFrame | nx.Graph,
         return subgraph
 
     # Convert back to GeoDataFrame
-    filtered_gdf = momepy.nx_to_gdf(subgraph, points=False)
+    filtered_gdf = nx_to_gdf(subgraph, edges=True)
     if not isinstance(filtered_gdf.geometry, gpd.GeoSeries):
         filtered_gdf = gpd.GeoDataFrame(
             filtered_gdf, geometry="geometry", crs=original_crs,
@@ -313,7 +313,7 @@ def _validate_gdf(nodes: gpd.GeoDataFrame | None,
 
     # Validate edges GeoDataFrame for correct geometry types
     if edges is not None and not edges.geometry.apply(
-        lambda g: isinstance(g, (LineString, shapely.geometry.MultiLineString))
+        lambda g: isinstance(g, (LineString, shapely.geometry.MultiLineString)),
     ).all():
         msg = "Edges GeoDataFrame must have LineString or MultiLineString geometries"
         raise ValueError(msg)
@@ -849,7 +849,7 @@ def dual_graph(gdf: gpd.GeoDataFrame,
 
     # Check for invalid geometry types and filter them out
     invalid_geoms = gdf.geometry.apply(
-        lambda g: not isinstance(g, (shapely.geometry.LineString, shapely.geometry.MultiLineString))
+        lambda g: not isinstance(g, (shapely.geometry.LineString, shapely.geometry.MultiLineString)),
     )
     if invalid_geoms.any():
         warnings.warn(
@@ -897,3 +897,55 @@ def dual_graph(gdf: gpd.GeoDataFrame,
     connections = _find_additional_connections(line_gdf, id_col, tolerance, connections)
 
     return dual_node_gdf, connections
+
+
+def create_heterogeneous_graph(graphs: dict[str, nx.Graph]) -> nx.MultiDiGraph:
+    """
+    Create a heterogeneous graph from multiple graphs.
+
+    Each input graph's nodes and edges will be added with "node_type" and "edge_type" attributes.
+    """
+    G = nx.MultiDiGraph()
+    for type_name, g in graphs.items():
+        for n, attrs in g.nodes(data=True):
+            attrs_copy = attrs.copy()
+            attrs_copy["type"] = type_name
+            G.add_node((type_name, n), **attrs_copy)
+        for u, v, attrs in g.edges(data=True):
+            u_new, v_new = (type_name, u), (type_name, v)
+            attrs_copy = attrs.copy()
+            attrs_copy["type"] = type_name
+            G.add_edge(u_new, v_new, **attrs_copy)
+    return G
+
+
+def project_homogeneous_graph_from_heterogeneous(hetero_g: nx.Graph, meta_path: list[str]) -> nx.Graph:
+    """
+    Project a homogeneous graph through a specified meta-path.
+
+    meta_path: sequence of node_types, e.g. ["A","B","A"]
+    Returns a graph connecting nodes of type meta_path[0] based on counts of meta-path instances.
+    """
+    start_type = meta_path[0]
+    homo = nx.Graph()
+    # find all start nodes
+    starts = [n for n, d in hetero_g.nodes(data=True) if d.get("node_type") == start_type]
+    for src in starts:
+        paths = [(src,)]
+        for level in meta_path[1:]:
+            next_paths = []
+            for path in paths:
+                last = path[-1]
+                for nbr in hetero_g.neighbors(last):
+                    if hetero_g.nodes[nbr].get("node_type") == level:
+                        next_paths.append((*path, nbr))
+            paths = next_paths
+        for path in paths:
+            u, v = path[0], path[-1]
+            if u == v:
+                continue
+            if homo.has_edge(u, v):
+                homo[u][v]["weight"] += 1
+            else:
+                homo.add_edge(u, v, weight=1)
+    return homo
