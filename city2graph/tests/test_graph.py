@@ -514,7 +514,7 @@ def test_from_morphological_graph_paths_and_errors() -> None:
 
     # Act & Assert: no nodes should raise ValueError
     with pytest.raises(ValueError, match="no nodes"):
-        from_morphological_graph({"tessellations": empty, "segments": empty})
+        from_morphological_graph({"tessellation": empty, "segments": empty})
 
     # Arrange: create private-only graph data
     priv = make_simple_nodes().rename(columns={"id": "tess_id"})
@@ -522,7 +522,7 @@ def test_from_morphological_graph_paths_and_errors() -> None:
 
     # Act: create graph with only private nodes
     data = from_morphological_graph({
-        "tessellations": priv,
+        "tessellation": priv,
         "segments": None,
         "private_to_private": edges,
     })
@@ -537,7 +537,7 @@ def test_from_morphological_graph_paths_and_errors() -> None:
 
     # Act: create heterogeneous graph with both node types
     het = from_morphological_graph({
-        "tessellations": priv,
+        "tessellation": priv,
         "segments": pub,
         "private_to_private": edges,
         "public_to_public": edges2,
@@ -557,7 +557,7 @@ def test_from_morphological_graph_public_only() -> None:
 
     # Act: create graph with only public nodes
     data = from_morphological_graph({
-        "tessellations": None,
+        "tessellation": None,
         "segments": seg,
         "public_to_public": edges,
     })
@@ -879,7 +879,7 @@ def test_from_morphological_graph_private_public_features() -> None:
         )
 
         # Should process both private and public features
-        assert mock_data.called
+        assert mock_torch.tensor.called
 
 
 # ============================================================================

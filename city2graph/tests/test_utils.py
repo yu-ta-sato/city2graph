@@ -175,7 +175,7 @@ def test_filter_graph_by_distance_gdf() -> None:
     # build simple chain 0-1-2
     edges = gpd.GeoDataFrame({"length": [1.0, 1.0],
                               "geometry": [LineString([(0, 0), (1, 0)]),
-                                         LineString([(1, 0), (2, 0)])]}, crs=None)
+                                         LineString([(1, 0), (2, 0)])]}, crs="EPSG:4326")
     gdf = filter_graph_by_distance(edges, Point(0, 0), distance=1.5)
     # should include only first edge
     assert len(gdf) == 1
@@ -188,6 +188,7 @@ def test_filter_graph_by_distance_nx() -> None:
     nx.set_node_attributes(G, {i: {"pos": (i, 0)} for i in G.nodes()})
     for u, v in G.edges():
         G.edges[u, v]["length"] = 1.0
+    G.graph["crs"] = "EPSG:4326"
     result = filter_graph_by_distance(G, Point(2, 0), distance=1.1)
     assert isinstance(result, nx.Graph)
     assert set(result.nodes()) == {1, 2}
@@ -219,9 +220,9 @@ def test_dual_graph_basic() -> None:
         LineString([(0, 0), (1, 0)]),
         LineString([(1, 0), (2, 0)]),
     ], crs="EPSG:4326")
-    
+
     nodes_gdf, connections = dual_graph(lines, id_col="id")
-    
+
     assert isinstance(nodes_gdf, gpd.GeoDataFrame)
     assert isinstance(connections, dict)
     assert len(nodes_gdf) == 2
@@ -234,12 +235,12 @@ def test_dual_graph_errors() -> None:
     # Test invalid input type
     with pytest.raises(TypeError, match="Input must be a GeoDataFrame"):
         dual_graph("not_a_gdf")
-    
+
     # Test invalid tolerance type
     lines = gpd.GeoDataFrame(geometry=[LineString([(0, 0), (1, 0)])], crs="EPSG:4326")
     with pytest.raises(TypeError, match="Tolerance must be a number"):
         dual_graph(lines, tolerance="invalid")
-    
+
     # Test negative tolerance
     with pytest.raises(ValueError, match="Tolerance must be non-negative"):
         dual_graph(lines, tolerance=-1)
@@ -248,10 +249,10 @@ def test_dual_graph_errors() -> None:
 def test_dual_graph_empty() -> None:
     """Test dual graph with empty input."""
     empty_gdf = gpd.GeoDataFrame(geometry=[], crs="EPSG:4326")
-    
+
     with pytest.warns(RuntimeWarning, match="Input GeoDataFrame is empty"):
         nodes_gdf, connections = dual_graph(empty_gdf)
-    
+
     assert isinstance(nodes_gdf, gpd.GeoDataFrame)
     assert connections == {}
 
@@ -265,10 +266,10 @@ def test_dual_graph_invalid_geometries() -> None:
         Point(0, 0),  # Invalid
         LineString([(0, 0), (1, 0)]),
     ], crs="EPSG:4326")
-    
+
     with pytest.warns(RuntimeWarning):
         nodes_gdf, connections = dual_graph(mixed_gdf, id_col="id")
-    
+
     assert isinstance(nodes_gdf, gpd.GeoDataFrame)
     assert isinstance(connections, dict)
 
@@ -281,10 +282,10 @@ def test_dual_graph_null_geometries() -> None:
         LineString([(0, 0), (1, 0)]),
         None,
     ], crs="EPSG:4326")
-    
+
     with pytest.warns(RuntimeWarning, match="Found null geometries"):
         nodes_gdf, connections = dual_graph(null_gdf, id_col="id")
-    
+
     assert isinstance(nodes_gdf, gpd.GeoDataFrame)
     assert isinstance(connections, dict)
 
@@ -295,7 +296,7 @@ def test_extract_dual_graph_nodes() -> None:
     g = nx.Graph()
     g.add_node((0, 0), id="node1")
     g.add_node((1, 1), id="node2")
-    
+
     result = _extract_dual_graph_nodes(g, "id", "EPSG:4326")
     assert isinstance(result, gpd.GeoDataFrame)
     assert len(result) == 2
@@ -306,7 +307,7 @@ def test_extract_dual_graph_nodes_empty() -> None:
     """Test extracting nodes from empty graph."""
     empty_graph = nx.Graph()
     result = _extract_dual_graph_nodes(empty_graph, "id", "EPSG:4326")
-    
+
     assert isinstance(result, gpd.GeoDataFrame)
     assert result.empty
     assert list(result.columns) == ["id", "geometry"]
@@ -318,7 +319,7 @@ def test_extract_node_connections() -> None:
     g.add_node(1, id="A")
     g.add_node(2, id="B")
     g.add_edge(1, 2)
-    
+
     connections = _extract_node_connections(g, "id")
     assert isinstance(connections, dict)
     assert "A" in connections
@@ -336,7 +337,7 @@ def test_find_additional_connections() -> None:
         LineString([(0, 0), (1, 0)]),
         LineString([(1.001, 0), (2, 0)]),  # Close endpoint
     ], crs="EPSG:4326")
-    
+
     connections = _find_additional_connections(lines, "id", tolerance=0.01)
     assert isinstance(connections, dict)
     assert "A" in connections
@@ -353,12 +354,12 @@ def test_find_additional_connections_empty() -> None:
 def test_find_additional_connections_no_linestrings() -> None:
     """Test finding connections with non-LineString geometries."""
     from shapely.geometry import MultiLineString
-    
+
     multi_gdf = gpd.GeoDataFrame({
         "id": ["M1"],
     }, geometry=[
         MultiLineString([[(0, 0), (1, 1)], [(1, 1), (2, 2)]]),
     ], crs="EPSG:4326")
-    
+
     result = _find_additional_connections(multi_gdf, "id", 1.0)
     assert isinstance(result, dict)

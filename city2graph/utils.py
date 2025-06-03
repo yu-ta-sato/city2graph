@@ -465,7 +465,7 @@ def _validate_nx(graph: nx.Graph, nodes: bool = False) -> None:
     """Validate NetworkX graph before converting to GeoDataFrame."""
     crs = graph.graph.get("crs")
     if crs is None:
-        msg = "Missing CRS in graph attributes"
+        msg = "Missing CRS in graph attributes. Set 'crs' in graph.graph."
         raise ValueError(msg)
 
     pos = nx.get_node_attributes(graph, "pos")

@@ -800,8 +800,6 @@ def heterogeneous_graph(nodes_dict: dict[str, gpd.GeoDataFrame] | gpd.GeoDataFra
     )
 
 
-
-
 def from_morphological_graph(network_output: dict,
                              private_id_col: str = "tess_id",
                              public_id_col: str = "id",
