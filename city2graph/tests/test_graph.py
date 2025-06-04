@@ -866,7 +866,7 @@ def test_from_morphological_graph_private_public_features() -> None:
         patch("city2graph.graph.TORCH_AVAILABLE", new=True),
         patch("city2graph.graph._get_device") as mock_get_device,
         patch("city2graph.graph.torch") as mock_torch,
-        patch("city2graph.graph.Data") as mock_data,
+        patch("city2graph.graph.Data"),
     ):
         # Mock the device function to return a simple string
         mock_get_device.return_value = "cpu"

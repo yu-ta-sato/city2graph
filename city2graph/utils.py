@@ -79,9 +79,7 @@ def create_tessellation(
         # Ensure the barriers are in the same CRS as the input geometry
         if geometry.crs != primary_barriers.crs:
             msg = "CRS mismatch: geometry and barriers must have the same CRS."
-            raise ValueError(
-                msg,
-            )
+            raise ValueError(msg)
 
         # Create enclosures for enclosed tessellation
         enclosures = momepy.enclosures(
@@ -306,10 +304,17 @@ def filter_graph_by_distance(graph: gpd.GeoDataFrame | nx.Graph,
 def _validate_gdf(nodes: gpd.GeoDataFrame | None,
                   edges: gpd.GeoDataFrame | None) -> None:
     """Validate node and edge GeoDataFrames for correct geometry types and matching CRS."""
-    # Validate nodes GeoDataFrame for correct geometry types
-    if nodes is not None and not nodes.geometry.apply(lambda g: isinstance(g, Point)).all():
-        msg = "Nodes GeoDataFrame must have Point geometries"
-        raise ValueError(msg)
+    # Validate nodes GeoDataFrame for correct geometry types (any geometry that has centroid)
+    if nodes is not None:
+        try:
+            # Test if all geometries can provide a non-empty centroid
+            centroids = nodes.geometry.centroid
+            if centroids.empty or centroids.isna().any():
+                msg = "Nodes GeoDataFrame contains geometries with empty or invalid centroids"
+                raise ValueError(msg)  # noqa: TRY301
+        except Exception as e:
+            msg = f"Nodes GeoDataFrame contains geometries that cannot provide centroid: {e}"
+            raise ValueError(msg) from e
 
     # Validate edges GeoDataFrame for correct geometry types
     if edges is not None and not edges.geometry.apply(
@@ -333,6 +338,7 @@ def _prepare_dataframes(nodes: gpd.GeoDataFrame | None,
         msg = "Must provide edges GeoDataFrame"
         raise ValueError(msg)
 
+    # Validate GeoDataFrames first
     _validate_gdf(nodes, edges)
 
     # Standardize node IDs
@@ -356,7 +362,8 @@ def _add_nodes_to_graph(graph: nx.Graph, nodes: gpd.GeoDataFrame) -> None:
     graph.add_nodes_from(nodes.index)
     node_attrs = nodes.drop(columns="geometry").to_dict("index")
     nx.set_node_attributes(graph, node_attrs)
-    pos = {idx: (geom.x, geom.y) for idx, geom in nodes.geometry.items()}
+    # Use centroid of geometry for position
+    pos = {idx: (geom.centroid.x, geom.centroid.y) for idx, geom in nodes.geometry.items()}
     nx.set_node_attributes(graph, pos, "pos")
 
 
@@ -368,9 +375,10 @@ def _prepare_edge_dataframe(edges: gpd.GeoDataFrame,
 
     # Determine edge node IDs based on provided nodes or coordinate tuples
     if nodes is not None:
-        coord_map = {(geom.x, geom.y): idx for idx, geom in nodes.geometry.items()}
-        edges_df["u"] = edges_df.geometry.map(lambda g: coord_map[g.coords[0]])
-        edges_df["v"] = edges_df.geometry.map(lambda g: coord_map[g.coords[-1]])
+        # Use centroid coordinates for mapping
+        coord_map = {(geom.centroid.x, geom.centroid.y): idx for idx, geom in nodes.geometry.items()}
+        edges_df["u"] = edges_df.geometry.map(lambda g: coord_map.get(g.coords[0]))
+        edges_df["v"] = edges_df.geometry.map(lambda g: coord_map.get(g.coords[-1]))
     else:
         edges_df["u"] = edges_df.geometry.map(lambda g: g.coords[0])
         edges_df["v"] = edges_df.geometry.map(lambda g: g.coords[-1])
@@ -411,7 +419,7 @@ def gdf_to_nx(nodes: gpd.GeoDataFrame | None = None,
     Parameters
     ----------
     nodes : GeoDataFrame, optional
-        Point geometries for graph nodes; node attributes preserved.
+        Point or Polygon geometries for graph nodes; node attributes preserved.
     edges : GeoDataFrame
         LineString geometries for graph edges; edge attributes preserved.
     node_id_col : str, optional
@@ -426,7 +434,10 @@ def gdf_to_nx(nodes: gpd.GeoDataFrame | None = None,
     networkx.Graph
         Graph with 'crs', 'node_geom_cols', 'edge_geom_cols', node 'pos', and attributes.
     """
-    # Prepare and validate dataframes
+    # Validate GeoDataFrames first
+    _validate_gdf(nodes, edges)
+
+    # Prepare and standardize dataframes
     nodes, edges = _prepare_dataframes(nodes, edges, node_id_col, edge_id_col)
 
     # Initialize graph with metadata
@@ -452,9 +463,16 @@ def gdf_to_nx(nodes: gpd.GeoDataFrame | None = None,
     edges_df, edge_cols = _prepare_edge_dataframe(edges, nodes, keep_geom)
     _add_edges_to_graph(graph, edges_df, edge_cols)
 
-    # Ensure node positions exist for fallback
+    # Ensure node positions exist for fallback - use centroid for coordinate tuples
     if nodes is None:
-        pos = {node: node for node in graph.nodes()}
+        pos = {}
+        for node in graph.nodes():
+            if isinstance(node, tuple) and len(node) == 2:
+                # If node is already a coordinate tuple, use it directly
+                pos[node] = node
+            else:
+                # Fallback to node identifier as position
+                pos[node] = (0, 0)
         nx.set_node_attributes(graph, pos, "pos")
 
     return graph
@@ -938,7 +956,9 @@ def project_homogeneous_graph_from_heterogeneous(hetero_g: nx.Graph, meta_path: 
                 last = path[-1]
                 for nbr in hetero_g.neighbors(last):
                     if hetero_g.nodes[nbr].get("node_type") == level:
-                        next_paths.append((*path, nbr))
+                        new_path = list(path)
+                        new_path.append(nbr)
+                        next_paths.append(tuple(new_path))
             paths = next_paths
         for path in paths:
             u, v = path[0], path[-1]
