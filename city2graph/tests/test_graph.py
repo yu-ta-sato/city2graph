@@ -4,7 +4,6 @@ import contextlib
 from unittest.mock import patch
 
 import geopandas as gpd
-import networkx as nx
 import numpy as np
 import pytest
 import torch
@@ -24,7 +23,6 @@ from city2graph.graph import from_morphological_graph
 from city2graph.graph import heterogeneous_graph
 from city2graph.graph import homogeneous_graph
 from city2graph.graph import is_torch_available
-from city2graph.graph import to_networkx
 
 # ============================================================================
 # COMMON TEST FIXTURES
@@ -402,8 +400,8 @@ def test_homogeneous_graph_minimal_and_no_edges() -> None:
     assert data2.edge_attr.shape == (0, 0)  # No edge attributes
 
 
-def test_homogeneous_with_y_and_default_to_networkx() -> None:
-    """Test that homogeneous_graph with y labels works and to_networkx returns a valid graph."""
+def test_homogeneous_with_y_and_labels() -> None:
+    """Test that homogeneous_graph with y labels works correctly."""
     # Arrange: setup test data with labels
     nd = make_simple_nodes().copy()
     nd["y"] = [10, 20]
@@ -411,16 +409,10 @@ def test_homogeneous_with_y_and_default_to_networkx() -> None:
     # Act: create homogeneous graph with labels
     data = homogeneous_graph(nd, make_simple_edges(), "id", ["feat"], ["y"], "src", "dst", ["w"])
 
-    # Act: convert to NetworkX graph
-    G = to_networkx(data)
-
-    # Assert: verify NetworkX conversion and node attributes
-    assert isinstance(G, nx.Graph)
-
-    # Each node should have x (features) and pos (coordinates)
-    for _, attrs in G.nodes(data=True):
-        assert "x" in attrs
-        assert "pos" in attrs
+    # Assert: verify graph structure with labels
+    assert data.x.shape == (2, 1)  # 2 nodes, 1 feature
+    assert data.y.shape == (2, 1)  # 2 nodes, 1 label
+    assert data.edge_index.shape[1] == 2  # 2 edges
 
 
 def test_homogeneous_graph_import_error(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -437,8 +429,8 @@ def test_homogeneous_graph_import_error(monkeypatch: pytest.MonkeyPatch) -> None
     monkeypatch.setattr(gr, "TORCH_AVAILABLE", True)
 
 
-def test_heterogeneous_graph_and_to_networkx_behavior() -> None:
-    """Test that heterogeneous_graph creates a valid graph and to_networkx works as expected."""
+def test_heterogeneous_graph_basic_functionality() -> None:
+    """Test that heterogeneous_graph creates a valid graph."""
     # Arrange: setup test data with two node types
     na = make_simple_nodes()
     nb = make_simple_nodes().copy()
@@ -462,12 +454,9 @@ def test_heterogeneous_graph_and_to_networkx_behavior() -> None:
         edge_feature_cols={("A", "rel", "B"): ["w"]},
     )
 
-    # Act: convert to NetworkX
-    G = to_networkx(het)
-
     # Assert: verify heterogeneous graph structure
-    assert isinstance(G, nx.MultiDiGraph)
-    assert G.number_of_nodes() == 4  # 2 nodes from A + 2 nodes from B
+    assert hasattr(het, "node_types")
+    assert ("A", "rel", "B") in het.edge_types
 
 
 def test_heterogeneous_graph_default_mappings() -> None:
@@ -565,29 +554,6 @@ def test_from_morphological_graph_public_only() -> None:
     # Assert: should create valid homogeneous graph with public nodes
     assert hasattr(data, "edge_index")
     assert data.x.size(0) == 2
-
-
-def test_to_networkx_data_graph() -> None:
-    """Test that to_networkx converts a homogeneous graph data object to a NetworkX graph."""
-    # Arrange: create homogeneous graph data
-    data = homogeneous_graph(
-        make_simple_nodes(),
-        make_simple_edges(),
-        "id",
-        ["feat"],
-        None,
-        "src",
-        "dst",
-        None,
-    )
-
-    # Act: convert to NetworkX graph
-    G = to_networkx(data)
-
-    # Assert: verify conversion results
-    assert isinstance(G, nx.Graph)
-    assert set(G.nodes()) == {0, 1}
-    assert set(G.edges()) == {(0, 1), (1, 0)}
 
 
 def test_is_torch_available_final() -> None:
