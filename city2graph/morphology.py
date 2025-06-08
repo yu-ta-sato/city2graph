@@ -4,7 +4,6 @@ import logging
 
 import geopandas as gpd
 import libpysal
-import momepy
 import networkx as nx
 import numpy as np
 import pandas as pd

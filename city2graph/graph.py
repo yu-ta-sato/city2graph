@@ -29,11 +29,12 @@ Main Functions:
 """
 
 import logging
-import numpy as np
-import pandas as pd
+from typing import Any
+
 import geopandas as gpd
 import networkx as nx
-from typing import Any
+import numpy as np
+import pandas as pd
 from shapely.geometry import LineString
 from shapely.geometry import Point
 
@@ -534,7 +535,7 @@ def _create_linestring_geometries(
 
     # Create LineStrings using vectorized coordinate pairing
     coord_pairs = np.stack([src_coords, dst_coords], axis=1)
-    
+
     # Vectorized LineString creation - use map for better performance
     valid_geometries = list(map(LineString, coord_pairs))
 
@@ -629,7 +630,7 @@ def _build_homogeneous_graph(
             "mapping": id_mapping,
             "id_col": id_col_name,
             "original_ids": original_ids,
-        }
+        },
     }
     data._node_feature_cols = node_feature_cols or []
     data._node_label_cols = node_label_cols or []
@@ -854,21 +855,21 @@ def _get_node_ids(
     # Use unified _node_mappings structure for both homogeneous and heterogeneous
     if hasattr(data, "_node_mappings"):
         mapping_info = None
-        
+
         if is_hetero and node_type in data._node_mappings:
             # For heterogeneous graphs, use the specific node type mapping
             mapping_info = data._node_mappings[node_type]
         elif not is_hetero and "default" in data._node_mappings:
             # For homogeneous graphs, use the "default" mapping
             mapping_info = data._node_mappings["default"]
-        
+
         if mapping_info:
             if isinstance(mapping_info, dict) and "mapping" in mapping_info:
                 # New unified structure with metadata
                 mapping = mapping_info["mapping"]
                 id_col = mapping_info.get("id_col", "node_id")
                 original_ids = mapping_info.get("original_ids", list(range(num_nodes)))
-                
+
                 # Use original_ids directly to preserve order and values
                 if len(original_ids) >= num_nodes:
                     if id_col != "index":
@@ -965,18 +966,18 @@ def _reconstruct_node_gdf(
     index_names = None
 
     # Determine index values and names from stored mappings
-    if (hasattr(data, "_node_mappings") and 
-        ((not is_hetero and "default" in data._node_mappings) or 
+    if (hasattr(data, "_node_mappings") and
+        ((not is_hetero and "default" in data._node_mappings) or
          (is_hetero and node_type in data._node_mappings))):
-        
+
         mapping_key = "default" if not is_hetero else node_type
         mapping_info = data._node_mappings[mapping_key]
-        
+
         if isinstance(mapping_info, dict) and "id_col" in mapping_info and mapping_info.get("id_col") == "index":
             # Use original_ids as index values for reconstruction
             original_ids_from_mapping = mapping_info.get("original_ids", list(range(num_nodes)))
             index_values = original_ids_from_mapping[:num_nodes]
-        
+
         # Get stored index names
         if hasattr(data, "_node_index_names") and data._node_index_names:
             if is_hetero and node_type in data._node_index_names:
@@ -1316,7 +1317,7 @@ def pyg_to_gdf(
     _validate_pyg(data)
 
     # Check if heterogeneous
-    is_hetero = hasattr(data, "node_types") and hasattr(data, "edge_types")
+    is_hetero = isinstance(data, HeteroData)
 
     if is_hetero:
         # Handle HeteroData
@@ -1352,7 +1353,7 @@ def _add_node_geometry(graph: nx.Graph, data: Data | HeteroData, is_hetero: bool
                     valid_count = min(len(type_nodes), len(pos_data))
                     geometries = [Point(pos[0], pos[1]) for pos in pos_data[:valid_count]]
                     node_geom_pairs = list(zip(type_nodes[:valid_count], geometries, strict=False))
-                    
+
                     # Batch update using dictionary comprehension
                     geom_updates = {node: {"geometry": geom} for node, geom in node_geom_pairs}
                     nx.set_node_attributes(graph, geom_updates)
@@ -1365,7 +1366,7 @@ def _add_node_geometry(graph: nx.Graph, data: Data | HeteroData, is_hetero: bool
             valid_count = min(len(nodes_list), len(pos_data))
             geometries = [Point(pos[0], pos[1]) for pos in pos_data[:valid_count]]
             node_geom_pairs = list(zip(nodes_list[:valid_count], geometries, strict=False))
-            
+
             # Batch update using dictionary comprehension
             geom_updates = {node: {"geometry": geom} for node, geom in node_geom_pairs}
             nx.set_node_attributes(graph, geom_updates)
@@ -1379,7 +1380,7 @@ def _restore_node_ids(graph: nx.Graph, data: Data | HeteroData) -> nx.Graph:
 
         for node_type in data._node_mappings:
             mapping_info = data._node_mappings[node_type]
-            
+
             # Handle both new unified structure and legacy direct mapping
             if isinstance(mapping_info, dict) and "mapping" in mapping_info:
                 # New unified structure
@@ -1443,10 +1444,10 @@ def nx_to_pyg(
 
     # Convert to GeoDataFrames first using existing utils functions
     from .utils import nx_to_gdf
-    
+
     # Get nodes and edges GeoDataFrames
     nodes_gdf, edges_gdf = nx_to_gdf(graph, nodes=True, edges=True)
-    
+
     # Convert to PyG using existing function
     return gdf_to_pyg(
         nodes=nodes_gdf,
@@ -1461,30 +1462,30 @@ def _add_hetero_nodes_to_graph(graph: nx.Graph, data: HeteroData) -> dict[str, i
     """Add heterogeneous nodes to NetworkX graph and return node offsets."""
     node_offset = {}
     current_offset = 0
-    
+
     for node_type in data.node_types:
         node_offset[node_type] = current_offset
         num_nodes = data[node_type].num_nodes
-        
+
         # Get feature and label column names for this node type
         node_feature_cols = None
         if hasattr(data, "_node_feature_cols") and data._node_feature_cols:
             node_feature_cols = data._node_feature_cols.get(node_type)
-        
+
         node_label_cols = None
         if hasattr(data, "_node_label_cols") and data._node_label_cols:
             node_label_cols = data._node_label_cols.get(node_type)
-        
+
         # Add nodes with type information
         for i in range(num_nodes):
             node_id = current_offset + i
             attrs = {"node_type": node_type}
-            
+
             # Add position if available
             if hasattr(data[node_type], "pos") and data[node_type].pos is not None:
                 pos = data[node_type].pos[i].detach().cpu().numpy()
                 attrs["pos"] = tuple(float(p) for p in pos)
-            
+
             # Add features with original column names if available
             if hasattr(data[node_type], "x") and data[node_type].x is not None:
                 x = data[node_type].x[i].detach().cpu().numpy()
@@ -1497,7 +1498,7 @@ def _add_hetero_nodes_to_graph(graph: nx.Graph, data: HeteroData) -> dict[str, i
                     # Fallback to generic names
                     for j, feat in enumerate(x):
                         attrs[f"feat_{j}"] = float(feat)
-            
+
             # Add labels with original column names if available
             if hasattr(data[node_type], "y") and data[node_type].y is not None:
                 y = data[node_type].y[i].detach().cpu().numpy()
@@ -1510,11 +1511,11 @@ def _add_hetero_nodes_to_graph(graph: nx.Graph, data: HeteroData) -> dict[str, i
                     # Fallback to generic names
                     for j, label in enumerate(y):
                         attrs[f"label_{j}"] = float(label)
-            
+
             graph.add_node(node_id, **attrs)
-        
+
         current_offset += num_nodes
-    
+
     return node_offset
 
 
@@ -1522,21 +1523,21 @@ def _add_hetero_edges_to_graph(graph: nx.Graph, data: HeteroData, node_offset: d
     """Add heterogeneous edges to NetworkX graph."""
     for edge_type in data.edge_types:
         src_type, rel_type, dst_type = edge_type
-        
+
         if hasattr(data[edge_type], "edge_index") and data[edge_type].edge_index is not None:
             edge_index = data[edge_type].edge_index.detach().cpu().numpy()
-            
+
             # Get edge feature column names for this edge type
             edge_feature_cols = None
             if hasattr(data, "_edge_feature_cols") and data._edge_feature_cols:
                 edge_feature_cols = data._edge_feature_cols.get(edge_type)
-            
+
             for i in range(edge_index.shape[1]):
                 src_idx = int(edge_index[0, i]) + node_offset[src_type]
                 dst_idx = int(edge_index[1, i]) + node_offset[dst_type]
-                
+
                 edge_attrs = {"edge_type": rel_type}
-                
+
                 # Add edge features with original column names if available
                 if hasattr(data[edge_type], "edge_attr") and data[edge_type].edge_attr is not None:
                     edge_attr = data[edge_type].edge_attr[i].detach().cpu().numpy()
@@ -1549,22 +1550,22 @@ def _add_hetero_edges_to_graph(graph: nx.Graph, data: HeteroData, node_offset: d
                         # Fallback to generic names
                         for j, feat in enumerate(edge_attr):
                             edge_attrs[f"edge_feat_{j}"] = float(feat)
-                
+
                 graph.add_edge(src_idx, dst_idx, **edge_attrs)
 
 
 def _convert_hetero_pyg_to_nx(data: HeteroData) -> nx.Graph:
     """Convert heterogeneous PyG data to NetworkX graph."""
     graph = nx.Graph()
-    
+
     # Add metadata to indicate this is a heterogeneous graph
     graph.graph["crs"] = getattr(data, "crs", None)
     graph.graph["is_heterogeneous"] = True
-    
+
     # Store type information for reconstruction
     graph.graph["node_types"] = list(data.node_types)
     graph.graph["edge_types"] = list(data.edge_types)
-    
+
     # Store original mappings and metadata for reconstruction
     if hasattr(data, "_node_mappings"):
         graph.graph["_node_mappings"] = data._node_mappings
@@ -1580,16 +1581,16 @@ def _convert_hetero_pyg_to_nx(data: HeteroData) -> nx.Graph:
         graph.graph["_edge_index_names"] = data._edge_index_names
     if hasattr(data, "_edge_index_values"):
         graph.graph["_edge_index_values"] = data._edge_index_values
-    
+
     # Add nodes and get offsets
     node_offset = _add_hetero_nodes_to_graph(graph, data)
-    
+
     # Add edges
     _add_hetero_edges_to_graph(graph, data, node_offset)
-    
+
     # Store node offset for reconstruction
     graph.graph["node_offset"] = node_offset
-    
+
     return graph
 
 
@@ -1597,7 +1598,7 @@ def _add_homo_nodes_to_graph(graph: nx.Graph, data: Data) -> None:
     """Add homogeneous nodes to NetworkX graph."""
     node_feature_cols = getattr(data, "_node_feature_cols", None)
     node_label_cols = getattr(data, "_node_label_cols", None)
-    
+
     # Determine number of nodes properly
     num_nodes = 0
     if hasattr(data, "x") and data.x is not None:
@@ -1606,16 +1607,16 @@ def _add_homo_nodes_to_graph(graph: nx.Graph, data: Data) -> None:
         num_nodes = data.pos.size(0)
     elif hasattr(data, "y") and data.y is not None:
         num_nodes = data.y.size(0)
-    
+
     # Add nodes with preserved attribute names
     for i in range(num_nodes):
         attrs = {}
-        
+
         # Add position if available
         if hasattr(data, "pos") and data.pos is not None and i < data.pos.size(0):
             pos = data.pos[i].detach().cpu().numpy()
             attrs["pos"] = tuple(float(p) for p in pos)
-        
+
         # Add features with original column names if available
         if hasattr(data, "x") and data.x is not None and i < data.x.size(0):
             x = data.x[i].detach().cpu().numpy()
@@ -1628,7 +1629,7 @@ def _add_homo_nodes_to_graph(graph: nx.Graph, data: Data) -> None:
                 # Fallback to generic names
                 for j, feat in enumerate(x):
                     attrs[f"feat_{j}"] = float(feat)
-        
+
         # Add labels with original column names if available
         if hasattr(data, "y") and data.y is not None and i < data.y.size(0):
             y = data.y[i].detach().cpu().numpy()
@@ -1641,23 +1642,23 @@ def _add_homo_nodes_to_graph(graph: nx.Graph, data: Data) -> None:
                 # Fallback to generic names
                 for j, label in enumerate(y):
                     attrs[f"label_{j}"] = float(label)
-        
+
         graph.add_node(i, **attrs)
 
 
 def _add_homo_edges_to_graph(graph: nx.Graph, data: Data) -> None:
     """Add homogeneous edges to NetworkX graph."""
     edge_feature_cols = getattr(data, "_edge_feature_cols", None)
-    
+
     if hasattr(data, "edge_index") and data.edge_index is not None:
         edge_index = data.edge_index.detach().cpu().numpy()
-        
+
         for i in range(edge_index.shape[1]):
             src_idx = int(edge_index[0, i])
             dst_idx = int(edge_index[1, i])
-            
+
             edge_attrs = {}
-            
+
             # Add edge features with original column names if available
             if hasattr(data, "edge_attr") and data.edge_attr is not None and i < data.edge_attr.size(0):
                 edge_attr = data.edge_attr[i].detach().cpu().numpy()
@@ -1670,27 +1671,27 @@ def _add_homo_edges_to_graph(graph: nx.Graph, data: Data) -> None:
                     # Fallback to generic names
                     for j, feat in enumerate(edge_attr):
                         edge_attrs[f"edge_feat_{j}"] = float(feat)
-            
+
             graph.add_edge(src_idx, dst_idx, **edge_attrs)
 
 
 def _convert_homo_pyg_to_nx(data: Data) -> nx.Graph:
     """Convert homogeneous PyG data to NetworkX graph."""
     graph = nx.Graph()
-    
+
     # Add metadata
     graph.graph["crs"] = getattr(data, "crs", None)
-    
+
     # Add nodes and edges
     _add_homo_nodes_to_graph(graph, data)
     _add_homo_edges_to_graph(graph, data)
-    
+
     # Store index information for reconstruction
     if hasattr(data, "_node_index_names"):
         graph.graph["node_index_names"] = data._node_index_names
     if hasattr(data, "_edge_index_names"):
         graph.graph["edge_index_names"] = data._edge_index_names
-    
+
     return graph
 
 
@@ -1713,7 +1714,7 @@ def pyg_to_nx(data: Data | HeteroData) -> nx.Graph:
 
     _validate_pyg(data)
 
-    is_hetero = hasattr(data, "node_types") and hasattr(data, "edge_types")
+    is_hetero = isinstance(data, HeteroData)
 
     if is_hetero:
         return _convert_hetero_pyg_to_nx(data)
@@ -1735,7 +1736,7 @@ def _validate_pyg(data: Data | HeteroData) -> None:
         If required attributes are missing or inconsistent.
     """
     if not hasattr(data, "edge_index"):
-        is_hetero = hasattr(data, "node_types") and hasattr(data, "edge_types")
+        is_hetero = isinstance(data, HeteroData)
         if not is_hetero:
             msg = "PyG object must have edge_index attribute"
             raise ValueError(msg)

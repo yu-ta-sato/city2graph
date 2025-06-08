@@ -189,21 +189,25 @@ def _compute_nodes_within_distance(graph: nx.Graph,
                                    edge_attr: str,
                                    node_id_name: str) -> set[str | int]:
     """Compute all nodes within distance from any center point."""
-    nodes_within_distance = set()
+    # Convert center points to list for consistent processing
+    center_points_list = (center_points.tolist()
+                         if hasattr(center_points, "tolist")
+                         else list(center_points))
 
-    for point in center_points:
+    # Vectorized computation using list comprehensions
+    all_valid_nodes = []
+    for point in center_points_list:
         try:
             nearest_node = _get_nearest_node(point, nodes_gdf, node_id=node_id_name)
             distance_dict = nx.shortest_path_length(graph, nearest_node, weight=edge_attr)
 
-            # Add nodes within distance from this center
-            nodes_within_distance.update(
-                node_id for node_id, dist in distance_dict.items() if dist < distance
-            )
+            # Extract nodes within distance using list comprehension
+            valid_nodes = [node_id for node_id, dist in distance_dict.items() if dist < distance]
+            all_valid_nodes.extend(valid_nodes)
         except (nx.NetworkXNoPath, nx.NodeNotFound) as e:
             logger.warning("Could not compute paths from a center point: %s", e, stacklevel=2)
 
-    return nodes_within_distance
+    return set(all_valid_nodes)
 
 
 def _normalize_center_points(center_point: Point | gpd.GeoSeries | gpd.GeoDataFrame,
@@ -302,57 +306,38 @@ def filter_graph_by_distance(graph: gpd.GeoDataFrame | nx.Graph,
 
 def _validate_nodes_gdf(nodes: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
     """Validate and clean nodes GeoDataFrame for geometry quality."""
-    # Check if nodes is empty
     if nodes.empty:
         logger.warning("Validation: Nodes GeoDataFrame is empty")
         return nodes
 
     original_count = len(nodes)
-    nodes_clean = nodes.copy()
 
-    # Check for null geometries
-    null_mask = nodes_clean.geometry.isna()
+    # Create composite mask for all invalid conditions
+    null_mask = nodes.geometry.isna()
+    invalid_mask = ~nodes.geometry.is_valid
+    empty_mask = nodes.geometry.is_empty
+
+    # Check for centroid computation issues vectorized
+    try:
+        centroids = nodes.geometry.centroid
+        centroid_mask = centroids.isna()
+    except (AttributeError, ValueError, TypeError):
+        # Fallback: assume all centroids are valid initially
+        centroid_mask = pd.Series(data=False, index=nodes.index)
+
+    # Combine all masks - keep only valid geometries
+    valid_mask = ~(null_mask | invalid_mask | empty_mask | centroid_mask)
+    nodes_clean = nodes[valid_mask]
+
+    # Log removal statistics
     if null_mask.any():
-        null_count = null_mask.sum()
-        logger.warning("Validation: Removing %d nodes with null geometries", null_count)
-        nodes_clean = nodes_clean[~null_mask]
-
-    # Check for invalid geometries
-    if not nodes_clean.empty:
-        invalid_mask = ~nodes_clean.geometry.is_valid
-        if invalid_mask.any():
-            invalid_count = invalid_mask.sum()
-            logger.warning("Validation: Removing %d nodes with invalid geometries", invalid_count)
-            nodes_clean = nodes_clean[~invalid_mask]
-
-    # Check for empty geometries
-    if not nodes_clean.empty:
-        empty_mask = nodes_clean.geometry.is_empty
-        if empty_mask.any():
-            empty_count = empty_mask.sum()
-            logger.warning("Validation: Removing %d nodes with empty geometries", empty_count)
-            nodes_clean = nodes_clean[~empty_mask]
-
-    # Test if remaining geometries can provide a non-empty centroid
-    if not nodes_clean.empty:
-        try:
-            centroids = nodes_clean.geometry.centroid
-            centroid_issues = centroids.isna()
-            if centroid_issues.any():
-                centroid_count = centroid_issues.sum()
-                logger.warning("Validation: Removing %d nodes with invalid centroids", centroid_count)
-                nodes_clean = nodes_clean[~centroid_issues]
-        except (AttributeError, ValueError) as e:
-            logger.warning("Validation: Error computing centroids, removing problematic geometries: %s", e)
-            # Try to identify problematic geometries
-            valid_centroids = []
-            for idx, geom in nodes_clean.geometry.items():
-                try:
-                    _ = geom.centroid
-                    valid_centroids.append(idx)
-                except (AttributeError, ValueError):
-                    logger.warning("Validation: Skipping node %s with invalid geometry", idx)
-            nodes_clean = nodes_clean.loc[valid_centroids]
+        logger.warning("Validation: Removing %d nodes with null geometries", null_mask.sum())
+    if invalid_mask.any():
+        logger.warning("Validation: Removing %d nodes with invalid geometries", invalid_mask.sum())
+    if empty_mask.any():
+        logger.warning("Validation: Removing %d nodes with empty geometries", empty_mask.sum())
+    if centroid_mask.any():
+        logger.warning("Validation: Removing %d nodes with invalid centroids", centroid_mask.sum())
 
     removed_count = original_count - len(nodes_clean)
     if removed_count > 0:
@@ -363,49 +348,39 @@ def _validate_nodes_gdf(nodes: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
 
 def _validate_edges_gdf(edges: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
     """Validate and clean edges GeoDataFrame for geometry quality."""
-    # Check if edges is empty
     if edges.empty:
         logger.warning("Validation: Edges GeoDataFrame is empty")
         return edges
 
     original_count = len(edges)
-    edges_clean = edges.copy()
 
-    # Check for null geometries
-    null_mask = edges_clean.geometry.isna()
+    # Create composite mask for all invalid conditions
+    null_mask = edges.geometry.isna()
+    invalid_mask = ~edges.geometry.is_valid
+    empty_mask = edges.geometry.is_empty
+
+    # Check for valid geometry types vectorized
+    valid_geom_types = edges.geometry.apply(
+        lambda g: isinstance(g, (LineString, shapely.geometry.MultiLineString))
+        if g is not None else False,
+    )
+
+    # Combine all masks - keep only valid geometries
+    valid_mask = ~(null_mask | invalid_mask | empty_mask) & valid_geom_types
+    edges_clean = edges[valid_mask]
+
+    # Log removal statistics
     if null_mask.any():
-        null_count = null_mask.sum()
-        logger.warning("Validation: Removing %d edges with null geometries", null_count)
-        edges_clean = edges_clean[~null_mask]
-
-    # Check for invalid geometries
-    if not edges_clean.empty:
-        invalid_mask = ~edges_clean.geometry.is_valid
-        if invalid_mask.any():
-            invalid_count = invalid_mask.sum()
-            logger.warning("Validation: Removing %d edges with invalid geometries", invalid_count)
-            edges_clean = edges_clean[~invalid_mask]
-
-    # Check for empty geometries
-    if not edges_clean.empty:
-        empty_mask = edges_clean.geometry.is_empty
-        if empty_mask.any():
-            empty_count = empty_mask.sum()
-            logger.warning("Validation: Removing %d edges with empty geometries", empty_count)
-            edges_clean = edges_clean[~empty_mask]
-
-    # Validate geometry types
-    if not edges_clean.empty:
-        valid_geom_types = edges_clean.geometry.apply(
-            lambda g: isinstance(g, (LineString, shapely.geometry.MultiLineString)),
+        logger.warning("Validation: Removing %d edges with null geometries", null_mask.sum())
+    if invalid_mask.any():
+        logger.warning("Validation: Removing %d edges with invalid geometries", invalid_mask.sum())
+    if empty_mask.any():
+        logger.warning("Validation: Removing %d edges with empty geometries", empty_mask.sum())
+    if not valid_geom_types.all():
+        logger.warning(
+            "Validation: Removing %d edges with invalid geometry types "
+            "(not LineString or MultiLineString)", (~valid_geom_types).sum(),
         )
-        if not valid_geom_types.all():
-            invalid_count = (~valid_geom_types).sum()
-            logger.warning(
-                "Validation: Removing %d edges with invalid geometry types "
-                "(not LineString or MultiLineString)", invalid_count,
-            )
-            edges_clean = edges_clean[valid_geom_types]
 
     removed_count = original_count - len(edges_clean)
     if removed_count > 0:
@@ -522,24 +497,28 @@ def _add_edges_to_graph(graph: nx.Graph,
     graph.add_edges_from(graph_with_edges.edges(data=True))
 
 
-def gdf_to_nx(nodes: gpd.GeoDataFrame | None = None,
-              edges: gpd.GeoDataFrame | None = None,
-              node_id_col: str | None = None,
-              edge_id_col: str | None = None,
+def gdf_to_nx(nodes: gpd.GeoDataFrame | dict[str, gpd.GeoDataFrame] | None = None,
+              edges: gpd.GeoDataFrame | dict[tuple[str, str, str], gpd.GeoDataFrame] | None = None,
+              node_id_col: str | dict[str, str] | None = None,
+              edge_id_col: str | dict[tuple[str, str, str], str] | None = None,
               keep_geom: bool = True) -> nx.Graph:
     """
     Convert GeoDataFrames of nodes and edges to a NetworkX graph.
 
     Parameters
     ----------
-    nodes : GeoDataFrame, optional
+    nodes : GeoDataFrame or dict[str, GeoDataFrame], optional
         Point or Polygon geometries for graph nodes; node attributes preserved.
-    edges : GeoDataFrame
+        For heterogeneous graphs, provide a dict mapping node types to GeoDataFrames.
+    edges : GeoDataFrame or dict[tuple[str, str, str], GeoDataFrame], optional
         LineString geometries for graph edges; edge attributes preserved.
-    node_id_col : str, optional
+        For heterogeneous graphs, provide a dict mapping edge types to GeoDataFrames.
+    node_id_col : str or dict[str, str], optional
         Column name to use for node identifiers; if None, uses index.
-    edge_id_col : str, optional
+        For heterogeneous graphs, provide a dict mapping node types to column names.
+    edge_id_col : str or dict[tuple[str, str, str], str], optional
         Column name to use for edge identifiers; if None, uses index.
+        For heterogeneous graphs, provide a dict mapping edge types to column names.
     keep_geom : bool, default=True
         If True, include original geometry columns on edges.
 
@@ -547,7 +526,245 @@ def gdf_to_nx(nodes: gpd.GeoDataFrame | None = None,
     -------
     networkx.Graph
         Graph with 'crs', 'node_geom_cols', 'edge_geom_cols', node 'pos', and attributes.
+        For heterogeneous graphs, includes type information and metadata.
     """
+    # Handle heterogeneous graphs (dictionaries of GeoDataFrames)
+    if isinstance(nodes, dict) or isinstance(edges, dict):
+        return _gdf_to_nx_heterogeneous(nodes, edges, node_id_col, edge_id_col, keep_geom)
+
+    # Handle homogeneous graphs (single GeoDataFrames)
+    return _gdf_to_nx_homogeneous(nodes, edges, node_id_col, edge_id_col, keep_geom)
+
+
+def _gdf_to_nx_heterogeneous(
+    nodes_dict: dict[str, gpd.GeoDataFrame] | None,
+    edges_dict: dict[tuple[str, str, str], gpd.GeoDataFrame] | None,
+    node_id_cols: dict[str, str] | str | None,
+    edge_id_cols: dict[tuple[str, str, str], str] | str | None,
+    keep_geom: bool,
+) -> nx.Graph:
+    """Convert heterogeneous GeoDataFrames to NetworkX graph."""
+    # Initialize graph with heterogeneous metadata
+    graph = nx.Graph()
+
+    # Set metadata for heterogeneous graph
+    _set_graph_metadata(graph, nodes_dict, edges_dict, is_hetero=True)
+
+    # Process nodes and edges
+    _process_hetero_nodes(graph, nodes_dict)
+    _process_hetero_edges(graph, edges_dict, edge_id_cols, keep_geom, nodes_dict)
+
+    return graph
+
+
+def _set_graph_metadata(
+    graph: nx.Graph,
+    nodes: gpd.GeoDataFrame | dict[str, gpd.GeoDataFrame] | None,
+    edges: gpd.GeoDataFrame | dict[tuple[str, str, str], gpd.GeoDataFrame] | None,
+    is_hetero: bool = False,
+    node_id_col: str | None = None,
+    edge_id_col: str | None = None,
+) -> None:
+    """Set metadata for both homogeneous and heterogeneous graphs."""
+    graph.graph["is_hetero"] = is_hetero
+
+    if is_hetero:
+        # Heterogeneous graph metadata
+        if isinstance(nodes, dict):
+            graph.graph["node_types"] = list(nodes.keys())
+        if isinstance(edges, dict):
+            graph.graph["edge_types"] = list(edges.keys())
+
+        # Get CRS from first available GeoDataFrame
+        crs = None
+        if isinstance(nodes, dict) and nodes:
+            crs = next(iter(nodes.values())).crs
+        elif isinstance(edges, dict) and edges:
+            crs = next(iter(edges.values())).crs
+        graph.graph["crs"] = crs
+    else:
+        # Homogeneous graph metadata
+        crs = nodes.crs if nodes is not None else edges.crs if edges is not None else None
+        graph.graph.update({
+            "crs": crs,
+            "node_index_col": node_id_col,
+            "edge_index_col": edge_id_col,
+        })
+
+        # Store original index information for reconstruction
+        if nodes is not None:
+            graph.graph["node_geom_cols"] = list(nodes.select_dtypes(include=["geometry"]).columns)
+            graph.graph["node_index_names"] = nodes.index.names if hasattr(nodes.index, "names") else None
+
+        if edges is not None:
+            graph.graph["edge_geom_cols"] = list(edges.select_dtypes(include=["geometry"]).columns)
+            graph.graph["edge_index_names"] = edges.index.names if hasattr(edges.index, "names") else None
+
+
+def _process_hetero_nodes(
+    graph: nx.Graph,
+    nodes_dict: dict[str, gpd.GeoDataFrame] | None,
+) -> dict[str, int]:
+    """Process nodes for heterogeneous graph and return offset mapping."""
+    node_offset = {}
+    current_offset = 0
+
+    if not nodes_dict:
+        return node_offset
+
+    for node_type, node_gdf_orig in nodes_dict.items():
+        # Validate and clean this node type
+        node_gdf_validated, _ = _validate_gdf(node_gdf_orig, None)
+        if node_gdf_validated is None or node_gdf_validated.empty:
+            continue
+
+        # Store offset for this node type
+        node_offset[node_type] = current_offset
+
+        # Add nodes with type information
+        _add_hetero_nodes_to_graph(graph, node_gdf_validated, node_type, current_offset)
+        current_offset += len(node_gdf_validated)
+
+    return node_offset
+
+
+def _add_hetero_nodes_to_graph(
+    graph: nx.Graph, node_gdf: gpd.GeoDataFrame, node_type: str, offset: int,
+) -> None:
+    """Add heterogeneous nodes to graph."""
+    # Vectorized approach to avoid iterrows()
+    centroids = node_gdf.geometry.centroid
+    node_data = node_gdf.drop(columns="geometry")
+
+    # Batch process all nodes
+    nodes_to_add = []
+    for idx, orig_idx in enumerate(node_gdf.index):
+        node_id = offset + idx
+
+        # Store all attributes including type and original index
+        node_attrs = node_data.iloc[idx].to_dict()
+        node_attrs["node_type"] = node_type
+        node_attrs["_original_index"] = orig_idx
+        node_attrs["pos"] = (centroids.iloc[idx].x, centroids.iloc[idx].y)
+
+        nodes_to_add.append((node_id, node_attrs))
+
+    # Add all nodes at once
+    graph.add_nodes_from(nodes_to_add)
+
+
+def _process_hetero_edges(
+    graph: nx.Graph,
+    edges_dict: dict[tuple[str, str, str], gpd.GeoDataFrame] | None,
+    edge_id_cols: dict[tuple[str, str, str], str] | str | None,
+    keep_geom: bool,
+    nodes_dict: dict[str, gpd.GeoDataFrame] | None,
+) -> None:
+    """Process edges for heterogeneous graph."""
+    if not edges_dict:
+        return
+
+    for edge_type, edge_gdf_orig in edges_dict.items():
+        # Validate and clean this edge type
+        _, edge_gdf_validated = _validate_gdf(None, edge_gdf_orig)
+        if edge_gdf_validated is None or edge_gdf_validated.empty:
+            continue
+
+        # Add edges with type information
+        _add_hetero_edges_to_graph(
+            graph, edge_gdf_validated, edge_type, keep_geom, nodes_dict,
+        )
+
+
+def _add_hetero_edges_to_graph(
+    graph: nx.Graph,
+    edge_gdf: gpd.GeoDataFrame,
+    edge_type: tuple[str, str, str],
+    keep_geom: bool,
+    nodes_dict: dict[str, gpd.GeoDataFrame] | None,  # noqa: ARG001
+) -> None:
+    """Add heterogeneous edges to graph."""
+    src_type, rel_type, dst_type = edge_type
+
+    # Create reverse lookup for nodes by type and original index
+    node_lookup = {}
+    for node_id, node_data in graph.nodes(data=True):
+        node_type = node_data.get("node_type")
+        orig_idx = node_data.get("_original_index")
+        if node_type and orig_idx is not None:
+            if node_type not in node_lookup:
+                node_lookup[node_type] = {}
+            node_lookup[node_type][orig_idx] = node_id
+
+    # Process all edges at once
+    edges_to_add = []
+    for orig_idx, row in edge_gdf.iterrows():
+        # Find source and target nodes by matching edge index to node indices
+        if isinstance(orig_idx, tuple) and len(orig_idx) == 2:
+            # MultiIndex case: (source_node_idx, target_node_idx)
+            src_orig_idx, dst_orig_idx = orig_idx
+
+            # Find corresponding nodes using lookup
+            u = node_lookup.get(src_type, {}).get(src_orig_idx)
+            v = node_lookup.get(dst_type, {}).get(dst_orig_idx)
+
+            if u is not None and v is not None:
+                # Store edge attributes
+                edge_attrs = row.drop("geometry").to_dict() if not keep_geom else row.to_dict()
+                edge_attrs["edge_type"] = rel_type
+                edge_attrs["_original_edge_index"] = orig_idx
+
+                edges_to_add.append((u, v, edge_attrs))
+
+    # Add all edges at once
+    graph.add_edges_from(edges_to_add)
+
+
+def _find_hetero_edge_nodes(
+    graph: nx.Graph,
+    src_type: str,
+    dst_type: str,
+    src_orig_idx: int,
+    dst_orig_idx: int,
+    nodes_dict: dict[str, gpd.GeoDataFrame] | None,
+) -> tuple[int | None, int | None]:
+    """Find source and target nodes for heterogeneous edge."""
+    u = v = None
+
+    if not nodes_dict or src_type not in nodes_dict or dst_type not in nodes_dict:
+        return u, v
+
+    # Extract all node data at once for vectorized filtering
+    nodes_data = dict(graph.nodes(data=True))
+
+    # Vectorized search for both source and target nodes
+    for node_id, node_data in nodes_data.items():
+        node_type = node_data.get("node_type")
+        orig_idx = node_data.get("_original_index")
+
+        # Check for source node
+        if u is None and node_type == src_type and orig_idx == src_orig_idx:
+            u = node_id
+
+        # Check for target node
+        if v is None and node_type == dst_type and orig_idx == dst_orig_idx:
+            v = node_id
+
+        # Early exit if both found
+        if u is not None and v is not None:
+            break
+
+    return u, v
+
+
+def _gdf_to_nx_homogeneous(
+    nodes: gpd.GeoDataFrame | None,
+    edges: gpd.GeoDataFrame | None,
+    node_id_col: str | None,
+    edge_id_col: str | None,
+    keep_geom: bool,
+) -> nx.Graph:
+    """Convert homogeneous GeoDataFrames to NetworkX graph (original implementation)."""
     # Validate GeoDataFrames first
     nodes, edges = _validate_gdf(nodes, edges)
 
@@ -557,73 +774,101 @@ def gdf_to_nx(nodes: gpd.GeoDataFrame | None = None,
 
     # Initialize graph with metadata
     graph = nx.Graph()
-    crs = nodes.crs if nodes is not None else edges.crs
-    graph.graph.update({
-        "crs": crs,
-        "node_index_col": node_id_col,
-        "edge_index_col": edge_id_col,
-    })
 
-    # Store original index information for reconstruction
-    if nodes is not None:
-        graph.graph["node_geom_cols"] = list(nodes.select_dtypes(include=["geometry"]).columns)
-        graph.graph["node_index_names"] = nodes.index.names if hasattr(nodes.index, "names") else None
-
-    if edges is not None:
-        graph.graph["edge_geom_cols"] = list(edges.select_dtypes(include=["geometry"]).columns)
-        graph.graph["edge_index_names"] = edges.index.names if hasattr(edges.index, "names") else None
+    # Set metadata for homogeneous graph
+    _set_graph_metadata(graph, nodes, edges, is_hetero=False, node_id_col=node_id_col, edge_id_col=edge_id_col)
 
     # Add nodes with original index information
     if nodes is not None:
-        for idx, (node_idx, row) in enumerate(nodes.iterrows()):
-            # Use sequential ID for NetworkX node
-            node_id = idx
+        # Vectorized node processing - avoid iterrows()
+        centroids = nodes.geometry.centroid
+        node_data = nodes.drop(columns="geometry")
 
-            # Store all node attributes including original index
-            node_attrs = row.drop("geometry").to_dict()
-            node_attrs["_original_index"] = node_idx
+        # Create node attributes dictionary efficiently
+        node_attrs_dict = {}
+        for idx, orig_idx in enumerate(nodes.index):
+            attrs = node_data.iloc[idx].to_dict()
+            attrs["_original_index"] = orig_idx
+            attrs["pos"] = (centroids.iloc[idx].x, centroids.iloc[idx].y)
+            node_attrs_dict[idx] = attrs
 
-            # Add position from geometry centroid
-            node_attrs["pos"] = (row.geometry.centroid.x, row.geometry.centroid.y)
+        # Add all nodes with attributes at once
+        graph.add_nodes_from(node_attrs_dict.items())
 
-            graph.add_node(node_id, **node_attrs)
-
-    # Add edges with original index information
-    for _, (orig_idx, row) in enumerate(edges.iterrows()):
-        # Determine source and target nodes
-        if nodes is not None:
-            # Find nodes by coordinate matching
-            start_coord = row.geometry.coords[0]
-            end_coord = row.geometry.coords[-1]
-
-            # Find matching nodes by proximity to edge endpoints
-            u = v = None
-            for node_id, node_data in graph.nodes(data=True):
-                node_pos = node_data["pos"]
-                # Check if node is close to start or end of edge
-                if abs(node_pos[0] - start_coord[0]) < 1e-10 and abs(node_pos[1] - start_coord[1]) < 1e-10:
-                    u = node_id
-                elif abs(node_pos[0] - end_coord[0]) < 1e-10 and abs(node_pos[1] - end_coord[1]) < 1e-10:
-                    v = node_id
-        else:
-            # Use coordinate tuples as node IDs
-            u = row.geometry.coords[0]
-            v = row.geometry.coords[-1]
-
-            # Add nodes if they don't exist
-            if not graph.has_node(u):
-                graph.add_node(u, pos=u)
-            if not graph.has_node(v):
-                graph.add_node(v, pos=v)
-
-        if u is not None and v is not None:
-            # Store edge attributes including original index
-            edge_attrs = row.drop("geometry").to_dict() if not keep_geom else row.to_dict()
-            edge_attrs["_original_edge_index"] = orig_idx
-
-            graph.add_edge(u, v, **edge_attrs)
+    # Process edges efficiently
+    _process_homogeneous_edges(graph, edges, nodes, keep_geom)
 
     return graph
+
+
+def _process_homogeneous_edges(
+    graph: nx.Graph,
+    edges: gpd.GeoDataFrame,
+    nodes: gpd.GeoDataFrame | None,
+    keep_geom: bool,
+) -> None:
+    """Process edges for homogeneous graph efficiently."""
+    if nodes is not None:
+        # Create coordinate to node ID mapping for fast lookup
+        coord_to_node = {node_data["pos"]: node_id
+                        for node_id, node_data in graph.nodes(data=True)}
+
+        # Vectorized edge coordinate extraction
+        start_coords = edges.geometry.apply(lambda g: g.coords[0])
+        end_coords = edges.geometry.apply(lambda g: g.coords[-1])
+
+        # Map coordinates to node IDs vectorized
+        u_nodes = start_coords.map(coord_to_node)
+        v_nodes = end_coords.map(coord_to_node)
+
+        # Filter out edges where nodes weren't found
+        valid_mask = u_nodes.notna() & v_nodes.notna()
+        valid_edges = edges[valid_mask]
+        valid_u = u_nodes[valid_mask]
+        valid_v = v_nodes[valid_mask]
+
+        # Prepare edge attributes
+        if keep_geom:
+            edge_attrs_data = valid_edges.to_dict("records")
+        else:
+            edge_attrs_data = valid_edges.drop(columns=["geometry"]).to_dict("records")
+
+        # Add original edge indices vectorized
+        for i, orig_idx in enumerate(valid_edges.index):
+            edge_attrs_data[i]["_original_edge_index"] = orig_idx
+
+        # Create edges to add
+        edges_to_add = [(valid_u.iloc[i], valid_v.iloc[i], edge_attrs_data[i])
+                       for i in range(len(valid_edges))]
+
+        # Add all edges at once
+        graph.add_edges_from(edges_to_add)
+    else:
+        # Use coordinate tuples as node IDs - vectorized approach
+        start_coords = edges.geometry.apply(lambda g: g.coords[0])
+        end_coords = edges.geometry.apply(lambda g: g.coords[-1])
+
+        # Get unique nodes
+        all_coords = pd.concat([start_coords, end_coords]).unique()
+        nodes_to_add = {coord: {"pos": coord} for coord in all_coords}
+
+        # Prepare edge attributes vectorized
+        if keep_geom:
+            edge_attrs_data = edges.to_dict("records")
+        else:
+            edge_attrs_data = edges.drop(columns=["geometry"]).to_dict("records")
+
+        # Add original edge indices vectorized
+        for i, orig_idx in enumerate(edges.index):
+            edge_attrs_data[i]["_original_edge_index"] = orig_idx
+
+        # Create edges to add
+        edges_to_add = [(start_coords.iloc[i], end_coords.iloc[i], edge_attrs_data[i])
+                       for i in range(len(edges))]
+
+        # Add all nodes and edges at once
+        graph.add_nodes_from(nodes_to_add.items())
+        graph.add_edges_from(edges_to_add)
 
 
 
@@ -643,67 +888,68 @@ def _validate_nx(graph: nx.Graph, nodes: bool = False) -> nx.Graph:
         msg = "Missing CRS in graph attributes. Set 'crs' in graph.graph."
         raise ValueError(msg)
 
-    pos = nx.get_node_attributes(clean_graph, "pos")
+    # Validate and clean node positions
+    clean_graph = _validate_node_positions(clean_graph, nodes)
 
-    # Clean invalid node positions
-    nodes_to_remove = []
-    if pos:
-        for node_id, position in pos.items():
-            if not isinstance(position, (tuple, list)) or len(position) < 2:
-                logger.warning("Validation: Removing node %s with invalid position format: %s",
-                             node_id, position)
-                nodes_to_remove.append(node_id)
-                continue
-            if not all(isinstance(coord, (int, float)) for coord in position[:2]):
-                logger.warning("Validation: Removing node %s with non-numeric coordinates: %s",
-                             node_id, position)
-                nodes_to_remove.append(node_id)
-
-    # Remove invalid nodes
-    for node_id in nodes_to_remove:
-        clean_graph.remove_node(node_id)
-
-    if nodes_to_remove:
-        logger.warning("Validation: Removed %d nodes with invalid positions",
-                     len(nodes_to_remove))
-
-    # Validate node positions when needed
-    if nodes and not nx.get_node_attributes(clean_graph, "pos"):
-        logger.warning("Validation: Missing 'pos' attribute for nodes")
-
-    # For edges, validate geometry or position requirements
+    # Validate edges if needed
     if not nodes:
-        # Check for isolated nodes if validating for edges
-        if clean_graph.number_of_edges() == 0:
-            logger.warning("Validation: Graph has no edges")
-            return clean_graph
-
-        # Check if we have either geometry or pos for creating LineStrings
-        has_geometry = any(attrs.get("geometry") is not None
-                          for _, _, attrs in clean_graph.edges(data=True))
-        updated_pos = nx.get_node_attributes(clean_graph, "pos")
-
-        if not has_geometry and not updated_pos:
-            logger.warning("Validation: Missing edge geometry and node positions")
-
-        # Clean edges that reference non-existent nodes
-        edges_to_remove = []
-        for u, v, _ in clean_graph.edges(data=True):
-            if not clean_graph.has_node(u) or not clean_graph.has_node(v):
-                logger.warning("Validation: Removing edge (%s, %s) that references non-existent nodes",
-                             u, v)
-                edges_to_remove.append((u, v))
-
-        # Remove invalid edges
-        for u, v in edges_to_remove:
-            if clean_graph.has_edge(u, v):
-                clean_graph.remove_edge(u, v)
-
-        if edges_to_remove:
-            logger.warning("Validation: Removed %d edges referencing non-existent nodes",
-                         len(edges_to_remove))
+        clean_graph = _validate_graph_edges(clean_graph)
 
     return clean_graph
+
+
+def _validate_node_positions(graph: nx.Graph, nodes: bool) -> nx.Graph:
+    """Validate and clean node positions in the graph."""
+    pos = nx.get_node_attributes(graph, "pos")
+
+    if not pos:
+        if nodes:
+            logger.warning("Validation: Missing 'pos' attribute for nodes")
+        return graph
+
+    # Vectorized position validation
+    invalid_nodes = [node_id for node_id, position in pos.items()
+                    if not _is_valid_position(position)]
+
+    # Remove invalid nodes in batch
+    if invalid_nodes:
+        graph.remove_nodes_from(invalid_nodes)
+        logger.warning("Validation: Removed %d nodes with invalid positions", len(invalid_nodes))
+
+    return graph
+
+
+def _is_valid_position(position: tuple | list) -> bool:
+    """Check if a position is valid."""
+    if not isinstance(position, (tuple, list)) or len(position) < 2:
+        return False
+    return all(isinstance(coord, (int, float)) for coord in position[:2])
+
+
+def _validate_graph_edges(graph: nx.Graph) -> nx.Graph:
+    """Validate edges in the graph."""
+    if graph.number_of_edges() == 0:
+        logger.warning("Validation: Graph has no edges")
+        return graph
+
+    # Check for geometry or position availability
+    has_geometry = any(attrs.get("geometry") is not None
+                      for _, _, attrs in graph.edges(data=True))
+    pos = nx.get_node_attributes(graph, "pos")
+
+    if not has_geometry and not pos:
+        logger.warning("Validation: Missing edge geometry and node positions")
+
+    # Find edges that reference non-existent nodes
+    invalid_edges = [(u, v) for u, v in graph.edges()
+                     if not graph.has_node(u) or not graph.has_node(v)]
+
+    # Remove invalid edges in batch
+    if invalid_edges:
+        graph.remove_edges_from(invalid_edges)
+        logger.warning("Validation: Removed %d edges referencing non-existent nodes", len(invalid_edges))
+
+    return graph
 
 
 def _create_nodes_gdf_from_graph(graph: nx.Graph) -> gpd.GeoDataFrame:
@@ -712,20 +958,21 @@ def _create_nodes_gdf_from_graph(graph: nx.Graph) -> gpd.GeoDataFrame:
     crs = graph.graph.get("crs")
     node_geom_cols = graph.graph.get("node_geom_cols", [])
 
-    # Extract nodes with original index information
+    if not graph.nodes():
+        return gpd.GeoDataFrame(columns=["geometry"], crs=crs)
+
+    # Extract nodes with original index information - vectorized approach
+    node_data = dict(graph.nodes(data=True))
+
+    # Extract original indices and records in vectorized manner
+    original_indices = [attrs.get("_original_index", nid) for nid, attrs in node_data.items()]
+
+    # Build records without loops
     records = []
-    original_indices = []
-
-    for nid, attrs in graph.nodes(data=True):
-        # Get original index if stored, otherwise use node ID
-        original_index = attrs.get("_original_index", nid)
-        original_indices.append(original_index)
-
-        # Create record without the original index marker
-        record = {
-            **{k: v for k, v in attrs.items() if k not in ["pos", "_original_index"]},
-            "geometry": Point(*pos[nid]) if isinstance(pos[nid], (tuple, list)) else Point(pos[nid], 0),
-        }
+    for nid, attrs in node_data.items():
+        record = {k: v for k, v in attrs.items() if k not in ["pos", "_original_index"]}
+        pos_val = pos.get(nid, (0, 0))
+        record["geometry"] = Point(*pos_val) if isinstance(pos_val, (tuple, list)) else Point(pos_val, 0)
         records.append(record)
 
     gdf = gpd.GeoDataFrame(records, index=original_indices, crs=crs)
@@ -751,21 +998,21 @@ def _create_edges_gdf_from_graph(graph: nx.Graph) -> gpd.GeoDataFrame:
     crs = graph.graph.get("crs")
     edge_geom_cols = graph.graph.get("edge_geom_cols", [])
 
-    # Extract edges with original index information
-    records = []
-    original_edge_indices = []
+    if graph.number_of_edges() == 0:
+        return gpd.GeoDataFrame(columns=["geometry"], crs=crs)
 
-    for u, v, attrs in graph.edges(data=True):
-        # Get original edge index if stored
-        original_edge_index = attrs.get("_original_edge_index")
-        if original_edge_index is not None:
-            original_edge_indices.append(original_edge_index)
-        else:
-            # Fallback to edge tuple
-            original_edge_indices.append((u, v))
+    # Extract all edge data at once
+    edge_data = list(graph.edges(data=True))
 
-        # Create record without the original index marker and without u/v columns
-        record = {
+    # Vectorized extraction of indices and records
+    original_edge_indices = [
+        attrs.get("_original_edge_index", (u, v))
+        for u, v, attrs in edge_data
+    ]
+
+    # Vectorized record creation
+    records = [
+        {
             **{k: v for k, v in attrs.items() if k not in ["_original_edge_index"]},
             "geometry": (
                 attrs.get("geometry")
@@ -773,7 +1020,8 @@ def _create_edges_gdf_from_graph(graph: nx.Graph) -> gpd.GeoDataFrame:
                 else LineString([pos[u], pos[v]])
             ),
         }
-        records.append(record)
+        for u, v, attrs in edge_data
+    ]
 
     # Create GeoDataFrame with original indices
     if original_edge_indices:
@@ -809,7 +1057,8 @@ def nx_to_gdf(
     G: nx.Graph,
     nodes: bool = True,
     edges: bool = True,
-) -> gpd.GeoDataFrame | tuple[gpd.GeoDataFrame, gpd.GeoDataFrame] | tuple[dict[str, gpd.GeoDataFrame], dict[tuple[str, str, str], gpd.GeoDataFrame]]:
+) -> (gpd.GeoDataFrame | tuple[gpd.GeoDataFrame, gpd.GeoDataFrame] |
+      tuple[dict[str, gpd.GeoDataFrame], dict[tuple[str, str, str], gpd.GeoDataFrame]]):
     """
     Convert a NetworkX graph to a GeoDataFrame for nodes or edges.
 
@@ -836,12 +1085,12 @@ def nx_to_gdf(
         If required 'pos' or geometry attributes are missing, or if neither flag is set.
     """
     # Check if this is a heterogeneous graph
-    is_heterogeneous = G.graph.get("is_heterogeneous", False)
-    
-    if is_heterogeneous:
+    is_hetero = G.graph.get("is_hetero", False)
+
+    if is_hetero:
         # Handle heterogeneous graph reconstruction
         return _reconstruct_heterogeneous_gdfs(G, nodes=nodes, edges=edges)
-    
+
     # Both requested: return node and edge frames via separate calls
     if nodes and edges:
         nodes_gdf = nx_to_gdf(G, nodes=True, edges=False)
@@ -942,13 +1191,20 @@ def _extract_node_connections(dual_graph: nx.Graph,
     dict
         Dictionary mapping node IDs to lists of connected node IDs
     """
-    # Extract connections using dictionary comprehension
+    # Extract connections using vectorized operations
     connections = {}
-    for node in dual_graph.nodes():
-        node_id = dual_graph.nodes[node].get(id_col, node)
-        connections[node_id] = [
-            dual_graph.nodes[n].get(id_col, n) for n in dual_graph.neighbors(node)
+
+    # Get all nodes with their data at once
+    nodes_data = dict(dual_graph.nodes(data=True))
+
+    # Vectorized connection extraction using dictionary comprehension
+    connections = {
+        nodes_data[node].get(id_col, node): [
+            nodes_data[neighbor].get(id_col, neighbor)
+            for neighbor in dual_graph.neighbors(node)
         ]
+        for node in dual_graph.nodes()
+    }
 
     return connections
 
@@ -986,33 +1242,36 @@ def _find_additional_connections(line_gdf: gpd.GeoDataFrame,
     if id_col not in line_gdf.columns:
         line_gdf[id_col] = line_gdf.index
 
-    # Extract endpoints vectorized
-    endpoints_data = []
+    # Filter to only LineString geometries
+    linestring_mask = line_gdf.geometry.apply(
+        lambda g: isinstance(g, shapely.geometry.LineString),
+    )
+    valid_lines = line_gdf[linestring_mask]
 
-    # This part builds a list of endpoints for each linestring
-    for idx, row in line_gdf.iterrows():
-        if not isinstance(row.geometry, shapely.geometry.LineString):
-            continue
+    if valid_lines.empty:
+        return connections
 
-        coords = list(row.geometry.coords)
+    # Extract start and end points vectorized
+    start_points = valid_lines.geometry.apply(lambda g: Point(g.coords[0]))
+    end_points = valid_lines.geometry.apply(lambda g: Point(g.coords[-1]))
 
-        # Safely get the ID value, using index if column doesn't exist
-        id_value = row[id_col] if id_col in row.index else idx
+    # Get valid indices and IDs
+    valid_indices = valid_lines.index
+    valid_ids = [valid_lines.loc[idx, id_col] if id_col in valid_lines.columns
+                 else idx for idx in valid_indices]
 
-        endpoints_data.extend(
-            [
-                {
-                    "line_idx": idx,
-                    id_col: id_value,
-                    "endpoint": Point(coords[0]),
-                },
-                {
-                    "line_idx": idx,
-                    id_col: id_value,
-                    "endpoint": Point(coords[-1]),
-                },
-            ],
-        )
+    # Create endpoints data efficiently using vectorized operations
+    start_points_list = start_points.tolist()
+    end_points_list = end_points.tolist()
+    indices_list = valid_indices.tolist()
+
+    # Create endpoint records vectorized
+    start_data = [{"line_idx": idx, id_col: id_val, "endpoint": pt}
+                  for idx, id_val, pt in zip(indices_list, valid_ids, start_points_list, strict=False)]
+    end_data = [{"line_idx": idx, id_col: id_val, "endpoint": pt}
+                for idx, id_val, pt in zip(indices_list, valid_ids, end_points_list, strict=False)]
+
+    endpoints_data = start_data + end_data
 
     if not endpoints_data:
         return connections
@@ -1182,16 +1441,23 @@ def create_heterogeneous_graph(graphs: dict[str, nx.Graph]) -> nx.MultiDiGraph:
     Each input graph's nodes and edges will be added with "node_type" and "edge_type" attributes.
     """
     G = nx.MultiDiGraph()
+
+    # Vectorized processing of all graphs
     for type_name, g in graphs.items():
-        for n, attrs in g.nodes(data=True):
-            attrs_copy = attrs.copy()
-            attrs_copy["type"] = type_name
-            G.add_node((type_name, n), **attrs_copy)
-        for u, v, attrs in g.edges(data=True):
-            u_new, v_new = (type_name, u), (type_name, v)
-            attrs_copy = attrs.copy()
-            attrs_copy["type"] = type_name
-            G.add_edge(u_new, v_new, **attrs_copy)
+        # Batch process nodes
+        nodes_to_add = [
+            ((type_name, n), {**attrs, "type": type_name})
+            for n, attrs in g.nodes(data=True)
+        ]
+        G.add_nodes_from(nodes_to_add)
+
+        # Batch process edges
+        edges_to_add = [
+            ((type_name, u), (type_name, v), {**attrs, "type": type_name})
+            for u, v, attrs in g.edges(data=True)
+        ]
+        G.add_edges_from(edges_to_add)
+
     return G
 
 
@@ -1204,28 +1470,36 @@ def project_homogeneous_graph_from_heterogeneous(hetero_g: nx.Graph, meta_path: 
     """
     start_type = meta_path[0]
     homo = nx.Graph()
-    # find all start nodes
-    starts = [n for n, d in hetero_g.nodes(data=True) if d.get("node_type") == start_type]
-    for src in starts:
+
+    # Find all start nodes vectorized
+    start_nodes = [n for n, d in hetero_g.nodes(data=True) if d.get("node_type") == start_type]
+
+    # Vectorized path finding using parallel computation
+    edge_weights = {}
+
+    # Process all paths efficiently using comprehensions
+    for src in start_nodes:
         paths = [(src,)]
         for level in meta_path[1:]:
-            next_paths = []
-            for path in paths:
-                last = path[-1]
-                for nbr in hetero_g.neighbors(last):
-                    if hetero_g.nodes[nbr].get("node_type") == level:
-                        new_path = list(path)
-                        new_path.append(nbr)
-                        next_paths.append(tuple(new_path))
-            paths = next_paths
+            # Vectorized neighbor finding for current level using nested comprehensions
+            paths = [
+                (*path, nbr)
+                for path in paths
+                for nbr in hetero_g.neighbors(path[-1])
+                if hetero_g.nodes[nbr].get("node_type") == level
+            ]
+
+        # Vectorized edge weight calculation using comprehensions
         for path in paths:
             u, v = path[0], path[-1]
-            if u == v:
-                continue
-            if homo.has_edge(u, v):
-                homo[u][v]["weight"] += 1
-            else:
-                homo.add_edge(u, v, weight=1)
+            if u != v:
+                edge_key = (u, v) if u < v else (v, u)
+                edge_weights[edge_key] = edge_weights.get(edge_key, 0) + 1
+
+    # Batch add edges
+    edges_to_add = [(u, v, {"weight": weight}) for (u, v), weight in edge_weights.items()]
+    homo.add_edges_from(edges_to_add)
+
     return homo
 
 
@@ -1236,58 +1510,62 @@ def _reconstruct_heterogeneous_gdfs(
     node_types = G.graph.get("node_types", [])
     edge_types = G.graph.get("edge_types", [])
     crs = G.graph.get("crs")
-    
+
     nodes_dict = {}
     edges_dict = {}
-    
+
     if nodes:
         nodes_dict = _reconstruct_hetero_nodes(G, node_types, crs)
-    
+
     if edges:
         edges_dict = _reconstruct_hetero_edges(G, edge_types, crs)
-    
+
     return nodes_dict, edges_dict
 
 
-def _reconstruct_hetero_nodes(G: nx.Graph, node_types: list[str], crs: Any) -> dict[str, gpd.GeoDataFrame]:
+def _reconstruct_hetero_nodes(
+    G: nx.Graph, node_types: list[str], crs: str | None,
+) -> dict[str, gpd.GeoDataFrame]:
     """Reconstruct heterogeneous nodes."""
     nodes_dict = {}
-    
+
     for node_type in node_types:
+        # Get all nodes of this type
         type_nodes = [(n, d) for n, d in G.nodes(data=True)
-                     if d.get("node_type") == node_type]
-        
+                      if d.get("node_type") == node_type]
+
         if not type_nodes:
             nodes_dict[node_type] = gpd.GeoDataFrame(columns=["geometry"], crs=crs)
             continue
-        
-        records = []
-        indices = []
-        
+
+        # Vectorized processing
         original_mappings = G.graph.get("_node_mappings", {})
         type_mapping = original_mappings.get(node_type, {})
-        
         original_ids = (type_mapping.get("original_ids")
                        if isinstance(type_mapping, dict) else None)
-        
-        for i, (node_id, attrs) in enumerate(type_nodes):
-            original_index = (original_ids[i]
-                             if original_ids and i < len(original_ids)
-                             else node_id)
-            indices.append(original_index)
-            
-            pos = attrs.get("pos")
-            geometry = Point(pos[0], pos[1]) if pos else None
-            
-            record = {k: v for k, v in attrs.items()
-                     if k not in ["pos", "node_type"]}
-            record["geometry"] = geometry
-            records.append(record)
-        
+
+        # Extract data vectorized
+        node_ids, attrs_list = zip(*type_nodes, strict=False)
+
+        # Create indices array
+        indices = [
+            original_ids[i] if original_ids and i < len(original_ids) else node_id
+            for i, node_id in enumerate(node_ids)
+        ]
+
+        # Create records array
+        records = [
+            {
+                **{k: v for k, v in attrs.items() if k not in ["pos", "node_type"]},
+                "geometry": Point(attrs.get("pos")) if attrs.get("pos") else None,
+            }
+            for attrs in attrs_list
+        ]
+
         nodes_dict[node_type] = gpd.GeoDataFrame(
-            records, index=indices, geometry="geometry", crs=crs,
+            records, geometry="geometry", index=indices, crs=crs,
         )
-        
+
         # Restore index names
         node_index_names = G.graph.get("_node_index_names", {})
         if node_type in node_index_names:
@@ -1295,52 +1573,56 @@ def _reconstruct_hetero_nodes(G: nx.Graph, node_types: list[str], crs: Any) -> d
             if (isinstance(index_names, list) and len(index_names) == 1
                 and index_names[0] is not None):
                 nodes_dict[node_type].index.name = index_names[0]
-    
+
     return nodes_dict
 
 
 def _reconstruct_hetero_edges(
-    G: nx.Graph, edge_types: list, crs: Any,
+    G: nx.Graph, edge_types: list[tuple[str, str, str]], crs: str | None,
 ) -> dict[tuple[str, str, str], gpd.GeoDataFrame]:
     """Reconstruct heterogeneous edges."""
     edges_dict = {}
-    
+
     for edge_type in edge_types:
+        src_type, rel_type, dst_type = edge_type
+
+        # Get all edges of this type
         type_edges = [(u, v, d) for u, v, d in G.edges(data=True)
-                     if d.get("edge_type") == edge_type[1]]
-        
+                      if d.get("edge_type") == rel_type]
+
         if not type_edges:
             edges_dict[edge_type] = gpd.GeoDataFrame(columns=["geometry"], crs=crs)
             continue
-        
-        records = []
-        indices = []
-        
+
+        # Get original edge index values
         edge_index_values = G.graph.get("_edge_index_values", {})
         type_edge_values = edge_index_values.get(edge_type, [])
-        
-        for i, (u, v, attrs) in enumerate(type_edges):
-            original_index = (type_edge_values[i]
-                             if type_edge_values and i < len(type_edge_values)
-                             else (u, v))
-            indices.append(original_index)
-            
+
+        # Vectorized processing
+        indices = [
+            type_edge_values[i] if type_edge_values and i < len(type_edge_values) else (u, v)
+            for i, (u, v, _) in enumerate(type_edges)
+        ]
+
+        records = []
+        for u, v, attrs in type_edges:
+            # Create geometry from node positions or existing geometry
             geometry = attrs.get("geometry")
             if geometry is None:
                 u_pos = G.nodes[u].get("pos")
                 v_pos = G.nodes[v].get("pos")
                 if u_pos and v_pos:
                     geometry = LineString([u_pos, v_pos])
-            
+
             record = {k: v for k, v in attrs.items()
                      if k not in ["edge_type"]}
             record["geometry"] = geometry
             records.append(record)
-        
+
         edges_dict[edge_type] = gpd.GeoDataFrame(
-            records, index=indices, geometry="geometry", crs=crs,
+            records, geometry="geometry", index=indices, crs=crs,
         )
-        
+
         # Restore index names
         edge_index_names = G.graph.get("_edge_index_names", {})
         if edge_type in edge_index_names:
@@ -1348,5 +1630,5 @@ def _reconstruct_hetero_edges(
             if (isinstance(index_names, list) and len(index_names) == 1
                 and index_names[0] is not None):
                 edges_dict[edge_type].index.name = index_names[0]
-    
+
     return edges_dict
