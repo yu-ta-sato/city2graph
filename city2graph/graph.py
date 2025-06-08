@@ -37,7 +37,7 @@ try:
     from torch_geometric.data import HeteroData
 
     TORCH_AVAILABLE = True
-except ImportError:  # pragma: no cover – makes life easier for docs build.
+except ImportError:  # pragma: no cover - makes life easier for docs build.
     TORCH_AVAILABLE = False
 
     class HeteroData:
@@ -78,26 +78,88 @@ def gdf_to_pyg(
     edge_target_col: str | None = None,
     edge_feature_cols: dict[str, list[str]] | list[str] | None = None,
     device: str | torch.device | None = None,
+    dtype: torch.dtype | None = None,
 ) -> Data | HeteroData:
     """Convert GeoDataFrames (nodes/edges) to a PyTorch Geometric object.
 
+    This function serves as the main entry point for converting spatial data into 
+    PyTorch Geometric graph objects. It automatically detects whether to create 
+    homogeneous or heterogeneous graphs based on input structure and provides 
+    intelligent column detection for edge relationships.
+
     Parameters
     ----------
-    nodes, edges
-        Either ``GeoDataFrame`` (homogeneous) *or* dictionaries mapping graph
-        types to ``GeoDataFrame`` instances (heterogeneous).
-    node_id_cols
-        Primary key column(s) identifying each node. When omitted, the GeoDataFrame
-        index is used.
-    node_feature_cols, edge_feature_cols
-        Columns whose values should become numerical features on the output graph.
-    node_label_cols
-        Column(s) that contain target labels for supervised GNN tasks.
-    edge_source_col, edge_target_col
-        Name of source / target columns for the homogeneous case.  Ignored for
-        heterogeneous graphs (where these are inferred from the dict keys).
-    device
-        Device to move tensors to (``"cpu"``, ``"cuda"`` or a ``torch.device``).
+    nodes : dict[str, gpd.GeoDataFrame] or gpd.GeoDataFrame
+        Node data. For homogeneous graphs, provide a single GeoDataFrame.
+        For heterogeneous graphs, provide a dictionary mapping node type names 
+        to their respective GeoDataFrames.
+    edges : dict[tuple[str, str, str], gpd.GeoDataFrame] or gpd.GeoDataFrame, optional
+        Edge data. For homogeneous graphs, provide a single GeoDataFrame.
+        For heterogeneous graphs, provide a dictionary mapping edge type tuples
+        (source_type, relation_type, target_type) to their GeoDataFrames.
+    node_id_cols : dict[str, str] or str, optional
+        Column name(s) to use as node identifiers. For heterogeneous graphs,
+        provide a dictionary mapping node types to their ID columns.
+        If None, uses the GeoDataFrame index.
+    node_feature_cols : dict[str, list[str]] or list[str], optional
+        Column names to use as node features. For heterogeneous graphs,
+        provide a dictionary mapping node types to their feature columns.
+    node_label_cols : dict[str, list[str]] or list[str], optional
+        Column names to use as node labels for supervised learning tasks.
+        For heterogeneous graphs, provide a dictionary mapping node types
+        to their label columns.
+    edge_source_col : str, optional
+        Column name containing source node IDs (homogeneous graphs only).
+        If None, attempts automatic detection.
+    edge_target_col : str, optional
+        Column name containing target node IDs (homogeneous graphs only).
+        If None, attempts automatic detection.
+    edge_feature_cols : dict[str, list[str]] or list[str], optional
+        Column names to use as edge features. For heterogeneous graphs,
+        provide a dictionary mapping relation types to their feature columns.
+    device : str or torch.device, optional
+        Target device for tensor placement ('cpu', 'cuda', or torch.device).
+        If None, automatically selects CUDA if available, otherwise CPU.
+    dtype : torch.dtype, optional
+        Data type for float tensors (e.g., torch.float32, torch.float16).
+        If None, uses torch.float32 (default PyTorch float type).
+
+    Returns
+    -------
+    Data or HeteroData
+        PyTorch Geometric Data object for homogeneous graphs or HeteroData 
+        object for heterogeneous graphs. The returned object contains:
+        - Node features (x), positions (pos), and labels (y) if available
+        - Edge connectivity (edge_index) and features (edge_attr) if available
+        - Metadata for reconstruction including ID mappings and column names
+
+    Raises
+    ------
+    ImportError
+        If PyTorch Geometric is not installed
+    ValueError
+        If input GeoDataFrames are invalid or incompatible
+
+    Examples
+    --------
+    >>> # Homogeneous graph from single GeoDataFrames
+    >>> nodes_gdf = gpd.read_file("nodes.geojson")
+    >>> edges_gdf = gpd.read_file("edges.geojson")
+    >>> data = gdf_to_pyg(nodes_gdf, edges_gdf, 
+    ...                   node_feature_cols=['population', 'area'])
+
+    >>> # Heterogeneous graph from dictionaries
+    >>> nodes_dict = {'building': buildings_gdf, 'road': roads_gdf}
+    >>> edges_dict = {('building', 'connects', 'road'): connections_gdf}
+    >>> data = gdf_to_pyg(nodes_dict, edges_dict)
+
+    Notes
+    -----
+    - Preserves original coordinate reference systems (CRS)
+    - Maintains index structure for bidirectional conversion
+    - Automatically detects source/target columns using common naming patterns
+    - Handles both Point and non-Point geometries (using centroids)
+    - Creates empty tensors for missing features/edges
     """
     # ------------------------------------------------------------------
     # 0. Input validation & dispatch
@@ -120,7 +182,7 @@ def gdf_to_pyg(
     if is_hetero:
         data = _build_heterogeneous_graph(
             nodes, edges or {}, node_id_cols, node_feature_cols, node_label_cols,
-            edge_feature_cols or {}, device,
+            edge_feature_cols or {}, device, dtype,
         )
     else:
         nodes_gdf: gpd.GeoDataFrame = nodes
@@ -133,7 +195,7 @@ def gdf_to_pyg(
         data = _build_homogeneous_graph(
             nodes_gdf, edges_gdf, node_id_cols, node_feature_cols_list,
             node_label_cols_list, edge_source_col, edge_target_col,
-            edge_feature_cols_list, device,
+            edge_feature_cols_list, device, dtype,
         )
 
     # Validate the created PyG object
@@ -151,10 +213,40 @@ def pyg_to_gdf(
 ):
     """Convert PyTorch Geometric data to GeoDataFrames.
 
-    For **HeteroData** the function returns ``(nodes_dict, edges_dict)`` where each
-    node type is mapped to a ``GeoDataFrame`` and each edge triplet
-    ``(src_type, rel_type, dst_type)`` is mapped to its own ``GeoDataFrame``.
-    For **Data** the function returns ``(nodes_gdf, edges_gdf)``.
+    Reconstructs the original GeoDataFrame structure from PyTorch Geometric 
+    Data or HeteroData objects. This function provides bidirectional conversion
+    capability, preserving spatial information, feature data, and metadata.
+
+    Parameters
+    ----------
+    data : Data or HeteroData
+        PyTorch Geometric data object to convert back to GeoDataFrames
+    node_types : str or list[str], optional
+        For heterogeneous graphs, specify which node types to reconstruct.
+        If None, reconstructs all available node types.
+    edge_types : str or list[tuple[str, str, str]], optional
+        For heterogeneous graphs, specify which edge types to reconstruct.
+        Edge types are specified as (source_type, relation_type, target_type) tuples.
+        If None, reconstructs all available edge types.
+
+    Returns
+    -------
+    For HeteroData:
+        tuple[dict[str, gpd.GeoDataFrame], dict[tuple[str, str, str], gpd.GeoDataFrame]]
+            First element: dictionary mapping node type names to node GeoDataFrames
+            Second element: dictionary mapping edge type tuples to edge GeoDataFrames
+    For Data:
+        tuple[gpd.GeoDataFrame, gpd.GeoDataFrame | None]
+            First element: nodes GeoDataFrame
+            Second element: edges GeoDataFrame (None if no edges)
+
+    Notes
+    -----
+    - Preserves original index structure and names when available
+    - Reconstructs geometry from stored position tensors
+    - Maintains coordinate reference system (CRS) information
+    - Converts feature tensors back to named DataFrame columns
+    - Handles both homogeneous and heterogeneous graph structures
     """
     metadata = _validate_pyg(data)
 
@@ -186,7 +278,35 @@ def pyg_to_gdf(
 # ============================================================================
 
 def pyg_to_nx(data: Data | HeteroData) -> nx.Graph:
-    """Convert a PyTorch Geometric object to a NetworkX graph."""
+    """Convert a PyTorch Geometric object to a NetworkX graph.
+
+    Converts PyTorch Geometric Data or HeteroData objects to NetworkX graphs,
+    preserving node and edge features as graph attributes. This enables 
+    compatibility with the extensive NetworkX ecosystem for graph analysis.
+
+    Parameters
+    ----------
+    data : Data or HeteroData
+        PyTorch Geometric data object to convert
+
+    Returns
+    -------
+    nx.Graph
+        NetworkX graph with node and edge attributes from the PyG object.
+        For heterogeneous graphs, node and edge types are stored as attributes.
+
+    Raises
+    ------
+    ImportError
+        If PyTorch Geometric is not installed
+
+    Notes
+    -----
+    - Node features, positions, and labels are stored as node attributes
+    - Edge features are stored as edge attributes
+    - For heterogeneous graphs, type information is preserved
+    - Geometry information is converted from tensor positions
+    """
     if not TORCH_AVAILABLE:
         raise ImportError(TORCH_ERROR_MSG)
 
@@ -203,8 +323,47 @@ def nx_to_pyg(
     node_label_cols: list[str] | None = None,
     edge_feature_cols: list[str] | None = None,
     device: torch.device | str | None = None,
+    dtype: torch.dtype | None = None,
 ) -> Data:
-    """Convert NetworkX graph to PyTorch Geometric Data object."""
+    """Convert NetworkX graph to PyTorch Geometric Data object.
+
+    Converts a NetworkX graph to a PyTorch Geometric Data object by first
+    converting to GeoDataFrames then using the main conversion pipeline.
+
+    Parameters
+    ----------
+    graph : nx.Graph
+        NetworkX graph to convert
+    node_feature_cols : list[str], optional
+        List of node attribute names to use as features
+    node_label_cols : list[str], optional
+        List of node attribute names to use as labels
+    edge_feature_cols : list[str], optional
+        List of edge attribute names to use as features
+    device : torch.device or str, optional
+        Target device for tensor placement
+    dtype : torch.dtype, optional
+        Data type for float tensors (e.g., torch.float32, torch.float16).
+        If None, uses torch.float32 (default PyTorch float type).
+
+    Returns
+    -------
+    Data
+        PyTorch Geometric Data object
+
+    Raises
+    ------
+    ImportError
+        If PyTorch Geometric is not installed
+    ValueError
+        If the NetworkX graph is invalid or empty
+
+    Notes
+    -----
+    - Uses intermediate GeoDataFrame conversion for consistency
+    - Preserves all graph attributes and metadata
+    - Handles spatial coordinates if present in node attributes
+    """
     if not TORCH_AVAILABLE:
         raise ImportError(TORCH_ERROR_MSG)
 
@@ -222,6 +381,7 @@ def nx_to_pyg(
         node_label_cols=node_label_cols,
         edge_feature_cols=edge_feature_cols,
         device=device,
+        dtype=dtype,
     )
 
 
@@ -230,12 +390,39 @@ def nx_to_pyg(
 # ============================================================================
 
 def is_torch_available() -> bool:
-    """Return ``True`` iff *PyTorch Geometric* is import‑able."""
+    """Check if PyTorch Geometric is available.
+
+    Returns
+    -------
+    bool
+        True if PyTorch Geometric can be imported, False otherwise
+    """
     return TORCH_AVAILABLE
 
 
 def _get_device(device: str | torch.device | None = None) -> torch.device:
-    """Normalize the *device* argument and return a ``torch.device`` instance."""
+    """Normalize the device argument and return a torch.device instance.
+
+    Parameters
+    ----------
+    device : str, torch.device, or None
+        Device specification. Can be 'cpu', 'cuda', a torch.device object, or None.
+        If None, automatically selects CUDA if available, otherwise CPU.
+
+    Returns
+    -------
+    torch.device
+        Normalized torch.device object
+
+    Raises
+    ------
+    ImportError
+        If PyTorch is not available
+    ValueError
+        If device string is not 'cpu' or 'cuda'
+    TypeError
+        If device is not a valid type
+    """
     if not TORCH_AVAILABLE:
         raise ImportError(TORCH_ERROR_MSG)
 
@@ -260,7 +447,22 @@ def _get_source_target_keywords(
     source_hints: list[str] | None,
     target_hints: list[str] | None,
 ) -> tuple[list[str], list[str]]:
-    """Build keyword lists for column name matching."""
+    """Build keyword lists for column name matching.
+
+    Parameters
+    ----------
+    id_col : str, optional
+        Primary key column name to include in keyword lists
+    source_hints : list[str], optional
+        Additional keywords to search for in source column names
+    target_hints : list[str], optional
+        Additional keywords to search for in target column names
+
+    Returns
+    -------
+    tuple[list[str], list[str]]
+        Source keywords and target keywords for column matching
+    """
     source_keywords = ["from", "source", "start", "u"]
     target_keywords = ["to", "target", "end", "v"]
 
@@ -280,16 +482,46 @@ def _find_column_candidates(
     source_keywords: list[str],
     target_keywords: list[str],
 ) -> tuple[list[str], list[str]]:
-    """Find column candidates based on naming patterns."""
-    from_candidates = [col for col in edge_gdf.columns
-                      if any(keyword in col.lower() for keyword in source_keywords)]
-    to_candidates = [col for col in edge_gdf.columns
-                    if any(keyword in col.lower() for keyword in target_keywords)]
+    """Find column candidates based on naming patterns.
+
+    Parameters
+    ----------
+    edge_gdf : gpd.GeoDataFrame
+        Edge GeoDataFrame to search for source and target columns
+    source_keywords : list[str]
+        Keywords to search for in source column names
+    target_keywords : list[str]
+        Keywords to search for in target column names
+
+    Returns
+    -------
+    tuple[list[str], list[str]]
+        Lists of potential source and target column names
+    """
+    from_candidates = [
+        col for col in edge_gdf.columns
+        if any(keyword in col.lower() for keyword in source_keywords)
+    ]
+    to_candidates = [
+        col for col in edge_gdf.columns
+        if any(keyword in col.lower() for keyword in target_keywords)
+    ]
     return from_candidates, to_candidates
 
 
 def _fallback_column_detection(edge_gdf: gpd.GeoDataFrame) -> tuple[str | None, str | None]:
-    """Fallback to positional column detection."""
+    """Fallback to positional column detection.
+
+    Parameters
+    ----------
+    edge_gdf : gpd.GeoDataFrame
+        Edge GeoDataFrame to analyze for column positioning
+
+    Returns
+    -------
+    tuple[str | None, str | None]
+        Source and target column names based on position, or (None, None) if insufficient columns
+    """
     cols = edge_gdf.columns
     if "geometry" not in cols[:2] and len(cols) >= 2:
         return cols[0], cols[1]
@@ -304,7 +536,24 @@ def _detect_edge_columns(
     source_hints: list[str] | None = None,
     target_hints: list[str] | None = None,
 ) -> tuple[str | None, str | None]:
-    """Detect source and target columns in edge GeoDataFrame."""
+    """Detect source and target columns in edge GeoDataFrame.
+
+    Parameters
+    ----------
+    edge_gdf : gpd.GeoDataFrame
+        Edge GeoDataFrame to analyze
+    id_col : str, optional
+        Primary key column name to include in keyword search
+    source_hints : list[str], optional
+        Additional keywords for source column detection
+    target_hints : list[str], optional
+        Additional keywords for target column detection
+
+    Returns
+    -------
+    tuple[str | None, str | None]
+        Source and target column names, or (None, None) if not found
+    """
     if edge_gdf.empty or len(edge_gdf.columns) < 2:
         return None, None
 
@@ -332,8 +581,7 @@ def _detect_edge_columns(
 def _create_node_id_mapping(
     node_gdf: gpd.GeoDataFrame, id_col: str | None = None,
 ) -> tuple[dict[str | int, int], str, list[str | int]]:
-    """
-    Create mapping from node IDs to sequential integer indices.
+    """Create mapping from node IDs to sequential integer indices.
 
     PyTorch Geometric requires nodes to be identified by sequential integers starting from 0.
     This function creates the necessary mapping from original node identifiers to these indices.
@@ -380,9 +628,9 @@ def _create_node_features(
     node_gdf: gpd.GeoDataFrame,
     feature_cols: list[str] | None = None,
     device: str | torch.device | None = None,
+    dtype: torch.dtype | None = None,
 ) -> torch.Tensor:
-    """
-    Convert node attributes to PyTorch feature tensors.
+    """Convert node attributes to PyTorch feature tensors.
 
     Extracts numerical data from specified columns and converts to a tensor suitable
     for graph neural network processing. Handles missing columns gracefully and
@@ -403,47 +651,51 @@ def _create_node_features(
         Float tensor of shape (num_nodes, num_features) containing node features
     """
     device = _get_device(device)
+    dtype = dtype or torch.float
 
     if feature_cols is None:
         # Return empty tensor when no feature columns specified
-        return torch.zeros((len(node_gdf), 0), dtype=torch.float, device=device)
+        return torch.zeros((len(node_gdf), 0), dtype=dtype, device=device)
 
     # Find valid columns that exist in the GeoDataFrame
     valid_cols = list(set(feature_cols) & set(node_gdf.columns))
     if valid_cols:
         # Convert to numpy array with consistent float32 type
         features_array = node_gdf[valid_cols].to_numpy().astype(np.float32)
-        return torch.from_numpy(features_array).to(device=device, dtype=torch.float)
+        return torch.from_numpy(features_array).to(device=device, dtype=dtype)
 
     # Return empty tensor if no valid columns found
-    return torch.zeros((len(node_gdf), 0), dtype=torch.float, device=device)
+    return torch.zeros((len(node_gdf), 0), dtype=dtype, device=device)
 
 
 def _create_node_positions(
     node_gdf: gpd.GeoDataFrame, device: str | torch.device | None = None,
 ) -> torch.Tensor | None:
-    """
-    Extract spatial coordinates from node geometries.
+    """Extract spatial coordinates from node geometries.
 
     Converts geometric representations to coordinate tensors suitable for
     spatial graph neural networks. Handles various geometry types and
     provides consistent coordinate extraction.
 
-    Args:
-        node_gdf: GeoDataFrame with geometry column containing spatial data
-        device: Target device for tensor creation
+    Parameters
+    ----------
+    node_gdf : gpd.GeoDataFrame
+        GeoDataFrame with geometry column containing spatial data
+    device : str or torch.device, optional
+        Target device for tensor creation
 
     Returns
     -------
+    torch.Tensor or None
         Float tensor of shape (num_nodes, 2) containing [x, y] coordinates
         None if no geometry column found
 
     Notes
     -----
-        - Point geometries: Uses direct x, y coordinates
-        - Other geometries: Uses centroid coordinates
-        - Mixed geometries: Handles each type appropriately
-        - Coordinates are in the original CRS of the GeoDataFrame
+    - Point geometries: Uses direct x, y coordinates
+    - Other geometries: Uses centroid coordinates
+    - Mixed geometries: Handles each type appropriately
+    - Coordinates are in the original CRS of the GeoDataFrame
     """
     device = _get_device(device)
 
@@ -486,9 +738,9 @@ def _create_edge_features(
     edge_gdf: gpd.GeoDataFrame,
     feature_cols: list[str] | None = None,
     device: str | torch.device | None = None,
+    dtype: torch.dtype | None = None,
 ) -> torch.Tensor:
-    """
-    Convert edge attributes to PyTorch feature tensors.
+    """Convert edge attributes to PyTorch feature tensors.
 
     Similar to node features but for edge data. Commonly used for edge weights,
     distances, or other relationship-specific attributes.
@@ -508,16 +760,17 @@ def _create_edge_features(
         Float tensor of shape (num_edges, num_features) containing edge features
     """
     device = _get_device(device)
+    dtype = dtype or torch.float
 
     if feature_cols is None:
-        return torch.empty((edge_gdf.shape[0], 0), dtype=torch.float, device=device)
+        return torch.empty((edge_gdf.shape[0], 0), dtype=dtype, device=device)
 
     valid_cols = list(set(feature_cols) & set(edge_gdf.columns))
     if not valid_cols:
-        return torch.empty((edge_gdf.shape[0], 0), dtype=torch.float, device=device)
+        return torch.empty((edge_gdf.shape[0], 0), dtype=dtype, device=device)
 
     features_array = edge_gdf[valid_cols].to_numpy().astype(np.float32)
-    return torch.from_numpy(features_array).to(device=device, dtype=torch.float)
+    return torch.from_numpy(features_array).to(device=device, dtype=dtype)
 
 
 def _create_edge_indices(
@@ -581,8 +834,7 @@ def _detect_and_extract_edge_columns(
 def _attempt_type_conversion(
     ids: pd.Series | pd.Index,
     mapping: dict[str | int, int],
-    id_type: str,
-) -> pd.Series:
+    id_type: str) -> pd.Series:
     """Attempt to convert IDs to match mapping key types."""
     if len(ids) == 0 or not mapping:
         return pd.Series(ids) if isinstance(ids, pd.Index) else ids
@@ -710,6 +962,7 @@ def _build_homogeneous_graph(
     edge_target_col: str | None = None,
     edge_feature_cols: list[str] | None = None,
     device: str | torch.device | None = None,
+    dtype: torch.dtype | None = None,
 ) -> Data:
     """
     Construct a homogeneous PyTorch Geometric Data object.
@@ -724,7 +977,7 @@ def _build_homogeneous_graph(
     4. Create edge connectivity matrix
     5. Extract edge features
     6. Package everything into PyG Data object
-    7. Store metadata for reconstruction
+    7. Store metadata for bidirectional conversion
 
     Args:
         nodes_gdf: GeoDataFrame containing node data
@@ -753,19 +1006,19 @@ def _build_homogeneous_graph(
     # Node processing
     id_mapping, id_col_name, original_ids = _create_node_id_mapping(nodes_gdf, node_id_col)
 
-    x = _create_node_features(nodes_gdf, node_feature_cols, device)
+    x = _create_node_features(nodes_gdf, node_feature_cols, device, dtype)
     pos = _create_node_positions(nodes_gdf, device)
 
     # Handle labels
     y = None
     if node_label_cols:
-        y = _create_node_features(nodes_gdf, node_label_cols, device)
+        y = _create_node_features(nodes_gdf, node_label_cols, device, dtype)
     elif "y" in nodes_gdf.columns:
-        y = torch.tensor(nodes_gdf["y"].to_numpy(), dtype=torch.float, device=device)
+        y = torch.tensor(nodes_gdf["y"].to_numpy(), dtype=dtype or torch.float, device=device)
 
     # Edge processing
     edge_index = torch.zeros((2, 0), dtype=torch.long, device=device)
-    edge_attr = torch.empty((0, 0), dtype=torch.float, device=device)
+    edge_attr = torch.empty((0, 0), dtype=dtype or torch.float, device=device)
 
     if edges_gdf is not None and not edges_gdf.empty:
         edge_pairs = _create_edge_indices(
@@ -775,7 +1028,7 @@ def _build_homogeneous_graph(
             edge_index = torch.tensor(
                 np.array(edge_pairs).T, dtype=torch.long, device=device,
             )
-        edge_attr = _create_edge_features(edges_gdf, edge_feature_cols, device)
+        edge_attr = _create_edge_features(edges_gdf, edge_feature_cols, device, dtype)
 
     data = Data(x=x, edge_index=edge_index, edge_attr=edge_attr, y=y, pos=pos)
 
@@ -820,6 +1073,7 @@ def _build_heterogeneous_graph(
     node_label_cols: dict[str, list[str]] | None = None,
     edge_feature_cols: dict[str, list[str]] | None = None,
     device: str | torch.device | None = None,
+    dtype: torch.dtype | None = None,
 ) -> HeteroData:
     """Build heterogeneous PyTorch Geometric HeteroData object."""
     device = _get_device(device)
@@ -830,12 +1084,12 @@ def _build_heterogeneous_graph(
 
     # Process nodes and get mappings
     node_mappings = _process_hetero_nodes(
-        data, nodes_dict, node_id_cols, node_feature_cols, node_label_cols, device,
+        data, nodes_dict, node_id_cols, node_feature_cols, node_label_cols, device, dtype,
     )
 
     # Process edges
     _process_hetero_edges(
-        data, edges_dict, node_mappings, edge_feature_cols, device,
+        data, edges_dict, node_mappings, edge_feature_cols, device, dtype,
     )
 
     # Store metadata
@@ -853,6 +1107,7 @@ def _process_hetero_nodes(
     node_feature_cols: dict[str, list[str]] | None,
     node_label_cols: dict[str, list[str]] | None,
     device: str | torch.device | None,
+    dtype: torch.dtype | None,
 ) -> dict[str, dict]:
     """Process all node types for heterogeneous graph."""
     node_mappings = {}
@@ -871,7 +1126,7 @@ def _process_hetero_nodes(
 
         # Features
         feature_cols = node_feature_cols.get(node_type) if node_feature_cols else None
-        data[node_type].x = _create_node_features(node_gdf, feature_cols, device)
+        data[node_type].x = _create_node_features(node_gdf, feature_cols, device, dtype)
 
         # Positions
         data[node_type].pos = _create_node_positions(node_gdf, device)
@@ -879,10 +1134,10 @@ def _process_hetero_nodes(
         # Labels
         label_cols = node_label_cols.get(node_type) if node_label_cols else None
         if label_cols:
-            data[node_type].y = _create_node_features(node_gdf, label_cols, device)
+            data[node_type].y = _create_node_features(node_gdf, label_cols, device, dtype)
         elif "y" in node_gdf.columns:
             data[node_type].y = torch.tensor(
-                node_gdf["y"].to_numpy(), dtype=torch.float, device=device,
+                node_gdf["y"].to_numpy(), dtype=dtype or torch.float, device=device,
             )
 
     return node_mappings
@@ -894,6 +1149,7 @@ def _process_hetero_edges(
     node_mappings: dict[str, dict],
     edge_feature_cols: dict[str, list[str]] | None,
     device: str | torch.device | None,
+    dtype: torch.dtype | None,
 ) -> None:
     """Process all edge types for heterogeneous graph."""
     device = _get_device(device)
@@ -920,10 +1176,10 @@ def _process_hetero_edges(
             data[edge_type].edge_index = edge_index
 
             feature_cols = edge_feature_cols.get(rel_type) if edge_feature_cols else None
-            data[edge_type].edge_attr = _create_edge_features(edge_gdf, feature_cols, device)
+            data[edge_type].edge_attr = _create_edge_features(edge_gdf, feature_cols, device, dtype)
         else:
             data[edge_type].edge_index = torch.zeros((2, 0), dtype=torch.long, device=device)
-            data[edge_type].edge_attr = torch.empty((0, 0), dtype=torch.float, device=device)
+            data[edge_type].edge_attr = torch.empty((0, 0), dtype=dtype or torch.float, device=device)
 
 
 def _store_hetero_metadata(
@@ -1078,10 +1334,7 @@ def _extract_tensor_data(
 
 def _get_node_data_info(data: Data | HeteroData, node_type: str | None, metadata: dict[str, Any]) -> tuple[Data, int]:
     """Get node data and number of nodes."""
-    if metadata["is_hetero"] and node_type:
-        node_data = data[node_type]
-    else:
-        node_data = data
+    node_data = data[node_type] if metadata["is_hetero"] and node_type else data
 
     # Determine number of nodes
     if hasattr(node_data, "num_nodes") and node_data.num_nodes is not None:
@@ -1520,6 +1773,7 @@ def _convert_homo_pyg_to_nx(data: Data) -> nx.Graph:
 
     # Add metadata
     graph.graph["crs"] = getattr(data, "crs", None)
+    graph.graph["is_hetero"] = False
 
     # Add nodes and edges
     _add_homo_nodes_to_graph(graph, data)
@@ -1540,7 +1794,7 @@ def _convert_hetero_pyg_to_nx(data: HeteroData) -> nx.Graph:
 
     # Add metadata
     graph.graph["crs"] = getattr(data, "crs", None)
-    graph.graph["is_heterogeneous"] = True
+    graph.graph["is_hetero"] = True
     graph.graph["node_types"] = list(data.node_types)
     graph.graph["edge_types"] = list(data.edge_types)
 

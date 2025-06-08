@@ -742,7 +742,7 @@ def _validate_gdf(nodes: gpd.GeoDataFrame | None,
     -------
     tuple[gpd.GeoDataFrame | None, gpd.GeoDataFrame | None]
         Validated and cleaned nodes and edges GeoDataFrames
-        
+
     Raises
     ------
     TypeError
@@ -1212,83 +1212,7 @@ def _create_edges_gdf_from_graph(graph: nx.Graph) -> gpd.GeoDataFrame:
     return gdf
 
 
-def _prepare_dataframes(nodes: gpd.GeoDataFrame | None,
-                        edges: gpd.GeoDataFrame | None,
-                        node_id_col: str | None,
-                        edge_id_col: str | None) -> tuple[gpd.GeoDataFrame | None, gpd.GeoDataFrame]:
-    """Prepare and standardize node and edge dataframes."""
-    if edges is None:
-        msg = "Must provide edges GeoDataFrame"
-        raise ValueError(msg)
 
-    # Validate GeoDataFrames first
-    nodes, edges = _validate_gdf(nodes, edges)
-
-    # Standardize node IDs
-    if nodes is not None:
-        if node_id_col and node_id_col in nodes.columns:
-            nodes = nodes.set_index(node_id_col, drop=False)
-        else:
-            nodes = nodes.reset_index(drop=True)
-
-    # Standardize edge IDs
-    if edge_id_col and edge_id_col in edges.columns:
-        edges = edges.set_index(edge_id_col, drop=False)
-    else:
-        edges = edges.reset_index(drop=True)
-
-    return nodes, edges
-
-
-def _add_nodes_to_graph(graph: nx.Graph, nodes: gpd.GeoDataFrame) -> None:
-    """Add nodes and their attributes to the graph."""
-    graph.add_nodes_from(nodes.index)
-    node_attrs = nodes.drop(columns="geometry").to_dict("index")
-    nx.set_node_attributes(graph, node_attrs)
-    # Use centroid of geometry for position
-    pos = {idx: (geom.centroid.x, geom.centroid.y) for idx, geom in nodes.geometry.items()}
-    nx.set_node_attributes(graph, pos, "pos")
-
-
-def _prepare_edge_dataframe(edges: gpd.GeoDataFrame,
-                           nodes: gpd.GeoDataFrame | None,
-                           keep_geom: bool) -> tuple[gpd.GeoDataFrame, list[str]]:
-    """Prepare edge dataframe with node mappings and select appropriate columns."""
-    edges_df = edges.copy()
-
-    # Determine edge node IDs based on provided nodes or coordinate tuples
-    if nodes is not None:
-        # Use centroid coordinates for mapping
-        coord_map = {(geom.centroid.x, geom.centroid.y): idx for idx, geom in nodes.geometry.items()}
-        edges_df["u"] = edges_df.geometry.map(lambda g: coord_map.get(g.coords[0]))
-        edges_df["v"] = edges_df.geometry.map(lambda g: coord_map.get(g.coords[-1]))
-    else:
-        edges_df["u"] = edges_df.geometry.map(lambda g: g.coords[0])
-        edges_df["v"] = edges_df.geometry.map(lambda g: g.coords[-1])
-
-    # Select edge attributes based on keep_geom parameter
-    if keep_geom:
-        edge_cols = [col for col in edges_df.columns if col not in ["u", "v"]]
-    else:
-        geom_cols = [col for col in edges_df.columns
-                    if edges_df[col].apply(lambda x: hasattr(x, "geom_type")).all()]
-        edge_cols = [col for col in edges_df.columns
-                    if col not in ["u", "v"] and col not in geom_cols]
-
-    return edges_df, edge_cols
-
-
-def _add_edges_to_graph(graph: nx.Graph,
-                       edges_df: gpd.GeoDataFrame,
-                       edge_cols: list[str]) -> None:
-    """Add edges to the graph using vectorized operations."""
-    graph_with_edges = nx.from_pandas_edgelist(
-        edges_df,
-        source="u",
-        target="v",
-        edge_attr=edge_cols,
-    )
-    graph.add_edges_from(graph_with_edges.edges(data=True))
 
 
 def _set_graph_metadata(
@@ -1530,43 +1454,6 @@ def _add_hetero_edges_to_graph(
     graph.add_edges_from(edges_to_add)
 
 
-def _find_hetero_edge_nodes(
-    graph: nx.Graph,
-    src_type: str,
-    dst_type: str,
-    src_orig_idx: int,
-    dst_orig_idx: int,
-    nodes_dict: dict[str, gpd.GeoDataFrame] | None,
-) -> tuple[int | None, int | None]:
-    """Find source and target nodes for heterogeneous edge."""
-    u = v = None
-
-    if not nodes_dict or src_type not in nodes_dict or dst_type not in nodes_dict:
-        return u, v
-
-    # Extract all node data at once for vectorized filtering
-    nodes_data = dict(graph.nodes(data=True))
-
-    # Vectorized search for both source and target nodes
-    for node_id, node_data in nodes_data.items():
-        node_type = node_data.get("node_type")
-        orig_idx = node_data.get("_original_index")
-
-        # Check for source node
-        if u is None and node_type == src_type and orig_idx == src_orig_idx:
-            u = node_id
-
-        # Check for target node
-        if v is None and node_type == dst_type and orig_idx == dst_orig_idx:
-            v = node_id
-
-        # Early exit if both found
-        if u is not None and v is not None:
-            break
-
-    return u, v
-
-
 def _reconstruct_heterogeneous_gdfs(
     G: nx.Graph, nodes: bool = True, edges: bool = True,
 ) -> tuple[dict[str, gpd.GeoDataFrame], dict[tuple[str, str, str], gpd.GeoDataFrame]]:
@@ -1698,75 +1585,4 @@ def _reconstruct_hetero_edges(
     return edges_dict
 
 
-# ============================================================================
-# ADDITIONAL GRAPH UTILITIES
-# ============================================================================
 
-
-def create_heterogeneous_graph(graphs: dict[str, nx.Graph]) -> nx.MultiDiGraph:
-    """
-    Create a heterogeneous graph from multiple graphs.
-
-    Each input graph's nodes and edges will be added with "node_type" and "edge_type" attributes.
-    """
-    G = nx.MultiDiGraph()
-
-    # Vectorized processing of all graphs
-    for type_name, g in graphs.items():
-        # Batch process nodes
-        nodes_to_add = [
-            ((type_name, n), {**attrs, "type": type_name})
-            for n, attrs in g.nodes(data=True)
-        ]
-        G.add_nodes_from(nodes_to_add)
-
-        # Batch process edges
-        edges_to_add = [
-            ((type_name, u), (type_name, v), {**attrs, "type": type_name})
-            for u, v, attrs in g.edges(data=True)
-        ]
-        G.add_edges_from(edges_to_add)
-
-    return G
-
-
-def project_homogeneous_graph_from_heterogeneous(hetero_g: nx.Graph, meta_path: list[str]) -> nx.Graph:
-    """
-    Project a homogeneous graph through a specified meta-path.
-
-    meta_path: sequence of node_types, e.g. ["A","B","A"]
-    Returns a graph connecting nodes of type meta_path[0] based on counts of meta-path instances.
-    """
-    start_type = meta_path[0]
-    homo = nx.Graph()
-
-    # Find all start nodes vectorized
-    start_nodes = [n for n, d in hetero_g.nodes(data=True) if d.get("node_type") == start_type]
-
-    # Vectorized path finding using parallel computation
-    edge_weights = {}
-
-    # Process all paths efficiently using comprehensions
-    for src in start_nodes:
-        paths = [(src,)]
-        for level in meta_path[1:]:
-            # Vectorized neighbor finding for current level using nested comprehensions
-            paths = [
-                (*path, nbr)
-                for path in paths
-                for nbr in hetero_g.neighbors(path[-1])
-                if hetero_g.nodes[nbr].get("node_type") == level
-            ]
-
-        # Vectorized edge weight calculation using comprehensions
-        for path in paths:
-            u, v = path[0], path[-1]
-            if u != v:
-                edge_key = (u, v) if u < v else (v, u)
-                edge_weights[edge_key] = edge_weights.get(edge_key, 0) + 1
-
-    # Batch add edges
-    edges_to_add = [(u, v, {"weight": weight}) for (u, v), weight in edge_weights.items()]
-    homo.add_edges_from(edges_to_add)
-
-    return homo
