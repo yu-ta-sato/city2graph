@@ -719,14 +719,20 @@ def _build_heterogeneous_graph(
     edge_target_cols = edge_target_cols or {}
     edge_feature_cols = edge_feature_cols or {}
 
-    # Store node mappings
+    # Store node mappings with original IDs
     node_mappings = {}
 
     # Process nodes
     for node_type, node_gdf in nodes_dict.items():
         id_col = node_id_cols.get(node_type)
         id_mapping, id_col_name, original_ids = _create_node_id_mapping(node_gdf, id_col)
-        node_mappings[node_type] = id_mapping
+
+        # Store mapping with metadata in unified structure
+        node_mappings[node_type] = {
+            "mapping": id_mapping,
+            "id_col": id_col_name,
+            "original_ids": original_ids,
+        }
 
         # Features
         feature_cols = node_feature_cols.get(node_type)
@@ -754,8 +760,9 @@ def _build_heterogeneous_graph(
         if src_type not in node_mappings or dst_type not in node_mappings:
             continue
 
-        src_mapping = node_mappings[src_type]
-        dst_mapping = node_mappings[dst_type]
+        # Get the mapping dictionaries (not the full metadata)
+        src_mapping = node_mappings[src_type]["mapping"]
+        dst_mapping = node_mappings[dst_type]["mapping"]
         source_col = edge_source_cols.get(edge_type)
         target_col = edge_target_cols.get(edge_type)
 
@@ -846,30 +853,38 @@ def _get_node_ids(
 
     # Use unified _node_mappings structure for both homogeneous and heterogeneous
     if hasattr(data, "_node_mappings"):
+        mapping_info = None
+        
         if is_hetero and node_type in data._node_mappings:
             # For heterogeneous graphs, use the specific node type mapping
-            mapping = data._node_mappings[node_type]
-            if isinstance(mapping, dict) and "mapping" in mapping:
-                # New unified structure with metadata
-                reverse_mapping = {idx: node_id for node_id, idx in mapping["mapping"].items()}
-                original_ids = [reverse_mapping.get(i, i) for i in range(num_nodes)]
-                id_col = mapping.get("id_col", "node_id")
-                if id_col != "index":
-                    gdf_data[id_col] = original_ids
-            else:
-                # Legacy direct mapping
-                reverse_mapping = {idx: node_id for node_id, idx in mapping.items()}
-                original_ids = [reverse_mapping.get(i, i) for i in range(num_nodes)]
-                gdf_data["node_id"] = original_ids
+            mapping_info = data._node_mappings[node_type]
         elif not is_hetero and "default" in data._node_mappings:
             # For homogeneous graphs, use the "default" mapping
             mapping_info = data._node_mappings["default"]
-            mapping = mapping_info.get("mapping", {})
-            reverse_mapping = {idx: node_id for node_id, idx in mapping.items()}
-            original_ids = [reverse_mapping.get(i, i) for i in range(num_nodes)]
-            id_col = mapping_info.get("id_col", "node_id")
-            if id_col != "index":
-                gdf_data[id_col] = original_ids
+        
+        if mapping_info:
+            if isinstance(mapping_info, dict) and "mapping" in mapping_info:
+                # New unified structure with metadata
+                mapping = mapping_info["mapping"]
+                id_col = mapping_info.get("id_col", "node_id")
+                original_ids = mapping_info.get("original_ids", list(range(num_nodes)))
+                
+                # Use original_ids directly to preserve order and values
+                if len(original_ids) >= num_nodes:
+                    if id_col != "index":
+                        gdf_data[id_col] = original_ids[:num_nodes]
+                    # For index case, we'll handle this in the reconstruction function
+                else:
+                    # Fallback to reverse mapping if original_ids is incomplete
+                    reverse_mapping = {idx: node_id for node_id, idx in mapping.items()}
+                    fallback_ids = [reverse_mapping.get(i, i) for i in range(num_nodes)]
+                    if id_col != "index":
+                        gdf_data[id_col] = fallback_ids
+            else:
+                # Legacy direct mapping
+                reverse_mapping = {idx: node_id for node_id, idx in mapping_info.items()}
+                original_ids = [reverse_mapping.get(i, i) for i in range(num_nodes)]
+                gdf_data["node_id"] = original_ids
 
     return gdf_data
 
@@ -945,14 +960,11 @@ def _reconstruct_node_gdf(
         if len(pos_array.shape) == 2 and pos_array.shape[1] >= 2:
             geometry = gpd.points_from_xy(pos_array[:, 0], pos_array[:, 1])
 
-    # Create GeoDataFrame
-    if not gdf_data and num_nodes > 0:
-        gdf_data = {"node_id": range(num_nodes)}
-
+    # Create GeoDataFrame - determine index values first
     index_values = None
     index_names = None
 
-    # Determine index values and names
+    # Determine index values and names from stored mappings
     if (hasattr(data, "_node_mappings") and 
         ((not is_hetero and "default" in data._node_mappings) or 
          (is_hetero and node_type in data._node_mappings))):
@@ -960,9 +972,10 @@ def _reconstruct_node_gdf(
         mapping_key = "default" if not is_hetero else node_type
         mapping_info = data._node_mappings[mapping_key]
         
-        if isinstance(mapping_info, dict) and "id_col" in mapping_info:
-            if mapping_info.get("id_col") == "index":
-                index_values = mapping_info.get("original_ids", list(range(num_nodes)))[:num_nodes]
+        if isinstance(mapping_info, dict) and "id_col" in mapping_info and mapping_info.get("id_col") == "index":
+            # Use original_ids as index values for reconstruction
+            original_ids_from_mapping = mapping_info.get("original_ids", list(range(num_nodes)))
+            index_values = original_ids_from_mapping[:num_nodes]
         
         # Get stored index names
         if hasattr(data, "_node_index_names") and data._node_index_names:
@@ -971,11 +984,19 @@ def _reconstruct_node_gdf(
             elif not is_hetero:
                 index_names = data._node_index_names
 
+    # Create GeoDataFrame with proper index
+    if not gdf_data and num_nodes > 0:
+        # If no data and no index values, create default
+        if index_values is None:
+            gdf_data = {"node_id": range(num_nodes)}
+        else:
+            # We have index values, so no need for additional node_id column
+            gdf_data = {}
+
     gdf = gpd.GeoDataFrame(gdf_data, geometry=geometry, index=index_values)
 
     # Set index names if available
-    if (index_names and hasattr(gdf.index, "names") and
-        isinstance(index_names, list) and len(index_names) > 0):
+    if index_names and hasattr(gdf.index, "names") and isinstance(index_names, list) and len(index_names) > 0:
         # For MultiIndex or named single index
         if len(index_names) == 1 and index_names[0] is not None:
             gdf.index.name = index_names[0]
