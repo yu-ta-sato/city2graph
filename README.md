@@ -10,6 +10,9 @@
 
 ## Features
 
+[![scope](http://city2graph.net/_static/scope.png)](http://city2graph.net/_static/scope.png)
+
+
 - Construct graphs from morphological datasets (e.g. buildings, streets, and land use)
 - Construct graphs from transportation datasets (e.g. public transport of buses, trams, and trains)
 - Construct graphs from contiguity datasets (e.g. land use, land cover, and administrative boundaries)
