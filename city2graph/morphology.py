@@ -2,12 +2,11 @@ import logging
 import warnings
 from typing import Any, Dict, Iterable, Tuple
 
-import numpy as np
-import pandas as pd
-
 import geopandas as gpd
 import libpysal
 import networkx as nx
+import numpy as np
+import pandas as pd
 from shapely.geometry import LineString
 
 from .utils import create_tessellation, dual_graph, filter_graph_by_distance
@@ -21,9 +20,10 @@ __all__ = [
 
 logger = logging.getLogger(__name__)
 
-# ==============================================================================
-# MAIN FUNCTIONS
-# ==============================================================================
+
+# ===========================================================================
+# MAIN FUNCTION
+# ===========================================================================
 
 def morphological_graph(
     buildings_gdf: gpd.GeoDataFrame,
@@ -51,16 +51,14 @@ def morphological_graph(
     barriers = _prepare_barriers(segments_gdf, public_geom_col)
     tessellation = create_tessellation(
         buildings_gdf,
-        primary_barriers=barriers if not barriers.empty else None,
+        primary_barriers=None if barriers.empty else barriers,
     )
-
     tessellation, private_id_col = _ensure_id_column(tessellation, private_id_col, "tess_id")
 
     if center_point is not None and distance is not None and not segments_gdf.empty:
         segs = filter_graph_by_distance(segments_gdf, center_point, distance)
     else:
         segs = segments_gdf
-
     segs, public_id_col = _ensure_id_column(segs, public_id_col, "id")
 
     tessellation = _filter_adjacent_tessellation(tessellation, segs)
@@ -102,9 +100,9 @@ def morphological_graph(
     return nodes, edges
 
 
-# ==============================================================================
+# ===========================================================================
 # PRIVATE TO PRIVATE
-# ==============================================================================
+# ===========================================================================
 
 def private_to_private_graph(
     private_gdf: gpd.GeoDataFrame,
@@ -113,6 +111,7 @@ def private_to_private_graph(
     contiguity: str = "queen",
 ) -> gpd.GeoDataFrame:
     """Return edges between contiguous private polygons."""
+
     _ensure_gdf(private_gdf, "private_gdf")
     private_id_col = private_id_col or "tess_id"
 
@@ -123,70 +122,78 @@ def private_to_private_graph(
         raise ValueError("contiguity must be 'queen' or 'rook'")
 
     private_gdf, private_id_col = _ensure_id_column(private_gdf, private_id_col, "tess_id")
-
     if group_col and group_col not in private_gdf.columns:
         raise ValueError(f"group_col '{group_col}' not found")
 
-    groups = {
-        "all": private_gdf
-    } if group_col is None else dict(tuple(private_gdf.groupby(group_col)))
-
-    # drop duplicates to avoid Series return when indexing by private_id_col
-    centroids = (
-        private_gdf
-        .drop_duplicates(subset=private_id_col)
-        .set_index(private_id_col)
-        .geometry.centroid
+    gdf = private_gdf.reset_index(drop=True)
+    w = (
+        libpysal.weights.Queen.from_dataframe(gdf)
+        if contiguity == "queen"
+        else libpysal.weights.Rook.from_dataframe(gdf)
     )
-    edges: list[dict] = []
-    seen: set[tuple[Any, Any]] = set()
-
-    for name, gdf in groups.items():
-        if len(gdf) < 2:
-            continue
-        gdf = gdf.reset_index(drop=True)
-        w = (
-            libpysal.weights.Queen.from_dataframe(gdf)
-            if contiguity == "queen"
-            else libpysal.weights.Rook.from_dataframe(gdf)
-        )
-        if not w.neighbors:
-            continue
-        for i, neighbors in w.neighbors.items():
-            id1 = gdf.loc[i, private_id_col]
-            for j in neighbors:
-                id2 = gdf.loc[j, private_id_col]
-                if id1 == id2:
-                    continue
-                pair = tuple(sorted((id1, id2)))
-                if pair in seen:
-                    continue
-                seen.add(pair)
-                p1 = centroids[id1]
-                p2 = centroids[id2]
-                edges.append(
-                    {
-                        "from_private_id": pair[0],
-                        "to_private_id": pair[1],
-                        group_col or "group": name,
-                        "geometry": LineString([(p1.x, p1.y), (p2.x, p2.y)]),
-                    }
-                )
-
-    if not edges:
+    if not w.neighbors:
         return _empty_edges_gdf(
-            private_gdf.crs,
-            "from_private_id",
-            "to_private_id",
-            [group_col or "group"],
+            private_gdf.crs, "from_private_id", "to_private_id", [group_col or "group"]
         )
 
-    return gpd.GeoDataFrame(edges, geometry="geometry", crs=private_gdf.crs)
+    coo = w.sparse.tocoo()
+    mask = coo.row < coo.col
+    rows = coo.row[mask]
+    cols = coo.col[mask]
+
+    from_ids = gdf.iloc[rows][private_id_col].to_numpy()
+    to_ids = gdf.iloc[cols][private_id_col].to_numpy()
+
+    if group_col:
+        grp_i = gdf.iloc[rows][group_col].to_numpy()
+        grp_j = gdf.iloc[cols][group_col].to_numpy()
+        valid = grp_i == grp_j
+        rows = rows[valid]
+        cols = cols[valid]
+        from_ids = from_ids[valid]
+        to_ids = to_ids[valid]
+        groups = grp_i[valid]
+    else:
+        groups = np.full_like(from_ids, "all", dtype=object)
+        group_col = "group"
+
+    valid = from_ids != to_ids
+    rows = rows[valid]
+    cols = cols[valid]
+    from_ids = from_ids[valid]
+    to_ids = to_ids[valid]
+    groups = groups[valid]
+
+    centroids = gdf.geometry.centroid
+    df = pd.DataFrame(
+        {
+            "row": rows,
+            "col": cols,
+            "from_private_id": from_ids,
+            "to_private_id": to_ids,
+            group_col: groups,
+        }
+    )
+    df[["from_private_id", "to_private_id"]] = np.sort(
+        df[["from_private_id", "to_private_id"]].values, axis=1
+    )
+    df = df.drop_duplicates(subset=["from_private_id", "to_private_id"])
+
+    p1 = centroids.iloc[df["row"]].reset_index(drop=True)
+    p2 = centroids.iloc[df["col"]].reset_index(drop=True)
+    df["geometry"] = [LineString([(a.x, a.y), (b.x, b.y)]) for a, b in zip(p1, p2)]
+    df = df.drop(columns=["row", "col"])
+
+    return gpd.GeoDataFrame(
+        df[["from_private_id", "to_private_id", group_col, "geometry"]],
+        geometry="geometry",
+        crs=private_gdf.crs,
+    )
 
 
-# ==============================================================================
+# ===========================================================================
 # PRIVATE TO PUBLIC
-# ==============================================================================
+# ===========================================================================
 
 def private_to_public_graph(
     private_gdf: gpd.GeoDataFrame,
@@ -211,34 +218,25 @@ def private_to_public_graph(
 
     join_geom = public_gdf[public_geom_col] if public_geom_col and public_geom_col in public_gdf.columns else public_gdf.geometry
     pubs = gpd.GeoDataFrame({public_id_col: public_gdf[public_id_col]}, geometry=join_geom.buffer(tolerance), crs=public_gdf.crs)
-    joined = gpd.sjoin(private_gdf[[private_id_col, "geometry"]], pubs, how="inner", predicate="intersects")
+    joined = gpd.sjoin(private_gdf[[private_id_col, "geometry"]], pubs, how="inner", predicate="intersects")[[private_id_col, public_id_col]]
     if joined.empty:
         return _empty_edges_gdf(private_gdf.crs, "private_id", "public_id")
 
+    joined = joined.drop_duplicates()
     priv_cent = private_gdf.drop_duplicates(subset=private_id_col).set_index(private_id_col).geometry.centroid
     pub_cent = public_gdf.drop_duplicates(subset=public_id_col).set_index(public_id_col).geometry.centroid
 
-    lines: list[dict] = []
-    for pid, pubs in joined.groupby(private_id_col)[public_id_col]:
-        for pubid in pubs.unique():
-            if pid not in priv_cent.index or pubid not in pub_cent.index:
-                continue
-            p1 = priv_cent[pid]
-            p2 = pub_cent[pubid]
-            lines.append({
-                "private_id": pid,
-                "public_id": pubid,
-                "geometry": LineString([(p1.x, p1.y), (p2.x, p2.y)]),
-            })
+    p1 = priv_cent.loc[joined[private_id_col]].reset_index(drop=True)
+    p2 = pub_cent.loc[joined[public_id_col]].reset_index(drop=True)
+    joined["geometry"] = [LineString([(a.x, a.y), (b.x, b.y)]) for a, b in zip(p1, p2)]
+    joined = joined.rename(columns={private_id_col: "private_id", public_id_col: "public_id"})
 
-    if not lines:
-        return _empty_edges_gdf(private_gdf.crs, "private_id", "public_id")
-    return gpd.GeoDataFrame(lines, geometry="geometry", crs=private_gdf.crs)
+    return gpd.GeoDataFrame(joined, geometry="geometry", crs=private_gdf.crs)
 
 
-# ==============================================================================
+# ===========================================================================
 # PUBLIC TO PUBLIC
-# ==============================================================================
+# ===========================================================================
 
 def public_to_public_graph(
     public_gdf: gpd.GeoDataFrame,
@@ -258,44 +256,29 @@ def public_to_public_graph(
     if nodes.empty or not connections:
         return _empty_edges_gdf(public_gdf.crs, "from_public_id", "to_public_id")
 
-    edges: list[dict] = []
-    seen: set[Tuple[Any, Any]] = set()
-    for from_id, to_ids in connections.items():
-        for to_id in to_ids:
-            pair = tuple(sorted((from_id, to_id)))
-            if pair in seen:
-                continue
-            seen.add(pair)
-            p1 = nodes.loc[from_id].geometry
-            p2 = nodes.loc[to_id].geometry
-            edges.append({
-                "from_public_id": pair[0],
-                "to_public_id": pair[1],
-                "geometry": LineString([(p1.x, p1.y), (p2.x, p2.y)]),
-            })
-    if not edges:
-        return _empty_edges_gdf(public_gdf.crs, "from_public_id", "to_public_id")
-    return gpd.GeoDataFrame(edges, geometry="geometry", crs=public_gdf.crs)
+    pairs = {(min(k, v), max(k, v)) for k, vs in connections.items() for v in vs}
+    edges_df = pd.DataFrame(list(pairs), columns=["from_public_id", "to_public_id"])
+
+    p1 = nodes.loc[edges_df["from_public_id"], "geometry"].reset_index(drop=True)
+    p2 = nodes.loc[edges_df["to_public_id"], "geometry"].reset_index(drop=True)
+    edges_df["geometry"] = [LineString([(a.x, a.y), (b.x, b.y)]) for a, b in zip(p1, p2)]
+
+    return gpd.GeoDataFrame(edges_df, geometry="geometry", crs=public_gdf.crs)
 
 
-# ==============================================================================
+# ===========================================================================
 # HELPER UTILITIES
-# ==============================================================================
+# ===========================================================================
 
 def _ensure_gdf(obj: Any, name: str) -> None:
     if not isinstance(obj, gpd.GeoDataFrame):
         raise TypeError(f"{name} must be a GeoDataFrame")
 
 
-def _ensure_id_column(
-    gdf: gpd.GeoDataFrame, column: str | None, default: str
-) -> Tuple[gpd.GeoDataFrame, str]:
-    """Ensure ``column`` exists on ``gdf`` without altering existing values."""
-
+def _ensure_id_column(gdf: gpd.GeoDataFrame, column: str | None, default: str) -> tuple[gpd.GeoDataFrame, str]:
     col = column or default
     if col in gdf.columns:
         return gdf, col
-
     gdf = gdf.copy()
     gdf[col] = range(len(gdf))
     return gdf, col
@@ -332,7 +315,9 @@ def _add_building_info(tess: gpd.GeoDataFrame, buildings: gpd.GeoDataFrame) -> g
     return joined
 
 
-def _empty_edges_gdf(crs: Any, from_col: str, to_col: str, extra_cols: Iterable[str] | None = None) -> gpd.GeoDataFrame:
+def _empty_edges_gdf(
+    crs: Any, from_col: str, to_col: str, extra_cols: Iterable[str] | None = None
+) -> gpd.GeoDataFrame:
     cols = [from_col, to_col] + list(extra_cols or []) + ["geometry"]
     return gpd.GeoDataFrame(columns=cols, geometry="geometry", crs=crs)
 
@@ -346,8 +331,6 @@ def _set_edge_index(gdf: gpd.GeoDataFrame, from_col: str, to_col: str) -> gpd.Ge
         return gdf.set_index([from_col, to_col])
     return gdf
 
-
-# Additional helper used in tests ------------------------------------------------
 
 def _prep_contiguity_graph(
     gdf: gpd.GeoDataFrame,
@@ -400,4 +383,3 @@ def _validate_geometries(private_gdf: gpd.GeoDataFrame, public_gdf: gpd.GeoDataF
         warnings.warn("Invalid geometries in privates", RuntimeWarning)
     if not all(public_gdf.geometry.type.isin(["LineString", "MultiLineString", "Point"])):
         warnings.warn("Invalid geometries in publics", RuntimeWarning)
-
