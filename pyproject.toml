@@ -118,6 +118,7 @@ line-length = 100
 
 [tool.ruff.lint]
 extend-ignore = [
+    "C416",
     "DTZ001",
     "DTZ007",
     "FBT001",
