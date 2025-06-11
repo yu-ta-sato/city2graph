@@ -13,6 +13,7 @@ from shapely.geometry import Point
 
 # Define the public API for this module
 __all__ = [
+    "create_isochrone",
     "create_tessellation",
     "dual_graph",
     "filter_graph_by_distance",
@@ -492,6 +493,45 @@ def filter_graph_by_distance(graph: gpd.GeoDataFrame | nx.Graph,
         )
 
     return filtered_gdf
+
+
+def create_isochrone(
+    graph: gpd.GeoDataFrame | nx.Graph,
+    center_point: Point | gpd.GeoSeries | gpd.GeoDataFrame,
+    distance: float,
+    edge_attr: str = "length",
+) -> gpd.GeoDataFrame:
+    """
+    Generate isochrone polygon(s) as convex hull of reachable areas within distance.
+
+    Parameters
+    ----------
+    graph : Union[gpd.GeoDataFrame, nx.Graph]
+        Input graph edges or NetworkX graph.
+    center_point : Union[Point, GeoSeries, GeoDataFrame]
+        Center point(s) for distance calculation.
+    distance : float
+        Maximum shortest-path distance from center.
+    edge_attr : str, default="length"
+        Edge weight attribute for path length.
+
+    Returns
+    -------
+    geopandas.GeoDataFrame
+        GeoDataFrame containing a single isochrone Polygon or MultiPolygon.
+    """
+    # Filter graph by distance
+    reachable = filter_graph_by_distance(graph, center_point, distance, edge_attr)
+    # Convert to GeoDataFrame if NetworkX graph returned
+    if isinstance(reachable, nx.Graph):
+        reachable = nx_to_gdf(reachable, nodes=False, edges=True)
+    # Empty result
+    if reachable.empty:
+        return gpd.GeoDataFrame(geometry=[], crs=getattr(reachable, "crs", None))
+    # Create convex hull of reachable area
+    union_geom = reachable.unary_union
+    hull = union_geom.convex_hull
+    return gpd.GeoDataFrame(geometry=[hull], crs=reachable.crs)
 
 
 def _get_nearest_node(point: Point | gpd.GeoSeries,
