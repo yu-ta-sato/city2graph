@@ -1,16 +1,22 @@
 """Module for creating morphological graphs from urban data."""
 
 import logging
+import math
 import warnings
 
 import geopandas as gpd
+import networkx as nx
 import libpysal
 import pandas as pd
-from shapely.geometry import LineString
+from shapely.geometry import LineString, Point
 
 from .utils import create_tessellation
 from .utils import dual_graph
 from .utils import filter_graph_by_distance
+from .utils import gdf_to_nx
+from .utils import _create_nodes_gdf
+from .utils import _extract_node_positions
+from .utils import _get_nearest_node
 
 # Define the public API for this module
 __all__ = [
@@ -35,6 +41,7 @@ def morphological_graph(
     distance: float | None = None,
     private_id_col: str | None = None,
     public_id_col: str | None = None,
+    tessellation_distance: float = math.inf,
     public_geom_col: str | None = "barrier_geometry",
     contiguity: str = "queen",
     keep_buildings: bool = False,
@@ -57,13 +64,25 @@ def morphological_graph(
         Center point(s) for spatial filtering. If provided with distance parameter,
         only segments within the specified distance will be included.
     distance : float, optional
-        Maximum distance from center_point for spatial filtering. Only used if center_point is provided.
+        Maximum distance from ``center_point`` for spatial filtering. When
+        specified, street segments beyond this shortest-path distance are
+        removed and tessellation cells are kept only if their own distance via
+        these segments does not exceed this value.
     private_id_col : str, optional
         Column name to use for private space identifiers. If None, uses "tess_id".
         If the column doesn't exist, it will be created using row indices.
     public_id_col : str, optional
         Column name to use for public space identifiers. If None, uses "id".
         If the column doesn't exist, it will be created using row indices.
+    tessellation_distance : float, default=math.inf
+        Maximum allowed distance between tessellation cells and street segments.
+        Distances are evaluated within each ``enclosure_index`` group
+        if that column exists, otherwise globally. The distance is measured
+        between tessellation centroids and the nearest street segment.
+        The default of ``math.inf`` retains all cells. When ``center_point`` and
+        ``distance`` are provided, tessellation cells are additionally filtered
+        by their shortest-path distance from ``center_point`` via public
+        segments so that only cells within ``distance`` are kept.
     public_geom_col : str, optional
         Column name containing alternative geometry for public spaces. If specified and exists,
         this geometry will be used instead of the main geometry column for tessellation barriers.
@@ -126,7 +145,19 @@ def morphological_graph(
     segs, public_id_col = _ensure_id_column(segs, public_id_col, "id")
 
     # Filter tessellation to only include areas adjacent to segments
-    tessellation = _filter_adjacent_tessellation(tessellation, segs)
+    tessellation = _filter_adjacent_tessellation(
+        tessellation,
+        segs,
+        max_distance=tessellation_distance,
+    )
+
+    if center_point is not None and distance is not None:
+        tessellation = _filter_tessellation_by_network_distance(
+            tessellation,
+            segs,
+            center_point,
+            distance,
+        )
 
     # Optionally preserve building information
     if keep_buildings:
@@ -622,6 +653,7 @@ def _prepare_barriers(
 def _filter_adjacent_tessellation(
     tess: gpd.GeoDataFrame,
     segments: gpd.GeoDataFrame,
+    max_distance: float = math.inf,
 ) -> gpd.GeoDataFrame:
     """
     Filter tessellation to only include cells adjacent to segments.
@@ -632,6 +664,11 @@ def _filter_adjacent_tessellation(
         Tessellation GeoDataFrame
     segments : geopandas.GeoDataFrame
         Street segments GeoDataFrame
+    max_distance : float, optional
+        Maximum Euclidean distance between tessellation centroids and the
+        nearest segment. If ``tess`` contains an ``enclosure_index`` column,
+        distances are measured using only segments intersecting each enclosure.
+        Defaults to ``math.inf`` which retains all cells.
 
     Returns
     -------
@@ -641,8 +678,83 @@ def _filter_adjacent_tessellation(
     if tess.empty or segments.empty:
         return tess.copy()
 
-    joined = gpd.sjoin(tess, segments, how="inner", predicate="intersects")
-    return tess.loc[joined.index.unique()]
+    if math.isinf(max_distance):
+        return tess.copy()
+
+    if max_distance is None:
+        joined = gpd.sjoin(tess, segments, how="inner", predicate="intersects")
+        return tess.loc[joined.index.unique()]
+
+    encl_col = "enclosure_index" if "enclosure_index" in tess.columns else None
+
+    if encl_col is None:
+        segment_union = segments.unary_union
+        centroids = tess.geometry.centroid
+        distances = centroids.distance(segment_union)
+        return tess.loc[distances <= max_distance].copy()
+
+    filtered_parts: list[gpd.GeoDataFrame] = []
+    for encl_id, group in tess.groupby(encl_col):
+        enclosure_geom = group.unary_union
+        segs = segments[segments.intersects(enclosure_geom)]
+        if segs.empty:
+            continue
+        segment_union = segs.unary_union
+        centroids = group.geometry.centroid
+        distances = centroids.distance(segment_union)
+        filtered = group.loc[distances <= max_distance]
+        if not filtered.empty:
+            filtered_parts.append(filtered)
+
+    if not filtered_parts:
+        return gpd.GeoDataFrame(columns=tess.columns, geometry="geometry", crs=tess.crs)
+
+    return gpd.GeoDataFrame(pd.concat(filtered_parts), crs=tess.crs)
+
+
+def _filter_tessellation_by_network_distance(
+    tess: gpd.GeoDataFrame,
+    segments: gpd.GeoDataFrame,
+    center_point: gpd.GeoSeries | gpd.GeoDataFrame | Point,
+    max_distance: float,
+) -> gpd.GeoDataFrame:
+    """Filter tessellation by network distance from a center point."""
+    if tess.empty or segments.empty:
+        return tess.copy()
+
+    graph = gdf_to_nx(edges=segments)
+    pos_dict = _extract_node_positions(graph)
+    if not pos_dict:
+        return tess.copy()
+
+    nodes = _create_nodes_gdf(pos_dict, "node_id", tess.crs)
+
+    if isinstance(center_point, gpd.GeoDataFrame):
+        center_geom = center_point.geometry.iloc[0]
+    elif isinstance(center_point, gpd.GeoSeries):
+        center_geom = center_point.iloc[0]
+    else:
+        center_geom = center_point
+
+    center_node = _get_nearest_node(center_geom, nodes, node_id="node_id")
+
+    try:
+        distances = nx.single_source_dijkstra_path_length(
+            graph, center_node, weight="length"
+        )
+    except (nx.NetworkXNoPath, nx.NodeNotFound):
+        return tess.iloc[0:0].copy()
+
+    centroids = tess.geometry.centroid
+    centroid_gdf = gpd.GeoDataFrame({"geometry": centroids}, crs=tess.crs)
+    nearest = gpd.sjoin_nearest(
+        centroid_gdf, nodes, how="left", distance_col="_dist"
+    )
+
+    total_dist = nearest["node_id"].map(distances).fillna(math.inf) + nearest["_dist"].fillna(math.inf)
+
+    keep = total_dist <= max_distance
+    return tess.loc[keep].copy()
 
 
 def _add_building_info(
