@@ -39,7 +39,7 @@ def morphological_graph(
     segments_gdf: gpd.GeoDataFrame,
     center_point: gpd.GeoSeries | gpd.GeoDataFrame | None = None,
     distance: float | None = None,
-    tessellation_distance: float = math.inf,
+    clipping_buffer: float = math.inf,
     public_geom_col: str | None = "barrier_geometry",
     contiguity: str = "queen",
     keep_buildings: bool = False,
@@ -66,15 +66,20 @@ def morphological_graph(
         specified, street segments beyond this shortest-path distance are
         removed and tessellation cells are kept only if their own distance via
         these segments does not exceed this value.
-    tessellation_distance : float, default=math.inf
-        Maximum allowed distance between tessellation cells and street segments.
-        Distances are evaluated within each ``enclosure_index`` group
-        if that column exists, otherwise globally. The distance is measured
-        between tessellation centroids and the nearest street segment.
-        The default of ``math.inf`` retains all cells. When ``center_point`` and
-        ``distance`` are provided, tessellation cells are additionally filtered
-        by their shortest-path distance from ``center_point`` via public
-        segments so that only cells within ``distance`` are kept.
+    clipping_buffer : float, default=math.inf
+        Additional buffer distance (non-negative) to be added to `distance` when
+        `distance` and `center_point` are specified.
+        This sum (`distance + clipping_buffer`) is used as the radius for filtering
+        `segs_buffer` (segments used for tessellation context).
+        If `clipping_buffer` is `math.inf` (and `distance` is set), `segs_buffer` is
+        filtered by `distance` alone.
+        The `max_distance` for `_filter_adjacent_tessellation` becomes
+        `distance + clipping_buffer` (this evaluates to `math.inf` if `clipping_buffer`
+        is `math.inf` or if `distance` is not set).
+        If `distance` is not provided, `clipping_buffer` is effectively ignored for
+        `segs_buffer` filtering, and `max_distance` for `_filter_adjacent_tessellation`
+        defaults to `math.inf`.
+        Must be non-negative. Defaults to `math.inf`.
     public_geom_col : str, optional
         Column name containing alternative geometry for public spaces. If specified and exists,
         this geometry will be used instead of the main geometry column for tessellation barriers.
@@ -98,14 +103,17 @@ def morphological_graph(
         If buildings_gdf or segments_gdf are not GeoDataFrames.
     ValueError
         If contiguity parameter is not "queen" or "rook".
+        If clipping_buffer is negative.
 
     Notes
     -----
-    The function first filters the street network by ``distance`` and by a
-    buffered distance (``distance`` + ``tessellation_distance``).  The buffered
-    network is used to create enclosures and tessellations, ensuring that costly
-    tessellation operations are run only on the necessary subset of the network.
+    The function first filters the street network by `distance` (resulting in `segs`).
+    A `segs_buffer` GeoDataFrame is also created for tessellation context, potentially
+    filtered by `distance + clipping_buffer` or `distance` if `center_point` and
+    `distance` are provided. This `segs_buffer` is used to create enclosures and
+    tessellations.
     It then establishes three types of relationships:
+    1. Private-to-private: Adjacency between tessellation cells (handled by private_to_private_graph)
     2. Public-to-public: Topological connectivity between street segments
     3. Private-to-public: Spatial interfaces between tessellations and streets
 
@@ -114,6 +122,11 @@ def morphological_graph(
     """
     # Validate input GeoDataFrames
     _validate_input_gdfs(buildings_gdf, segments_gdf)
+
+    # Validate clipping_buffer
+    if clipping_buffer < 0:
+        msg = "clipping_buffer cannot be negative."
+        raise ValueError(msg)
 
     # Ensure CRS consistency
     segments_gdf = _ensure_crs_consistency(buildings_gdf, segments_gdf)
@@ -131,18 +144,19 @@ def morphological_graph(
     else:
         segs = segments_gdf
 
-    # Create a buffered version of the graph for tessellation creation
-    if (
-        center_point is not None
-        and distance is not None
-        and not segments_gdf.empty
-        and not math.isinf(tessellation_distance)
-    ):
-        buffer_dist = distance + tessellation_distance
-        segs_buffer = filter_graph_by_distance(segments_gdf, center_point, buffer_dist)
-    elif center_point is not None and distance is not None and not segments_gdf.empty:
-        segs_buffer = filter_graph_by_distance(segments_gdf, center_point, distance)
+    # Create a buffered version of the graph for tessellation creation (segs_buffer)
+    # This segs_buffer is used for _prepare_barriers -> create_tessellation
+    # and as the segments context for _filter_adjacent_tessellation.
+    if center_point is not None and distance is not None and not segments_gdf.empty:
+        if not math.isinf(clipping_buffer):
+            # Finite clipping_buffer: use distance + clipping_buffer for segs_buffer radius
+            segs_buffer_radius = distance + clipping_buffer
+            segs_buffer = filter_graph_by_distance(segments_gdf, center_point, segs_buffer_radius)
+        else:  # clipping_buffer is math.inf
+            # Fallback to 'distance' as radius for segs_buffer
+            segs_buffer = filter_graph_by_distance(segments_gdf, center_point, distance)
     else:
+        # No center_point or no distance, so segs_buffer is not filtered by distance
         segs_buffer = segments_gdf
 
     # Prepare barriers from the buffered segments and create tessellation
@@ -153,11 +167,14 @@ def morphological_graph(
     )
     tessellation, private_id_col = _ensure_id_column(tessellation, private_id_col, "tess_id")
 
+    # Determine max_distance for _filter_adjacent_tessellation
+    max_distance_for_adj_filter = distance + clipping_buffer if distance is not None else math.inf
+
     # Filter tessellation to only include areas adjacent to the buffered segments
     tessellation = _filter_adjacent_tessellation(
         tessellation,
         segs,
-        max_distance=tessellation_distance,
+        max_distance=max_distance_for_adj_filter,
     )
 
     if center_point is not None and distance is not None:
@@ -254,7 +271,7 @@ def private_to_private_graph(
     TypeError
         If private_gdf is not a GeoDataFrame.
     ValueError
-        If contiguity is not "queen" or "rook", or if group_col doesn't exist.
+        If contiguity not in {"queen", "rook"}, or if group_col doesn't exist.
 
     Notes
     -----
@@ -721,10 +738,13 @@ def _filter_adjacent_tessellation(
     tess : geopandas.GeoDataFrame
         Tessellation GeoDataFrame
     segments : geopandas.GeoDataFrame
-        Street segments GeoDataFrame
+        Street segments GeoDataFrame to measure distance against.
     max_distance : float, optional
         Maximum Euclidean distance between tessellation centroids and the
-        nearest segment. If ``tess`` contains an ``enclosure_index`` column,
+        nearest segment (from the `segments` GeoDataFrame).
+        In `morphological_graph`, this is typically derived from `distance + clipping_buffer`
+        if `distance` is specified, or `math.inf` otherwise.
+        If ``tess`` contains an ``enclosure_index`` column,
         distances are measured using only segments intersecting each enclosure.
         Defaults to ``math.inf`` which retains all cells.
 
@@ -1120,7 +1140,7 @@ def _extract_adjacency_relationships(
     to_ids = to_ids[valid_ids_filter]
     groups = groups[valid_ids_filter]
     # Need to filter rows and cols as well if they are used later by _create_adjacency_edges
-    rows = rows[valid_ids_filter] 
+    rows = rows[valid_ids_filter]
     cols = cols[valid_ids_filter]
 
 
