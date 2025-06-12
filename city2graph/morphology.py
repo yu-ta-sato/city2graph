@@ -5,18 +5,16 @@ import math
 import warnings
 
 import geopandas as gpd
-import networkx as nx
 import libpysal
+import networkx as nx
 import pandas as pd
-from shapely.geometry import LineString, Point
+from shapely.geometry import LineString
+from shapely.geometry import Point
 
 from .utils import create_tessellation
 from .utils import dual_graph
 from .utils import filter_graph_by_distance
 from .utils import gdf_to_nx
-from .utils import _create_nodes_gdf
-from .utils import _extract_node_positions
-from .utils import _get_nearest_node
 
 # Define the public API for this module
 __all__ = [
@@ -109,8 +107,11 @@ def morphological_graph(
 
     Notes
     -----
-    The function creates tessellations from buildings and optionally uses street segments
-    as barriers. It then establishes three types of relationships:
+    The function first filters the street network by ``distance`` and by a
+    buffered distance (``distance`` + ``tessellation_distance``).  The buffered
+    network is used to create enclosures and tessellations, ensuring that costly
+    tessellation operations are run only on the necessary subset of the network.
+    It then establishes three types of relationships:
 
     1. Private-to-private: Spatial adjacency between tessellation polygons
     2. Public-to-public: Topological connectivity between street segments
@@ -129,22 +130,38 @@ def morphological_graph(
     private_id_col = private_id_col or "tess_id"
     public_id_col = public_id_col or "id"
 
-    # Prepare barriers and create tessellation
-    barriers = _prepare_barriers(segments_gdf, public_geom_col)
+    # Ensure ID column on original segments before filtering
+    segments_gdf, public_id_col = _ensure_id_column(segments_gdf, public_id_col, "id")
+
+    # Filter segments by network distance for the final graph
+    if center_point is not None and distance is not None and not segments_gdf.empty:
+        segs = filter_graph_by_distance(segments_gdf, center_point, distance)
+    else:
+        segs = segments_gdf
+
+    # Create a buffered version of the graph for tessellation creation
+    if (
+        center_point is not None
+        and distance is not None
+        and not segments_gdf.empty
+        and not math.isinf(tessellation_distance)
+    ):
+        buffer_dist = distance + tessellation_distance
+        segs_buffer = filter_graph_by_distance(segments_gdf, center_point, buffer_dist)
+    elif center_point is not None and distance is not None and not segments_gdf.empty:
+        segs_buffer = filter_graph_by_distance(segments_gdf, center_point, distance)
+    else:
+        segs_buffer = segments_gdf
+
+    # Prepare barriers from the buffered segments and create tessellation
+    barriers = _prepare_barriers(segs_buffer, public_geom_col)
     tessellation = create_tessellation(
         buildings_gdf,
         primary_barriers=None if barriers.empty else barriers,
     )
     tessellation, private_id_col = _ensure_id_column(tessellation, private_id_col, "tess_id")
 
-    # Apply spatial filtering if requested
-    if center_point is not None and distance is not None and not segments_gdf.empty:
-        segs = filter_graph_by_distance(segments_gdf, center_point, distance)
-    else:
-        segs = segments_gdf
-    segs, public_id_col = _ensure_id_column(segs, public_id_col, "id")
-
-    # Filter tessellation to only include areas adjacent to segments
+    # Filter tessellation to only include areas adjacent to the buffered segments
     tessellation = _filter_adjacent_tessellation(
         tessellation,
         segs,
@@ -694,7 +711,7 @@ def _filter_adjacent_tessellation(
         return tess.loc[distances <= max_distance].copy()
 
     filtered_parts: list[gpd.GeoDataFrame] = []
-    for encl_id, group in tess.groupby(encl_col):
+    for _, group in tess.groupby(encl_col):
         enclosure_geom = group.unary_union
         segs = segments[segments.intersects(enclosure_geom)]
         if segs.empty:
@@ -719,42 +736,52 @@ def _filter_tessellation_by_network_distance(
     max_distance: float,
 ) -> gpd.GeoDataFrame:
     """Filter tessellation by network distance from a center point."""
+    # handle empty inputs
     if tess.empty or segments.empty:
         return tess.copy()
 
+    # build merged graph: segment network
     graph = gdf_to_nx(edges=segments)
-    pos_dict = _extract_node_positions(graph)
-    if not pos_dict:
-        return tess.copy()
+    pos = nx.get_node_attributes(graph, "pos")
 
-    nodes = _create_nodes_gdf(pos_dict, "node_id", tess.crs)
+    # add tessellation centroids as nodes and connect to segment network
+    centroids = tess.geometry.centroid
+    centroid_node_ids: dict[int, str] = {}
+    for idx, pt in enumerate(centroids):
+        nid = f"centroid_{idx}"
+        centroid_node_ids[idx] = nid
+        graph.add_node(nid, pos=(pt.x, pt.y))
+        # connect to nearest segment node
+        nearest_seg = min(pos.items(), key=lambda it: (it[1][0]-pt.x)**2+(it[1][1]-pt.y)**2)[0]
+        d = pt.distance(Point(*pos[nearest_seg]))
+        graph.add_edge(nid, nearest_seg, length=d)
 
+    # connect centroids among themselves by Euclidean distance
+    for i, ni in centroid_node_ids.items():
+        for j, nj in centroid_node_ids.items():
+            if i < j:
+                pi, pj = centroids.iloc[i], centroids.iloc[j]
+                d2 = pi.distance(pj)
+                graph.add_edge(ni, nj, length=d2)
+
+    # determine center node on merged graph
     if isinstance(center_point, gpd.GeoDataFrame):
-        center_geom = center_point.geometry.iloc[0]
+        cg = center_point.geometry.iloc[0]
     elif isinstance(center_point, gpd.GeoSeries):
-        center_geom = center_point.iloc[0]
+        cg = center_point.iloc[0]
     else:
-        center_geom = center_point
-
-    center_node = _get_nearest_node(center_geom, nodes, node_id="node_id")
+        cg = center_point
+    all_pos = nx.get_node_attributes(graph, "pos")
+    center_node = min(all_pos.items(), key=lambda it: (it[1][0]-cg.x)**2+(it[1][1]-cg.y)**2)[0]
 
     try:
-        distances = nx.single_source_dijkstra_path_length(
-            graph, center_node, weight="length"
-        )
+        lengths = nx.single_source_dijkstra_path_length(graph, center_node, weight="length")
     except (nx.NetworkXNoPath, nx.NodeNotFound):
         return tess.iloc[0:0].copy()
 
-    centroids = tess.geometry.centroid
-    centroid_gdf = gpd.GeoDataFrame({"geometry": centroids}, crs=tess.crs)
-    nearest = gpd.sjoin_nearest(
-        centroid_gdf, nodes, how="left", distance_col="_dist"
-    )
-
-    total_dist = nearest["node_id"].map(distances).fillna(math.inf) + nearest["_dist"].fillna(math.inf)
-
-    keep = total_dist <= max_distance
-    return tess.loc[keep].copy()
+    # filter tess by network distance via centroid nodes
+    keep_idxs = [i for i, nid in centroid_node_ids.items() if lengths.get(nid, math.inf) <= max_distance]
+    return tess.iloc[keep_idxs].copy()
 
 
 def _add_building_info(
