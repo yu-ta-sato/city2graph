@@ -43,6 +43,8 @@ def morphological_graph(
     public_geom_col: str | None = "barrier_geometry",
     contiguity: str = "queen",
     keep_buildings: bool = False,
+    private_id_col: str | None = None,  # Made optional
+    public_id_col: str | None = None,    # Made optional
 ) -> tuple[dict[str, gpd.GeoDataFrame], dict[tuple[str, str, str], gpd.GeoDataFrame]]:
     """
     Create a morphological graph from buildings and street segments.
@@ -89,6 +91,12 @@ def morphological_graph(
         Must be either "queen" or "rook".
     keep_buildings : bool, default=False
         If True, preserves building information in the tessellation output.
+    private_id_col : str, optional
+        Column name for private space (tessellation) identifiers.
+        If None, defaults to "tess_id". If the column doesn't exist, it will be created.
+    public_id_col : str, optional
+        Column name for public space (segment) identifiers.
+        If None, defaults to "id". If the column doesn't exist, it will be created.
 
     Returns
     -------
@@ -131,12 +139,9 @@ def morphological_graph(
     # Ensure CRS consistency
     segments_gdf = _ensure_crs_consistency(buildings_gdf, segments_gdf)
 
-    # Set default column names
-    private_id_col = "tess_id"  # Hardcoded default
-    public_id_col = "id"      # Hardcoded default
-
     # Ensure ID column on original segments before filtering
-    segments_gdf, public_id_col = _ensure_id_column(segments_gdf, public_id_col, "id")
+    # _ensure_id_column will use 'public_id' as default if public_id_col is None
+    segments_gdf, public_id_col_actual = _ensure_id_column(segments_gdf, public_id_col, "public_id")
 
     # Filter segments by network distance for the final graph
     if center_point is not None and distance is not None and not segments_gdf.empty:
@@ -165,7 +170,8 @@ def morphological_graph(
         buildings_gdf,
         primary_barriers=None if barriers.empty else barriers,
     )
-    tessellation, private_id_col = _ensure_id_column(tessellation, private_id_col, "tess_id")
+    # _ensure_id_column will use 'private_id' as default if private_id_col is None
+    tessellation, private_id_col_actual = _ensure_id_column(tessellation, private_id_col, "private_id")
 
     # Determine max_distance for _filter_adjacent_tessellation
     max_distance_for_adj_filter = distance + clipping_buffer if distance is not None else math.inf
@@ -192,16 +198,16 @@ def morphological_graph(
     # Create all three graph relationships
     priv_priv = private_to_private_graph(
         tessellation,
-        private_id_col=private_id_col,
+        private_id_col=private_id_col_actual,
         group_col="enclosure_index",
         contiguity=contiguity,
     )
-    pub_pub = public_to_public_graph(segs, public_id_col=public_id_col)
+    pub_pub = public_to_public_graph(segs, public_id_col=public_id_col_actual)
     priv_pub = private_to_public_graph(
         tessellation,
         segs,
-        private_id_col=private_id_col,
-        public_id_col=public_id_col,
+        private_id_col=private_id_col_actual,
+        public_id_col=public_id_col_actual,
         public_geom_col=public_geom_col,
     )
 
@@ -211,8 +217,8 @@ def morphological_graph(
 
     # Organize output as heterogeneous graph structure
     nodes = {
-        "private": _set_index_if_exists(tessellation, private_id_col),
-        "public": _set_index_if_exists(segs, public_id_col),
+        "private": _set_index_if_exists(tessellation, private_id_col_actual),
+        "public": _set_index_if_exists(segs, public_id_col_actual),
     }
     edges = {
         ("private", "touched_to", "private"): _set_edge_index(
