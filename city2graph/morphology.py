@@ -42,7 +42,7 @@ def morphological_graph(
     center_point: gpd.GeoSeries | gpd.GeoDataFrame | None = None,
     distance: float | None = None,
     clipping_buffer: float = math.inf,
-    public_geom_col: str | None = "barrier_geometry",
+    primary_barrier_col: str | None = "barrier_geometry",
     contiguity: str = "queen",
     keep_buildings: bool = False,
     private_id_col: str | None = None,
@@ -84,7 +84,7 @@ def morphological_graph(
         `segs_buffer` filtering, and `max_distance` for `_filter_adjacent_tessellation`
         defaults to `math.inf`.
         Must be non-negative. Defaults to `math.inf`.
-    public_geom_col : str, optional
+    primary_barrier_col : str, optional
         Column name containing alternative geometry for public spaces. If specified and exists,
         this geometry will be used instead of the main geometry column for tessellation barriers.
         Default is "barrier_geometry".
@@ -170,7 +170,7 @@ def morphological_graph(
         segs_buffer = segments_gdf
 
     # Prepare barriers from the buffered segments and create tessellation
-    barriers = _prepare_barriers(segs_buffer, public_geom_col)
+    barriers = _prepare_barriers(segs_buffer, primary_barrier_col)
     tessellation = create_tessellation(
         buildings_gdf,
         primary_barriers=None if barriers.empty else barriers,
@@ -214,7 +214,7 @@ def morphological_graph(
         segs,
         private_id_col=private_id_col_actual,
         public_id_col=public_id_col_actual,
-        public_geom_col=public_geom_col,
+        primary_barrier_col=primary_barrier_col,
     )
 
     # Log warning if no private-public connections found
@@ -357,7 +357,7 @@ def private_to_public_graph(
     public_gdf: gpd.GeoDataFrame,
     private_id_col: str | None = None,
     public_id_col: str | None = None,
-    public_geom_col: str | None = None,
+    primary_barrier_col: str | None = None,
     tolerance: float = 1.0,
 ) -> gpd.GeoDataFrame:
     """
@@ -377,7 +377,7 @@ def private_to_public_graph(
         Column name for private space identifiers. If None, uses "tess_id".
     public_id_col : str, optional
         Column name for public space identifiers. If None, uses "id".
-    public_geom_col : str, optional
+    primary_barrier_col : str, optional
         Column name for alternative public geometry. If specified and exists,
         this geometry will be used instead of the main geometry column.
     tolerance : float, default=1.0
@@ -418,8 +418,8 @@ def private_to_public_graph(
     public_gdf = _ensure_crs_consistency(private_gdf, public_gdf)
 
     # Determine which geometry to use for spatial join
-    join_geom_series = (public_gdf[public_geom_col]
-                        if public_geom_col and public_geom_col in public_gdf.columns
+    join_geom_series = (public_gdf[primary_barrier_col]
+                        if primary_barrier_col and primary_barrier_col in public_gdf.columns
                         else public_gdf.geometry)
 
     # Create buffered geometries for spatial join
@@ -1108,7 +1108,10 @@ def _add_building_info(
     joined = gpd.sjoin(tess, buildings, how="left", predicate="intersects")
     if "index_right" in joined.columns:
         mapping = buildings.geometry.to_dict()
-        joined["building_geometry"] = joined["index_right"].map(mapping)
+        # Create a pandas Series of Shapely geometries
+        building_geometries_series = joined["index_right"].map(mapping)
+        # Convert the pandas Series to a GeoSeries, assigning the CRS from the source buildings
+        joined["building_geometry"] = gpd.GeoSeries(building_geometries_series, crs=buildings.crs)
         joined = joined.drop(columns=["index_right"])
     return joined
 
