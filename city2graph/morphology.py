@@ -551,54 +551,45 @@ def public_to_public_graph(
     public_gdf, public_id_col = _ensure_id_column(public_gdf, public_id_col, "public_id")
 
     # Create dual graph to find connections
-    # nodes is a GeoDataFrame (Points) indexed by public_id_col, connections is a dict
-    nodes, connections = dual_graph(public_gdf, id_col=public_id_col, tolerance=tolerance)
+    # dual_graph now returns (nodes_gdf, edges_gdf)
+    # nodes_gdf is a GeoDataFrame (Points) indexed by public_id_col
+    # edges_gdf is a GeoDataFrame (LineStrings) with MultiIndex (id_u, id_v)
+    nodes_gdf, edges_gdf_from_dual = dual_graph(public_gdf, id_col=public_id_col, tolerance=tolerance)
 
-    # Return empty result if no connections found
-    if nodes.empty or not connections: # nodes is GDF, connections is dict
+    # Return empty result if no connections found from dual_graph
+    if nodes_gdf.empty or edges_gdf_from_dual.empty:
         return _create_empty_edges_gdf(public_gdf.crs, "from_public_id", "to_public_id")
 
-    # Extract unique pairs from connections dictionary
-    # (min(k,v), max(k,v)) ensures undirected edges (A,B) is same as (B,A) and avoids duplicates
-    unique_pairs = {
-        (min(k, v_node), max(k, v_node))
-        for k, v_list in connections.items()
-        for v_node in v_list
-        if k != v_node # Explicitly filter self-loops if dual_graph could produce them
-    }
-    # If dual_graph guarantees k != v_node, the condition can be removed.
-    # For safety, it's good to keep if the behavior of dual_graph isn't strictly no-self-loops.
-    # If k can equal v_node and self-loops are desired, remove `if k != v_node`.
-    # Assuming typical graph edges are between distinct nodes.
-
-    if not unique_pairs: # No valid (non-self-loop) pairs formed
+    # The edges_gdf_from_dual already has the connections (u,v) as its MultiIndex
+    # and the geometry connecting the centroids of the original lines (which are nodes in dual_graph output)
+    # We need to rename the index levels to 'from_public_id' and 'to_public_id'
+    
+    # Extract pairs from the MultiIndex of edges_gdf_from_dual
+    if not isinstance(edges_gdf_from_dual.index, pd.MultiIndex) or len(edges_gdf_from_dual.index.names) < 2:
+        logger.warning("edges_gdf_from_dual does not have the expected MultiIndex.")
         return _create_empty_edges_gdf(public_gdf.crs, "from_public_id", "to_public_id")
 
-    # Create DataFrame from connection pairs
-    edges_df = pd.DataFrame(
-        list(unique_pairs),
-        columns=["from_public_id", "to_public_id"],
-    )
+    # Assuming the MultiIndex names from dual_graph are like f'{final_id_name}_u', f'{final_id_name}_v'
+    # We need to map these to "from_public_id", "to_public_id"
+    # For simplicity, we can reconstruct the DataFrame with desired column names from the index
 
-    # Create edge geometries as LineStrings between node centroids
-    # 'nodes' GeoDataFrame has Point geometries, indexed by public_id_col.
-    # .loc accesses rows by index (ID), .geometry accesses the geometry Series.
-    p1_geoms = nodes.loc[edges_df["from_public_id"]].geometry.reset_index(drop=True)
-    p2_geoms = nodes.loc[edges_df["to_public_id"]].geometry.reset_index(drop=True)
+    # Get the pairs from the index
+    u_ids = edges_gdf_from_dual.index.get_level_values(0).to_series(index=edges_gdf_from_dual.index, name="from_public_id")
+    v_ids = edges_gdf_from_dual.index.get_level_values(1).to_series(index=edges_gdf_from_dual.index, name="to_public_id")
+    
+    # Create a new DataFrame for the public-to-public edges
+    # The geometry is already the LineString between the centroids of the connected original lines (segments)
+    # which are the nodes_gdf from dual_graph.
+    # So, edges_gdf_from_dual.geometry is what we need.
+    
+    edges_df = pd.DataFrame({
+        "from_public_id": u_ids.values,
+        "to_public_id": v_ids.values,
+        "geometry": edges_gdf_from_dual.geometry.values
+    })
 
-    if p1_geoms.empty or p2_geoms.empty or len(p1_geoms) != len(p2_geoms):
-        # Fallback if geometries can't be formed (e.g., if edges_df non-empty but loc fails)
-        edges_df["geometry"] = gpd.GeoSeries([None] * len(edges_df), crs=public_gdf.crs)
-    else:
-        # Vectorized coordinate extraction
-        coords_p1 = np.array(list(zip(p1_geoms.x, p1_geoms.y, strict=True)))
-        coords_p2 = np.array(list(zip(p2_geoms.x, p2_geoms.y, strict=True)))
-
-        # Create an array of coordinate pairs for LineStrings
-        line_coords = np.stack((coords_p1, coords_p2), axis=1)
-
-        # Create LineString geometries
-        edges_df["geometry"] = list(sh_linestrings(line_coords))
+    if edges_df.empty:
+        return _create_empty_edges_gdf(public_gdf.crs, "from_public_id", "to_public_id")
 
     return gpd.GeoDataFrame(edges_df, geometry="geometry", crs=public_gdf.crs)
 

@@ -137,158 +137,309 @@ def create_tessellation(
 
 def dual_graph(gdf: gpd.GeoDataFrame,
                id_col: str | None = None,
-               tolerance: float = 1e-8) -> tuple[gpd.GeoDataFrame, dict]:
+               tolerance: float = 1e-8) -> tuple[gpd.GeoDataFrame, gpd.GeoDataFrame]:
     """
-    Convert a GeoDataFrame to a NetworkX graph and then back to a GeoDataFrame.
+    Convert a GeoDataFrame of LineStrings to a graph representation with nodes and edges.
 
-    Also detects connections where endpoints of one linestring are on another linestring.
+    Nodes in the output represent the original LineStrings, with Point geometry at their centroids.
+    Edges represent connectivity between these original LineStrings, derived from both
+    momepy's dual graph approach (adjacencies) and endpoint proximity.
 
     Parameters
     ----------
     gdf : geopandas.GeoDataFrame
-        GeoDataFrame containing LineString geometries to convert
+        GeoDataFrame containing LineString geometries to convert.
     id_col : str, default None
-        Column name that uniquely identifies each feature
-        If None, will use DataFrame index
+        Column name in `gdf` that uniquely identifies each feature.
+        If None, the index of `gdf` is used. These identifiers will be used
+        for the index of the output node GeoDataFrame and in the MultiIndex
+        of the output edge GeoDataFrame.
     tolerance : float, default 1e-8
-        Distance tolerance for detecting endpoint connections
+        Distance tolerance for detecting endpoint connections for additional edges.
 
     Returns
     -------
-    tuple
-        (GeoDataFrame of nodes, dict of connections)
+    tuple[geopandas.GeoDataFrame, geopandas.GeoDataFrame]
+        - nodes_gdf: GeoDataFrame of nodes, indexed by identifiers derived from
+          `gdf.index` or `gdf[id_col]`. Geometry is Point (centroid of original lines).
+        - edges_gdf: GeoDataFrame of edges, with a MultiIndex `(source_id, target_id)`
+          using the same identifiers. Geometry is LineString connecting centroids of
+          connected original lines.
 
     Raises
     ------
     TypeError
-        If input is not a GeoDataFrame or if tolerance is not a number
+        If input is not a GeoDataFrame or if tolerance is not a number.
     ValueError
-        If GeoDataFrame is empty or contains invalid geometries
+        If GeoDataFrame is empty or contains invalid geometries, or if `id_col` is invalid.
     """
     # Input validation for tolerance parameter
     if not isinstance(tolerance, (int, float)) or tolerance < 0:
         msg = "Tolerance must be a non-negative number"
         raise ValueError(msg)
 
-    # Validate and clean the GeoDataFrame using centralized validation
-    _, gdf = _validate_gdf(nodes=None, edges=gdf, strict=False, allow_empty=True)
+    # Validate and clean the GeoDataFrame
+    _, validated_gdf = _validate_gdf(nodes=None, edges=gdf, strict=False, allow_empty=True)
 
-    # Return empty result if validation left us with no data
-    if gdf is None or gdf.empty:
-        return (gpd.GeoDataFrame(
-            {id_col: []} if id_col else [],
-            geometry=[],
-            crs=gdf.crs if gdf is not None else None,
-        ), {})
+    # Determine CRS and ID name for potential empty output
+    empty_crs = gdf.crs if gdf is not None else None
+    empty_id_name = id_col if id_col is not None else (
+        gdf.index.name if gdf is not None and gdf.index.name is not None else "original_index"
+    )
+    
+    empty_nodes_gdf = gpd.GeoDataFrame(
+        [],
+        columns=[empty_id_name, 'geometry'],
+        index=pd.Index([], name=empty_id_name),
+        geometry='geometry',
+        crs=empty_crs
+    )
+    empty_edges_gdf = gpd.GeoDataFrame(
+        [],
+        columns=['geometry'],
+        index=pd.MultiIndex.from_tuples([], names=(f"{empty_id_name}_u", f"{empty_id_name}_v")),
+        geometry='geometry',
+        crs=empty_crs
+    )
 
-    # Handle ID column
-    if id_col is not None and id_col not in gdf.columns:
-        gdf = gdf.reset_index(drop=True)
-        gdf[id_col] = gdf.index
-    elif id_col is None:
-        gdf = gdf.reset_index(drop=True)
-        gdf["temp_id"] = gdf.index
-        id_col = "temp_id"
+    if validated_gdf is None or validated_gdf.empty:
+        return empty_nodes_gdf, empty_edges_gdf
 
-    # Convert to NetworkX graph
-    dual_graph_nx = momepy.gdf_to_nx(gdf, approach="dual", preserve_index=True)
+    gdf_for_momepy = validated_gdf.copy()
 
-    # Extract nodes as GeoDataFrame
-    dual_node_gdf = _extract_dual_graph_nodes(dual_graph_nx, id_col, gdf.crs)
+    # Determine the source of IDs and the name for this ID in outputs
+    if id_col is None:
+        final_id_name = gdf_for_momepy.index.name if gdf_for_momepy.index.name is not None else "original_index"
+        if gdf_for_momepy.index.name is None:
+            gdf_for_momepy[final_id_name] = gdf_for_momepy.index
+    else:
+        if id_col not in gdf_for_momepy.columns:
+            msg = f"Specified id_col '{id_col}' not found in GeoDataFrame columns."
+            raise ValueError(msg)
+        final_id_name = id_col
+        gdf_for_momepy = gdf_for_momepy.set_index(id_col, drop=False)
 
-    # Extract node connections from graph
-    connections = _extract_node_connections(dual_graph_nx, id_col)
+    # Nodes of the dual graph (representing original lines)
+    # momepy's dual graph nodes are positions; their 'index' attribute stores `final_id_name`
+    graph_node_id_attr = "index"
 
-    # Find additional connections based on endpoints
-    line_gdf = gdf[
-        gdf.geometry.apply(lambda g: isinstance(g, shapely.geometry.LineString))
-    ]
-    connections = _find_additional_connections(line_gdf, id_col, tolerance, connections)
+    # Create the dual graph using momepy
+    # The nodes in dual_graph_nx are spatial coordinates (tuples).
+    # Node attributes include 'index' which holds the ID from gdf_for_momepy.index (i.e., final_id_name).
+    dual_graph_nx = momepy.gdf_to_nx(gdf_for_momepy, approach="dual", preserve_index=True)
 
-    return dual_node_gdf, connections
+    # Extract nodes GeoDataFrame (these are the original lines, with Point geometry at their centroids)
+    # `_extract_dual_graph_nodes` should use `gdf_for_momepy.geometry.centroid` for the geometry
+    # and preserve original attributes.
+    # For now, let's assume _extract_dual_graph_nodes gives us points representing original lines.
+    # The current _extract_dual_graph_nodes uses the momepy node positions (which are centroids of Voronoi cells).
+    # This needs to be adjusted: the nodes of OUR output graph are the original lines.
+    # Their geometry should be their centroids.
+
+    # Create nodes_gdf: index = final_id_name, geometry = centroid of original line
+    nodes_gdf = gpd.GeoDataFrame(
+        gdf_for_momepy.drop(columns=[col for col in gdf_for_momepy.columns if col == 'geometry'] + ([final_id_name] if final_id_name == "original_index" and "original_index" in gdf_for_momepy.columns else [])), # Keep other attributes
+        geometry=gdf_for_momepy.geometry.centroid,
+        crs=gdf_for_momepy.crs
+    )
+    if nodes_gdf.index.name != final_id_name: # Ensure index name is set
+        nodes_gdf.index.name = final_id_name
 
 
-def _extract_dual_graph_nodes(dual_graph: nx.Graph,
-                              id_col: str,
-                              gdf_crs: str | dict | None) -> gpd.GeoDataFrame:
+    # --- EDGES ---
+    # 1. Edges from momepy's dual graph (adjacencies)
+    momepy_edge_pairs = _extract_momepy_connections(dual_graph_nx, graph_node_id_attr)
+
+    # 2. Edges from endpoint proximity
+    # _find_additional_connections needs the 'final_id_name' column in line_gdf
+    line_gdf_for_search = validated_gdf.copy() # Use original validated GDF
+    if final_id_name not in line_gdf_for_search.columns:
+        if id_col is None: # final_id_name was from original index
+            line_gdf_for_search[final_id_name] = validated_gdf.index
+        # else: id_col was given, so final_id_name (which is id_col) is already a column
+
+    additional_edge_pairs = []
+    if not line_gdf_for_search.empty:
+        additional_edge_pairs = _find_additional_connections(
+            line_gdf_for_search, final_id_name, tolerance
+        )
+
+    # Combine and deduplicate edge pairs
+    all_edge_pairs = list(set(momepy_edge_pairs + additional_edge_pairs)) # set handles deduplication
+
+    if not all_edge_pairs:
+        return nodes_gdf, empty_edges_gdf
+
+    # Create Edges DataFrame
+    edges_df = pd.DataFrame(all_edge_pairs, columns=[f"{final_id_name}_u", f"{final_id_name}_v"])
+
+    # Add geometry to edges_df (LineString between centroids of connected original lines)
+    # Geometries for these IDs are in nodes_gdf.geometry
+    try:
+        geom_u = nodes_gdf.loc[edges_df[f"{final_id_name}_u"]].geometry.reset_index(drop=True)
+        geom_v = nodes_gdf.loc[edges_df[f"{final_id_name}_v"]].geometry.reset_index(drop=True)
+    except KeyError as e:
+        logger.error(f"KeyError when accessing node geometries for edges: {e}. This might happen if IDs in edge pairs don't exist in nodes_gdf.")
+        return nodes_gdf, empty_edges_gdf
+
+
+    # Vectorized LineString creation
+    edge_geometries = [LineString([p1, p2]) for p1, p2 in zip(geom_u, geom_v, strict=True)]
+    edges_df['geometry'] = edge_geometries
+
+    edges_gdf = gpd.GeoDataFrame(edges_df, geometry='geometry', crs=nodes_gdf.crs)
+    edges_gdf = edges_gdf.set_index([f"{final_id_name}_u", f"{final_id_name}_v"])
+
+    return nodes_gdf, edges_gdf
+
+
+def _extract_momepy_connections(graph: nx.Graph, id_attribute_from_graph_node: str) -> list[tuple]:
+    """
+    Extracts connection pairs from a momepy dual graph.
+    Returns a list of sorted tuples (id_u, id_v) to represent unique undirected edges.
+    """
+    edge_pairs = []
+    # graph.nodes[node_pos_tuple][id_attribute_from_graph_node] gives the original line ID
+    for u_pos, v_pos in graph.edges():
+        try:
+            id_u = graph.nodes[u_pos][id_attribute_from_graph_node]
+            id_v = graph.nodes[v_pos][id_attribute_from_graph_node]
+            if id_u != id_v: # Avoid self-loops
+                 # Sort to ensure (A,B) is same as (B,A) for deduplication by set()
+                edge_pairs.append(tuple(sorted((id_u, id_v))))
+        except KeyError:
+            logger.warning(f"Node position missing '{id_attribute_from_graph_node}' attribute. Edge involving {u_pos}-{v_pos} skipped.")
+            continue
+    return edge_pairs
+
+
+def _extract_dual_graph_nodes(graph: nx.Graph,
+                              gdf_crs: str | dict | None,
+                              id_attribute_from_graph_node: str,
+                              desired_output_id_col_name: str) -> gpd.GeoDataFrame:
     """
     Extract nodes from dual graph into a GeoDataFrame.
+    The output GeoDataFrame will be indexed by `desired_output_id_col_name`,
+    containing values from `graph.nodes[data=True][id_attribute_from_graph_node]`.
 
     Parameters
     ----------
-    dual_graph : networkx.Graph
-        Dual graph representation of the network
-    id_col : str
-        Column name for the node identifiers
+    graph : networkx.Graph
+        Dual graph representation of the network. Nodes are expected to have
+        `id_attribute_from_graph_node` in their attributes.
     gdf_crs : pyproj.CRS
-        Coordinate reference system for the output GeoDataFrame
+        Coordinate reference system for the output GeoDataFrame.
+    id_attribute_from_graph_node : str
+        The name of the attribute in graph nodes that stores the desired unique ID.
+    desired_output_id_col_name : str
+        The name for the column that will store these IDs and will become the index.
 
     Returns
     -------
     geopandas.GeoDataFrame
-        GeoDataFrame containing nodes from the dual graph
+        GeoDataFrame containing nodes from the dual graph, indexed by `desired_output_id_col_name`.
     """
-    # Extract nodes data efficiently
-    nodes_data = pd.DataFrame.from_dict(
-        dict(dual_graph.nodes(data=True)), orient="index",
-    )
-
-    if nodes_data.empty:
+    if not graph.nodes:
         return gpd.GeoDataFrame(
-            columns=[id_col, "geometry"], geometry="geometry", crs=gdf_crs,
+            [],
+            columns=[desired_output_id_col_name, 'geometry'],
+            index=pd.Index([], name=desired_output_id_col_name),
+            geometry='geometry',
+            crs=gdf_crs
         )
 
-    # Check if id_col exists before filtering
-    if id_col in nodes_data.columns:
-        nodes_data = nodes_data[nodes_data[id_col].notna()]
+    node_positions = list(graph.nodes())  # These are the (x,y) tuples from momepy
+    attributes_list = [data for _, data in graph.nodes(data=True)]
 
-        # Create geometries from coordinates
-        nodes_data["geometry"] = [Point(coord) for coord in nodes_data.index]
+    # Extract IDs from the specified attribute in graph node data
+    try:
+        ids = [attrs[id_attribute_from_graph_node] for attrs in attributes_list]
+    except KeyError:
+        msg = (f"Attribute '{id_attribute_from_graph_node}' not found in all graph nodes. "
+                 "Ensure `momepy.gdf_to_nx` with `preserve_index=True` was used correctly "
+                 "and the attribute name (usually 'index') is correct.")
+        raise ValueError(msg) from None
 
-        # Create a GeoDataFrame
-        dual_node_gdf = gpd.GeoDataFrame(nodes_data, geometry="geometry", crs=gdf_crs)
 
-        # Set the index of the dual_gdf
-        return dual_node_gdf.set_index(dual_node_gdf[id_col]).drop(
-            columns=[id_col],
+    # Create geometries (Points from node positions)
+    geometries = [Point(pos) for pos in node_positions]
+
+    # Prepare data for GeoDataFrame constructor
+    data_dict = {
+        desired_output_id_col_name: ids,
+        'geometry': geometries
+    }
+
+    # Add other attributes from graph nodes, excluding the ID attribute itself and 'pos'
+    if attributes_list:
+        # Get a representative set of other attribute keys from the first node
+        # (assuming homogeneity in other attributes, or handling missing ones with .get)
+        first_attrs = attributes_list[0]
+        other_attr_keys = [k for k in first_attrs.keys() if k not in [id_attribute_from_graph_node, 'pos']]
+        for key in other_attr_keys:
+            data_dict[key] = [attrs.get(key) for attrs in attributes_list] # Use .get for safety
+
+    nodes_gdf = gpd.GeoDataFrame(data_dict, crs=gdf_crs)
+
+    # Set the index using the desired ID column
+    if desired_output_id_col_name in nodes_gdf.columns:
+        nodes_gdf = nodes_gdf.set_index(desired_output_id_col_name)
+        # Ensure the index has the correct name, even if it was already the index
+        nodes_gdf.index.name = desired_output_id_col_name
+    else:
+        # This case should ideally not be reached if logic is correct
+        logger.warning(
+            f"Column '{desired_output_id_col_name}' for index not found in extracted node data. "
+            "An empty GDF might be returned or GDF might not have the intended index."
         )
+        # Fallback to ensure schema if nodes_gdf is empty or column is missing
+        if nodes_gdf.empty and desired_output_id_col_name not in nodes_gdf.columns:
+             nodes_gdf = gpd.GeoDataFrame(
+                [],
+                columns=[desired_output_id_col_name, 'geometry'],
+                index=pd.Index([], name=desired_output_id_col_name),
+                geometry='geometry',
+                crs=gdf_crs
+            )
 
-    return gpd.GeoDataFrame(
-        columns=[id_col, "geometry"], geometry="geometry", crs=gdf_crs,
-    )
+
+    return nodes_gdf
 
 
-def _extract_node_connections(dual_graph: nx.Graph,
-                              id_col: str) -> dict:
+def _extract_node_connections(graph: nx.Graph,
+                              id_attribute_from_graph_node: str) -> dict:
     """
     Extract connections between nodes from dual graph.
+    Uses the specified `id_attribute_from_graph_node` from node data as identifiers.
+    DEPRECATED: Functionality moved to _extract_momepy_connections or handled in dual_graph.
+    Kept for reference during transition, to be removed.
 
     Parameters
     ----------
-    dual_graph : networkx.Graph
-        Dual graph representation of the network
-    id_col : str
-        Column name for the node identifiers
+    graph : networkx.Graph
+        Dual graph representation of the network.
+    id_attribute_from_graph_node : str
+        The name of the attribute in graph nodes that stores the desired unique ID.
 
     Returns
     -------
     dict
-        Dictionary mapping node IDs to lists of connected node IDs
+        Dictionary mapping node IDs to lists of connected node IDs.
     """
-    # Extract connections using vectorized operations
     connections = {}
+    # Cache node IDs to avoid repeated attribute access in loops
+    # Graph nodes themselves are positions (tuples), data contains attributes
+    node_id_map = {node_pos: data[id_attribute_from_graph_node] for node_pos, data in graph.nodes(data=True)}
 
-    # Get all nodes with their data at once
-    nodes_data = dict(dual_graph.nodes(data=True))
+    if not node_id_map: # No nodes or nodes lack the id attribute
+        return connections
 
-    # Vectorized connection extraction using dictionary comprehension
-    connections = {
-        nodes_data[node].get(id_col, node): [
-            nodes_data[neighbor].get(id_col, neighbor)
-            for neighbor in dual_graph.neighbors(node)
-        ]
-        for node in dual_graph.nodes()
-    }
+    for node_pos in graph.nodes():
+        current_node_id = node_id_map[node_pos]
+        neighbor_ids = []
+        for neighbor_pos in graph.neighbors(node_pos):
+            neighbor_ids.append(node_id_map[neighbor_pos])
+        connections[current_node_id] = neighbor_ids
 
     return connections
 
@@ -296,121 +447,150 @@ def _extract_node_connections(dual_graph: nx.Graph,
 def _find_additional_connections(line_gdf: gpd.GeoDataFrame,
                                  id_col: str,
                                  tolerance: float,
-                                 connections: dict | None = None) -> dict:
+                                 connections: dict | None = None) -> list[tuple]: # Changed return type
     """
     Find additional connections between lines based on endpoint proximity.
+    Returns a list of unique, sorted tuples (id_A, id_B) representing undirected edges.
 
     Parameters
     ----------
     line_gdf : geopandas.GeoDataFrame
-        GeoDataFrame containing LineString geometries
+        GeoDataFrame containing LineString geometries. Must have `id_col`.
     id_col : str
-        Column name for the line identifiers
+        Column name for the line identifiers.
     tolerance : float
-        Distance tolerance for endpoint connections
+        Distance tolerance for endpoint connections.
     connections : dict, optional
-        Existing connections dictionary to update
+        This parameter is no longer used and will be ignored. Kept for signature compatibility during refactoring.
 
     Returns
     -------
-    dict
-        Updated dictionary of connections
+    list[tuple]
+        List of unique (id_A, id_B) tuples representing connected line IDs.
+        Each tuple is sorted to ensure undirected uniqueness.
     """
-    if connections is None:
-        connections = {}
+    # connections dict is no longer used internally for accumulation.
+    # The function now returns a list of pairs.
 
     if line_gdf.empty:
-        return connections
+        return []
 
-    # Ensure id_col exists on line_gdf
+    # Ensure id_col exists on line_gdf; this should be guaranteed by the caller `dual_graph`
     if id_col not in line_gdf.columns:
-        line_gdf[id_col] = line_gdf.index
+        logger.error(f"ID column '{id_col}' not found in line_gdf for _find_additional_connections.")
+        if line_gdf.index.name == id_col or id_col == "original_index":
+            line_gdf_internal = line_gdf.copy()
+            line_gdf_internal[id_col] = line_gdf_internal.index
+        else:
+            return []
+    else:
+        line_gdf_internal = line_gdf
+
 
     # Filter to only LineString geometries
-    linestring_mask = line_gdf.geometry.apply(
+    linestring_mask = line_gdf_internal.geometry.apply(
         lambda g: isinstance(g, shapely.geometry.LineString),
     )
-    valid_lines = line_gdf[linestring_mask]
+    valid_lines = line_gdf_internal[linestring_mask]
 
     if valid_lines.empty:
-        return connections
+        return []
 
     # Extract start and end points vectorized
     start_points = valid_lines.geometry.apply(lambda g: Point(g.coords[0]))
     end_points = valid_lines.geometry.apply(lambda g: Point(g.coords[-1]))
+    valid_ids = valid_lines[id_col] # Assumes id_col is present
 
-    # Get valid indices and IDs
-    valid_indices = valid_lines.index
-    valid_ids = [valid_lines.loc[idx, id_col] if id_col in valid_lines.columns
-                 else idx for idx in valid_indices]
-
-    # Create endpoints data efficiently using vectorized operations
-    start_points_list = start_points.tolist()
-    end_points_list = end_points.tolist()
-    indices_list = valid_indices.tolist()
-
-    # Create endpoint records vectorized
-    start_data = [{"line_idx": idx, id_col: id_val, "endpoint": pt}
-                  for idx, id_val, pt in zip(indices_list, valid_ids, start_points_list, strict=False)]
-    end_data = [{"line_idx": idx, id_col: id_val, "endpoint": pt}
-                for idx, id_val, pt in zip(indices_list, valid_ids, end_points_list, strict=False)]
+    start_data = [{"line_orig_idx": idx, id_col: id_val, "endpoint": pt}
+                  for idx, id_val, pt in zip(valid_lines.index, valid_ids, start_points, strict=False)]
+    end_data = [{"line_orig_idx": idx, id_col: id_val, "endpoint": pt}
+                for idx, id_val, pt in zip(valid_lines.index, valid_ids, end_points, strict=False)]
 
     endpoints_data = start_data + end_data
-
     if not endpoints_data:
-        return connections
+        return []
 
-    # Create GeoDataFrame of endpoints
     endpoints_gdf = gpd.GeoDataFrame(
-        endpoints_data, geometry="endpoint", crs=line_gdf.crs,
+        endpoints_data, geometry="endpoint", crs=valid_lines.crs,
     )
-
-    # Create buffers around endpoints for spatial join
     endpoints_gdf["buffer_geom"] = endpoints_gdf.endpoint.buffer(tolerance)
 
-    # Prepare lines for joining
     lines_for_join = (
-        line_gdf[[id_col, "geometry"]]
-        .reset_index()
-        .rename(columns={"index": "line_index"})
+        valid_lines[[id_col, "geometry"]]
+        .rename(columns={id_col: f"{id_col}_line_geom"})
     )
 
-    # Spatial join buffered endpoints with lines
     joined = gpd.sjoin(
         endpoints_gdf.set_geometry("buffer_geom"),
         lines_for_join,
         predicate="intersects",
         how="left",
+        lsuffix='endpoint',
+        rsuffix='line'
     )
+    
+    id_col_from_endpoint = id_col
+    if f"{id_col}_endpoint" in joined.columns and id_col not in joined.columns:
+        id_col_from_endpoint = f"{id_col}_endpoint"
+    elif id_col not in joined.columns and f"{id_col}_endpoint" not in joined.columns:
+         possible_id_cols_left = [c for c in endpoints_gdf.columns if c not in ['geometry', 'buffer_geom', 'endpoint', 'line_orig_idx']]
+         if len(possible_id_cols_left) == 1:
+             id_col_from_endpoint_candidate = possible_id_cols_left[0]
+             if f"{id_col_from_endpoint_candidate}_endpoint" in joined.columns:
+                 id_col_from_endpoint = f"{id_col_from_endpoint_candidate}_endpoint"
+             elif id_col_from_endpoint_candidate in joined.columns : # if no suffix was added
+                 id_col_from_endpoint = id_col_from_endpoint_candidate
+             else: # Fallback if specific suffixed version not found but original might be there
+                 logger.warning(f"Could not definitively identify endpoint ID column from '{id_col}'. Attempting to use '{id_col_from_endpoint_candidate}'.")
+                 # id_col_from_endpoint remains as original id_col or the candidate.
+                 # This part needs careful checking of sjoin's behavior with column names.
+                 # For now, assume original id_col or its suffixed version is found.
+                 if id_col_from_endpoint not in joined.columns: # If still not found
+                    logger.error(f"Critical: Endpoint ID column '{id_col_from_endpoint}' (derived from '{id_col}') not in sjoined GDF.")
+                    return []
 
-    # Filter out self-matches
-    joined = joined[joined.line_idx != joined.line_index]
 
-    # Update connections dictionary based on endpoint intersections
-    if not joined.empty:
-        # Determine column names
-        orig_id_col = f"{id_col}_left" if f"{id_col}_left" in joined.columns else id_col
-        other_id_col = (
-            f"{id_col}_right" if f"{id_col}_right" in joined.columns else id_col
-        )
+    id_col_from_intersecting_line = f"{id_col}_line_geom"
+    if f"{id_col_from_intersecting_line}_line" in joined.columns:
+        id_col_from_intersecting_line = f"{id_col_from_intersecting_line}_line"
+    elif id_col_from_intersecting_line not in joined.columns: # If the base name itself isn't there
+        logger.error(f"Critical: Intersecting line ID column '{id_col_from_intersecting_line}' not in sjoined GDF.")
+        return []
+    
+    joined = joined.dropna(subset=[id_col_from_intersecting_line])
+    # Ensure IDs are comparable; convert to string if mixed types, though id_col should be consistent.
+    # This comparison might fail if IDs are of different types (e.g. int vs str)
+    try:
+        joined = joined[
+            joined[id_col_from_endpoint].astype(str) != joined[id_col_from_intersecting_line].astype(str)
+        ]
+    except Exception as e:
+        logger.error(f"Error comparing IDs in _find_additional_connections: {e}. Columns: {id_col_from_endpoint}, {id_col_from_intersecting_line}. Check ID types.")
+        return []
 
-        # Process each valid connection
-        for _, row in joined.iterrows():
-            orig_id = row[orig_id_col]
-            other_id = row[other_id_col]
 
-            if orig_id not in connections:
-                connections[orig_id] = []
-            if other_id not in connections[orig_id]:
-                connections[orig_id].append(other_id)
+    if joined.empty:
+        return []
 
-            if other_id not in connections:
-                connections[other_id] = []
-            if orig_id not in connections[other_id]:
-                connections[other_id].append(orig_id)
+    # Group by the endpoint's line ID and collect all unique intersecting line IDs
+    new_connections_df = joined.groupby(id_col_from_endpoint)[id_col_from_intersecting_line].apply(
+        lambda x: list(pd.unique(x))
+    ).reset_index()
 
-    return connections
-
+    # Create pairs for the edges
+    edge_pairs = []
+    for _, row in new_connections_df.iterrows():
+        orig_id = row[id_col_from_endpoint]
+        connected_ids_list = row[id_col_from_intersecting_line] # This is a list of IDs
+        for connected_id in connected_ids_list:
+            # Add pair, ensuring smaller ID is first (or sorting tuple) to help with deduplication
+            # The main dual_graph function will handle final deduplication via set()
+            # Here, we just ensure each pair from this source is generated.
+            # Sorting here makes the pair canonical for this function's output list.
+            if orig_id != connected_id: # Should be guaranteed by earlier filter
+                edge_pairs.append(tuple(sorted((orig_id, connected_id))))
+    
+    return list(set(edge_pairs)) # Return list of unique (id_a, id_b) tuples
 
 # ============================================================================
 # GRAPH FILTERING FUNCTIONS
@@ -1605,8 +1785,7 @@ def _reconstruct_hetero_edges(
                 if u_pos and v_pos:
                     geometry = LineString([u_pos, v_pos])
 
-            record = {k: v for k, v in attrs.items()
-                     if k not in ["edge_type"]}
+            record = {k: v for k, v in attrs.items() if k not in ["edge_type"]}
             record["geometry"] = geometry
             records.append(record)
 
