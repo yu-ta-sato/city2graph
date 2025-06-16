@@ -133,6 +133,11 @@ def morphological_graph(
     # Validate input GeoDataFrames (includes geometry type checks)
     _validate_input_gdfs(buildings_gdf, segments_gdf)
 
+    # Validate contiguity parameter
+    if contiguity not in {"queen", "rook"}:
+        msg = "contiguity must be 'queen' or 'rook'"
+        raise ValueError(msg)
+
     # Validate clipping_buffer
     if clipping_buffer < 0:
         msg = "clipping_buffer cannot be negative."
@@ -161,7 +166,7 @@ def morphological_graph(
             # Finite clipping_buffer: use distance + clipping_buffer for segs_buffer radius
             segs_buffer_radius = distance + clipping_buffer
             segs_buffer = filter_graph_by_distance(segments_gdf, center_point, segs_buffer_radius) # Segments for tessellation context, filtered by larger radius
-        else:  # clipping_buffer is math.inf
+        else: # clipping_buffer is math.inf
             # Fallback to 'distance' as radius for segs_buffer
             segs_buffer = filter_graph_by_distance(segments_gdf, center_point, distance) # Segments for tessellation context, filtered by distance
     else:
@@ -206,11 +211,22 @@ def morphological_graph(
     if keep_buildings:
         tessellation = _add_building_info(tessellation, buildings_gdf)
 
+    # Determine group_col for private_to_private_graph
+    group_col_for_priv_priv = "enclosure_index"
+    if group_col_for_priv_priv not in tessellation.columns:
+        if not tessellation.empty:
+            logger.warning(
+                "Column '%s' not found in tessellation. "
+                "Private-to-private graph will not use grouping.",
+                group_col_for_priv_priv,
+            )
+        group_col_for_priv_priv = None
+
     # Create private-to-private graph (adjacency between tessellation cells)
     priv_priv = private_to_private_graph(
         tessellation,
-        group_col="enclosure_index", # Group by enclosure
-        contiguity=contiguity, # Adjacency type (queen or rook)
+        group_col=group_col_for_priv_priv,
+        contiguity=contiguity,
     )
 
     # Create public-to-public graph (connectivity between street segments)
@@ -222,8 +238,6 @@ def morphological_graph(
         segs, # Use 'segs' (final graph segments)
         primary_barrier_col=primary_barrier_col, # Optional alternative geometry for public spaces
     )
-
-    print(priv_pub) # Debug print, consider removing for production
 
     # Log warning if no private-public connections found
     if priv_pub.empty:
@@ -302,22 +316,22 @@ def private_to_private_graph(
 
     _id_col = "private_id" # Fixed ID column name for private polygons
 
+    # If not empty, require the ID column
+    if not private_gdf.empty and _id_col not in private_gdf.columns:
+        msg = f"Expected ID column '{_id_col}' not found in private_gdf."
+        raise ValueError(msg)
+
+    # Validate that the contiguity type is supported
+    if contiguity not in {"queen", "rook"}:
+        msg = "contiguity must be either 'queen' or 'rook'"
+        raise ValueError(msg)
+
     # Handle empty or insufficient data: return empty edges GeoDataFrame
     if private_gdf.empty or len(private_gdf) < 2:
         group_cols = [group_col or "group"]
         return _create_empty_edges_gdf(
             private_gdf.crs, "from_private_id", "to_private_id", group_cols,
         )
-
-    # Validate contiguity parameter (must be "queen" or "rook")
-    if contiguity not in {"queen", "rook"}:
-        msg = "contiguity must be 'queen' or 'rook'"
-        raise ValueError(msg)
-
-    # Validate that the required ID column exists in private_gdf
-    if _id_col not in private_gdf.columns:
-        msg = f"Expected ID column '{_id_col}' not found in private_gdf."
-        raise ValueError(msg)
 
     # Validate that the group column exists if specified
     if group_col and group_col not in private_gdf.columns:
@@ -330,24 +344,10 @@ def private_to_private_graph(
     # Create spatial weights matrix (Queen or Rook contiguity)
     spatial_weights = _create_spatial_weights(gdf_indexed, contiguity)
 
-    # If weights creation fails or no neighbors, return empty edges
-    if spatial_weights is None or not spatial_weights.neighbors:
-        group_cols = [group_col or "group"]
-        return _create_empty_edges_gdf(
-            private_gdf.crs, "from_private_id", "to_private_id", group_cols,
-        )
-
     # Extract adjacency relationships from the spatial weights matrix
     adjacency_data = _extract_adjacency_relationships(
         spatial_weights, gdf_indexed, _id_col, group_col,
     )
-
-    # If no adjacency relationships found, return empty edges
-    if adjacency_data.empty:
-        group_cols = [group_col or "group"]
-        return _create_empty_edges_gdf(
-            private_gdf.crs, "from_private_id", "to_private_id", group_cols,
-        )
 
     # Create edge geometries (LineStrings connecting centroids of adjacent polygons)
     edges_gdf_data = _create_adjacency_edges(adjacency_data, gdf_indexed, group_col or "group")
@@ -359,11 +359,9 @@ def private_to_private_graph(
         crs=private_gdf.crs, # Preserve original CRS
     )
 
-
 # ============================================================================
 # PRIVATE TO PUBLIC GRAPH FUNCTIONS
 # ============================================================================
-
 
 def private_to_public_graph(
     private_gdf: gpd.GeoDataFrame,
@@ -460,14 +458,8 @@ def private_to_public_graph(
         id_cols_to_keep = [_priv_id_col, _pub_id_col]
         joined = joined[id_cols_to_keep] # Select relevant ID columns
 
-    # If no intersections found after join, return empty edges
-    if joined.empty:
-        return _create_empty_edges_gdf(private_gdf.crs, _priv_id_col, _pub_id_col)
-
     # Drop duplicate pairs of (private_id, public_id)
     joined = joined.drop_duplicates()
-    if joined.empty: # If all were duplicates and now it's empty
-        return _create_empty_edges_gdf(private_gdf.crs, _priv_id_col, _pub_id_col)
 
     # Create maps of centroids for private and public geometries, indexed by their IDs
     private_centroids_map = (private_gdf.drop_duplicates(subset=[_priv_id_col])
@@ -482,14 +474,11 @@ def private_to_public_graph(
     p1_geoms = private_centroids_map.loc[joined_with_geom[_priv_id_col]].reset_index(drop=True)
     p2_geoms = public_centroids_map.loc[joined_with_geom[_pub_id_col]].reset_index(drop=True)
 
-    # Create LineString geometries connecting the centroids if data is valid
-    if p1_geoms.empty or p2_geoms.empty or len(p1_geoms) != len(p2_geoms):
-        joined_with_geom["geometry"] = gpd.GeoSeries([None] * len(joined_with_geom), crs=private_gdf.crs) # Assign None if invalid
-    else:
-        coords_p1 = np.array(list(zip(p1_geoms.x, p1_geoms.y, strict=True))) # Coordinates for private centroids
-        coords_p2 = np.array(list(zip(p2_geoms.x, p2_geoms.y, strict=True))) # Coordinates for public centroids
-        line_coords = np.stack((coords_p1, coords_p2), axis=1) # Stack coordinates for LineString creation
-        joined_with_geom["geometry"] = list(sh_linestrings(line_coords)) # Create LineStrings
+    # Stack the coordinates of the centroids to create LineString geometries
+    coords_p1 = np.array(list(zip(p1_geoms.x, p1_geoms.y, strict=True))) # Coordinates for private centroids
+    coords_p2 = np.array(list(zip(p2_geoms.x, p2_geoms.y, strict=True))) # Coordinates for public centroids
+    line_coords = np.stack((coords_p1, coords_p2), axis=1) # Stack coordinates for LineString creation
+    joined_with_geom["geometry"] = list(sh_linestrings(line_coords)) # Create LineStrings
 
     # Convert the DataFrame with edge geometries to a GeoDataFrame
     # Columns are already named _priv_id_col ("private_id") and _pub_id_col ("public_id").
@@ -515,7 +504,7 @@ def public_to_public_graph(
     Parameters
     ----------
     public_gdf : geopandas.GeoDataFrame
-        GeoDataFrame containing public space geometries (typically LineStrings).
+        GeoDataFrame containing public space geometries (typically LineString).
         Expected to have a 'public_id' column.
     tolerance : float, default=1e-8
         Distance tolerance for detecting endpoint connections between segments.
@@ -551,20 +540,17 @@ def public_to_public_graph(
 
     # Create dual graph (nodes are segments, edges are connections) using city2graph.dual_graph
     # Assumes 'public_id' (from original index) is used by dual_graph.
-    nodes_gdf, edges_gdf_dual = dual_graph(public_gdf, keep_original_geom=True) # edges_gdf_dual is the key output here
-
-    # Return empty result if dual_graph found no connections or nodes
-    if nodes_gdf.empty or edges_gdf_dual.empty:
-        return _create_empty_edges_gdf(public_gdf.crs, "from_public_id", "to_public_id")
-
-    # Validate that edges_gdf_dual has the expected MultiIndex (from_id, to_id)
-    if not isinstance(edges_gdf_dual.index, pd.MultiIndex) or len(edges_gdf_dual.index.names) < 2:
-        logger.warning("edges_gdf from dual_graph does not have the expected MultiIndex.")
-        return _create_empty_edges_gdf(public_gdf.crs, "from_public_id", "to_public_id")
+    _, edges_gdf_dual = dual_graph(
+        public_gdf, keep_original_geom=True,
+    ) # edges_gdf_dual is the key output here
 
     # Extract 'from' and 'to' public IDs from the MultiIndex of edges_gdf_dual
-    u_ids = edges_gdf_dual.index.get_level_values(0).to_series(index=edges_gdf_dual.index, name="from_public_id")
-    v_ids = edges_gdf_dual.index.get_level_values(1).to_series(index=edges_gdf_dual.index, name="to_public_id")
+    u_ids = edges_gdf_dual.index.get_level_values(0).to_series(
+        index=edges_gdf_dual.index, name="from_public_id",
+    )
+    v_ids = edges_gdf_dual.index.get_level_values(1).to_series(
+        index=edges_gdf_dual.index, name="to_public_id",
+    )
 
     # Create a new DataFrame for edges with 'from_public_id', 'to_public_id', and geometry
     edges_df = pd.DataFrame({
@@ -572,10 +558,6 @@ def public_to_public_graph(
         "to_public_id": v_ids.to_numpy(),
         "geometry": edges_gdf_dual.geometry.to_numpy(), # Geometries from dual_graph edges
     })
-
-    # If the resulting DataFrame is empty, return an empty GeoDataFrame
-    if edges_df.empty:
-        return _create_empty_edges_gdf(public_gdf.crs, "from_public_id", "to_public_id")
 
     # Convert the DataFrame to a GeoDataFrame, preserving CRS
     return gpd.GeoDataFrame(edges_df, geometry="geometry", crs=public_gdf.crs)
@@ -615,9 +597,8 @@ def _validate_input_gdfs(buildings_gdf: gpd.GeoDataFrame, segments_gdf: gpd.GeoD
 
     # Validate geometry types for non-empty buildings_gdf
     if not buildings_gdf.empty:
-        allowed_building_geom_types = {"Polygon", "MultiPolygon"}
         building_geom_types = buildings_gdf.geometry.geom_type.unique()
-        if not all(geom_type in allowed_building_geom_types for geom_type in building_geom_types):
+        if not all(geom_type in {"Polygon", "MultiPolygon"} for geom_type in building_geom_types):
             msg = (
                 f"buildings_gdf must contain only Polygon or MultiPolygon geometries. "
                 f"Found: {', '.join(building_geom_types)}"
@@ -627,9 +608,8 @@ def _validate_input_gdfs(buildings_gdf: gpd.GeoDataFrame, segments_gdf: gpd.GeoD
     # Validate geometry types for non-empty segments_gdf
     if not segments_gdf.empty:
         # Assuming LineString is required for operations like dual_graph
-        allowed_segment_geom_types = {"LineString"}
         segment_geom_types = segments_gdf.geometry.geom_type.unique()
-        if not all(geom_type in allowed_segment_geom_types for geom_type in segment_geom_types):
+        if not all(geom_type in {"LineString"} for geom_type in segment_geom_types):
             msg = (
                 f"segments_gdf must contain only LineString geometries. "
                 f"Found: {', '.join(segment_geom_types)}"
@@ -764,52 +744,43 @@ def _filter_adjacent_tessellation(
     geopandas.GeoDataFrame
         Filtered tessellation
     """
-    # Return copy if tessellation or segments are empty
-    if tess.empty or segments.empty:
+    # If tessellation is empty, return an empty GeoDataFrame with the same structure
+    if tess.empty:
         return tess.copy()
 
     # If max_distance is infinite, no filtering is needed based on distance
     if math.isinf(max_distance):
         return tess.copy()
 
-    # If max_distance is None (legacy or specific use case), filter by simple intersection
-    if max_distance is None: # This condition might be for a specific intersection-based filtering
-        joined = gpd.sjoin(tess, segments, how="inner", predicate="intersects")
-        return tess.loc[joined.index.unique()] # Keep unique tessellation cells that intersect segments
-
     # Check if 'enclosure_index' column exists for grouped processing
     encl_col = "enclosure_index" if "enclosure_index" in tess.columns else None
 
-    # If no enclosure grouping, filter based on distance to the union of all segments
-    if encl_col is None:
-        segment_union = segments.unary_union # Union of all segment geometries
-        centroids = tess.geometry.centroid # Centroids of tessellation cells
-        distances = centroids.distance(segment_union) # Distances from centroids to segment union
-        return tess.loc[distances <= max_distance].copy() # Keep cells within max_distance
+    # List to store filtered parts of tessellation
+    filtered_parts: list[gpd.GeoDataFrame] = []
 
-    # Process tessellation cells grouped by 'enclosure_index'
-    # The following loop processes tessellation cells grouped by 'enclosure_index'.
-    # Fully vectorizing this loop across all groups simultaneously is challenging
-    # due to the per-group unary_union of relevant segments and subsequent
-    # distance calculations based on these group-specific unions.
-    # The operations within the loop leverage vectorized GeoPandas methods on the
-    # 'group' and 'segs' subsets.
-    filtered_parts: list[gpd.GeoDataFrame] = [] # List to store filtered parts of tessellation
-    for _, group in tess.groupby(encl_col): # Iterate over each enclosure group
-        enclosure_geom = group.unary_union # Geometry of the current enclosure
-        segs_in_enclosure = segments[segments.intersects(enclosure_geom)] # Segments intersecting this enclosure
-        if segs_in_enclosure.empty: # If no segments intersect, skip this group
-            continue
-        segment_union_in_enclosure = segs_in_enclosure.unary_union # Union of segments within this enclosure
-        centroids_in_group = group.geometry.centroid # Centroids of cells in this group
-        distances_in_group = centroids_in_group.distance(segment_union_in_enclosure) # Distances to segments in this enclosure
-        filtered_group = group.loc[distances_in_group <= max_distance] # Filter cells in group by distance
+    # Iterate over each enclosure group
+    for _, group in tess.groupby(encl_col):
+        # Geometry of the current enclosure
+        enclosure_geom = group.unary_union
+
+        # Segments intersecting this enclosure
+        segs_in_enclosure = segments[segments.intersects(enclosure_geom)]
+
+        # Union of segments within this enclosure
+        segment_union_in_enclosure = segs_in_enclosure.unary_union
+
+        # Centroids of cells in this group
+        centroids_in_group = group.geometry.centroid
+
+        # Distances to segments in this enclosure
+        distances_in_group = centroids_in_group.distance(segment_union_in_enclosure)
+
+        # Filter cells in group by distance
+        filtered_group = group.loc[distances_in_group <= max_distance]
+
+        # Add filtered group to list
         if not filtered_group.empty:
-            filtered_parts.append(filtered_group) # Add filtered group to list
-
-    # If no parts were kept after filtering, return an empty tessellation GeoDataFrame
-    if not filtered_parts:
-        return gpd.GeoDataFrame(columns=tess.columns, geometry="geometry", crs=tess.crs)
+            filtered_parts.append(filtered_group)
 
     # Concatenate all filtered parts into a single GeoDataFrame
     return gpd.GeoDataFrame(pd.concat(filtered_parts), crs=tess.crs)
@@ -844,35 +815,17 @@ def _connect_centroids_to_segment_graph(
     seg_nodes_pos_dict: dict[str, tuple[float, float]], # Positions of segment graph nodes
 ) -> None:
     """Connect centroid nodes to the nearest segment graph nodes using KDTree."""
-    # Proceed only if there are segment nodes and centroids
-    if not seg_nodes_pos_dict or centroids.empty:
-        return
-
     # Prepare segment node IDs and their coordinates for KDTree
     seg_node_ids_list = list(seg_nodes_pos_dict.keys())
     seg_node_coords_list = [list(coord) for coord in seg_nodes_pos_dict.values()]
-
-    # Ensure there are coordinates to build the KDTree
-    if not seg_node_coords_list:
-        return
-
     seg_node_coords_array = np.array(seg_node_coords_list)
-    # Validate coordinate array dimensions
-    if seg_node_coords_array.ndim != 2 or seg_node_coords_array.shape[1] != 2:
-        return # Invalid array shape for KDTree
 
     # Build KDTree from segment graph node coordinates for efficient nearest neighbor search
     tree = KDTree(seg_node_coords_array)
 
     # Prepare centroid coordinates for querying the KDTree
     centroid_coords_list = [(pt.x, pt.y) for pt in centroids.tolist()]
-    if not centroid_coords_list:
-        return # No centroid coordinates
-
     centroid_coords_array = np.array(centroid_coords_list)
-    # Validate centroid coordinate array dimensions
-    if centroid_coords_array.ndim != 2 or centroid_coords_array.shape[1] != 2:
-        return # Invalid array shape for query
 
     # Query KDTree: for each centroid, find the nearest segment graph node and distance to it
     distances_to_seg, indices_in_seg_nodes = tree.query(centroid_coords_array)
@@ -898,21 +851,8 @@ def _connect_centroids_to_centroids(
     centroid_iloc_to_node_id: dict[int, str], # Maps iloc of centroids to graph node_id
 ) -> None:
     """Connect centroid nodes to each other based on Euclidean distance, vectorized."""
-    # Proceed only if there are at least two centroids to connect
-    if len(centroids) < 2:
-        return
-
-    # Create a list of node IDs and a corresponding array of coordinates,
-    # ordered by the iloc used in centroid_iloc_to_node_id.
-    # This ensures that the order of coordinates matches the order of node IDs
-    # for pairing with distances from pdist.
-
     # Get relevant ilocs (integer positions) from the centroid_iloc_to_node_id map and sort them
     relevant_ilocs = sorted(centroid_iloc_to_node_id.keys())
-
-    # If fewer than 2 relevant centroids, no pairs can be formed
-    if len(relevant_ilocs) < 2:
-        return
 
     # Extract centroid Point geometries and their graph node IDs in a consistent, sorted order
     points_to_connect = centroids.iloc[relevant_ilocs] # GeoSeries of Points
@@ -920,10 +860,6 @@ def _connect_centroids_to_centroids(
 
     # Create a 2D NumPy array of coordinates (x, y) from the Point geometries
     coords_array = np.array([(pt.x, pt.y) for pt in points_to_connect])
-
-    # Ensure there are at least two points in the coordinate array
-    if coords_array.shape[0] < 2:
-        return
 
     # Calculate all pairwise Euclidean distances using scipy.spatial.distance.pdist
     # pdist returns a condensed distance matrix (a 1D array of upper triangular part)
@@ -947,20 +883,9 @@ def _find_closest_node_to_center(
     """Find the graph node closest to the geographic center point, vectorized."""
     # Get positions (coordinates) of all nodes in the graph
     all_node_pos_dict = nx.get_node_attributes(graph, "pos")
-    if not all_node_pos_dict: # If no nodes have positions
-        return None
 
-    # Attempt to convert node positions to a NumPy array of coordinates
-    try:
-        # Ensure positions are valid (not None) before converting
-        node_coords = np.array([list(pos) for pos in all_node_pos_dict.values() if pos is not None])
-    except TypeError: # Handle cases where 'pos' might not be directly convertible (e.g., unexpected type)
-        logger.warning("Could not convert all node positions to coordinates.")
-        return None
-
-    # Check if node_coords is a valid 2D array with shape (N, 2) and not empty
-    if node_coords.ndim != 2 or node_coords.shape[1] != 2 or node_coords.shape[0] == 0:
-        return None # Invalid or empty coordinate array
+    # Convert node positions to a NumPy array of coordinates
+    node_coords = np.array([list(pos) for pos in all_node_pos_dict.values() if pos is not None])
 
     # Filter node_ids to match the successfully converted and valid coordinates
     # This ensures node_ids and node_coords are aligned.
@@ -968,8 +893,6 @@ def _find_closest_node_to_center(
         nid: pos for nid, pos in all_node_pos_dict.items()
         if pos is not None and isinstance(pos, tuple) and len(pos) == 2 # Check for valid position tuple
     }
-    if not valid_node_data: # If no valid node positions found
-        return None
 
     # Extract valid node IDs and their coordinates
     node_ids = list(valid_node_data.keys()) # List of node IDs with valid positions
@@ -980,10 +903,6 @@ def _find_closest_node_to_center(
 
     # Calculate squared Euclidean distances from all nodes to the center point (avoids sqrt for comparison)
     distances_sq = np.sum((node_coords - center_coord)**2, axis=1)
-
-    # If no distances calculated (should be caught by earlier checks)
-    if distances_sq.size == 0:
-        return None
 
     # Find the index of the minimum squared distance
     closest_idx = np.argmin(distances_sq)
@@ -998,16 +917,14 @@ def _filter_nodes_by_path_length(
     centroid_iloc_to_node_id: dict[int, str], # Mapping from centroid iloc to graph node ID
 ) -> list[int]: # Returns list of ilocs of centroids within max_distance
     # Calculate shortest path lengths from source_node_id to all other nodes
-    try:
-        lengths = nx.single_source_dijkstra_path_length(graph, source_node_id, weight="length")
-    except (nx.NetworkXNoPath, nx.NodeNotFound): # Handle cases where source is not found or no paths exist
-        return [] # Return empty list if no paths or source not found
+    lengths = nx.single_source_dijkstra_path_length(graph, source_node_id, weight="length")
 
     # Filter centroid ilocs based on whether their corresponding node's path length is within max_distance
     return [
         iloc # Keep the iloc of the centroid
         for iloc, node_id in centroid_iloc_to_node_id.items() # Iterate through centroid mappings
-        if lengths.get(node_id, math.inf) <= max_distance # Check if path length to centroid node is <= max_distance
+        # Check if path length to centroid node is <= max_distance
+        if lengths.get(node_id, math.inf) <= max_distance
     ]
 
 
@@ -1035,17 +952,10 @@ def _filter_tessellation_by_network_distance(
     _connect_centroids_to_centroids(graph, centroids, centroid_iloc_to_node_id)
 
     # Normalize center_point input to a single Shapely Point geometry
-    if isinstance(center_point, gpd.GeoDataFrame):
-        center_geom = center_point.geometry.iloc[0] # Use first geometry if GeoDataFrame
-    elif isinstance(center_point, gpd.GeoSeries):
-        center_geom = center_point.iloc[0] # Use first geometry if GeoSeries
-    else:
-        center_geom = center_point  # Assume center_point is already a Shapely Point
+    center_geom = center_point.iloc[0] if isinstance(center_point, gpd.GeoSeries) else center_point
 
     # Find the graph node closest to the geographic center_geom
     center_node_id_in_graph = _find_closest_node_to_center(graph, center_geom)
-    if center_node_id_in_graph is None: # If no suitable center node found in graph
-        return tess.iloc[0:0].copy() # Return empty GeoDataFrame with same schema
 
     # Filter centroid ilocs based on network path length from the center_node_id_in_graph
     keep_ilocs = _filter_nodes_by_path_length(
@@ -1150,8 +1060,13 @@ def _set_node_index(gdf: gpd.GeoDataFrame, col: str) -> gpd.GeoDataFrame:
     geopandas.GeoDataFrame
         GeoDataFrame with index set if column exists
     """
-    # Set the GeoDataFrame index to the specified column 'col' if it exists in the GDF's columns
-    return gdf.set_index(col) if col in gdf.columns else gdf # Otherwise, return GDF unchanged
+    if gdf.empty:
+        # For an empty GDF, set an empty index.
+        # Attempting to set_index with a non-existent column `col` would error.
+        # If `col` is the intended index name, it can be assigned after.
+        return gdf.set_index(pd.Index([])) # Safest for empty
+
+    return gdf.set_index(col, drop=False) # Key change: drop=False
 
 
 def _set_edge_index(
@@ -1204,15 +1119,11 @@ def _create_spatial_weights(gdf: gpd.GeoDataFrame, contiguity: str) -> libpysal.
         Spatial weights matrix, or None if creation fails
     """
     # Attempt to create spatial weights matrix using libpysal
-    try:
-        if contiguity == "queen": # Queen contiguity (shared edges or vertices)
-            return libpysal.weights.Queen.from_dataframe(gdf)
-        # Rook contiguity (shared edges only)
-        return libpysal.weights.Rook.from_dataframe(gdf)
-    except (ValueError, IndexError): # Catch errors during weights creation (e.g., invalid geometries)
-        logger.warning("Could not create spatial weights matrix", stacklevel=2)
-        return None # Return None if creation fails
+    if contiguity == "queen": # Queen contiguity (shared edges or vertices)
+        return libpysal.weights.Queen.from_dataframe(gdf)
 
+    # Rook contiguity (shared edges only)
+    return libpysal.weights.Rook.from_dataframe(gdf)
 
 def _extract_adjacency_relationships(
     spatial_weights: libpysal.weights.W, # Precomputed spatial weights matrix
@@ -1310,10 +1221,6 @@ def _create_adjacency_edges(
     pandas.DataFrame
         DataFrame with edge geometries
     """
-    # If no adjacency data, return an empty DataFrame with the expected schema
-    if adjacency_data.empty:
-        return pd.DataFrame(columns=["from_private_id", "to_private_id", group_col, "geometry"])
-
     # Work with a copy to avoid modifying the input DataFrame
     adj_data_processed = adjacency_data.copy()
 
@@ -1328,10 +1235,6 @@ def _create_adjacency_edges(
         subset=["from_private_id", "to_private_id", group_col],
     )
 
-    # If all edges were duplicates and now it's empty, return empty DataFrame
-    if adj_data_processed.empty:
-        return pd.DataFrame(columns=["from_private_id", "to_private_id", group_col, "geometry"])
-
     # Calculate centroids of all polygons in the input GeoDataFrame 'gdf'
     # 'gdf' is assumed to be the one with 0..N-1 index matching 'row'/'col' in adjacency_data
     centroids = gdf.geometry.centroid
@@ -1344,21 +1247,19 @@ def _create_adjacency_edges(
     points_p1 = centroids.iloc[rows_idx] # Centroids of 'from' polygons
     points_p2 = centroids.iloc[cols_idx] # Centroids of 'to' polygons
 
-    # Create LineString geometries connecting the paired centroids
-    if points_p1.empty or points_p2.empty or len(points_p1) != len(points_p2):
-        adj_data_processed["geometry"] = None # Assign None if data is invalid for line creation
-    else:
-        # Extract (x,y) coordinates for p1 and p2 centroids
-        coords_p1 = np.array(list(zip(points_p1.x, points_p1.y, strict=True)))
-        coords_p2 = np.array(list(zip(points_p2.x, points_p2.y, strict=True)))
+    # Extract (x,y) coordinates for p1 and p2 centroids
+    coords_p1 = np.array(list(zip(points_p1.x, points_p1.y, strict=True)))
+    coords_p2 = np.array(list(zip(points_p2.x, points_p2.y, strict=True)))
 
-        # Stack coordinates to form pairs for LineString creation [(x1,y1), (x2,y2)]
-        line_coords = np.stack((coords_p1, coords_p2), axis=1)
-        # Create LineStrings and assign to the 'geometry' column
-        adj_data_processed["geometry"] = list(sh_linestrings(line_coords))
+    # Stack coordinates to form pairs for LineString creation [(x1,y1), (x2,y2)]
+    line_coords = np.stack((coords_p1, coords_p2), axis=1)
+
+    # Create LineStrings and assign to the 'geometry' column
+    adj_data_processed["geometry"] = list(sh_linestrings(line_coords))
 
     # Drop intermediate 'row' and 'col' index columns if they exist
     columns_to_drop = [col for col in ["row", "col"] if col in adj_data_processed.columns]
+
     # Define final columns for the output DataFrame
     final_columns = ["from_private_id", "to_private_id", group_col, "geometry"]
 

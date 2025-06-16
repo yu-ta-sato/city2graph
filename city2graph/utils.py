@@ -267,29 +267,48 @@ def _get_original_id_col_name(gdf: gpd.GeoDataFrame) -> str:
 
 
 def _create_empty_dual_graph_gdfs(
-    gdf_crs: Any,
-    original_id_col_name: str,
-    node_schema_cols: list[str],
-    edge_schema_cols: list[str],
+    crs: str | int | None,
+    original_id_col_name: str,  # Name of the ID column from the original GDF
+    node_schema_cols: list[str],  # Full schema for node GDF columns
+    edge_schema_cols: list[str],  # Schema for edge GDF columns (typically just ["geometry"])
 ) -> tuple[gpd.GeoDataFrame, gpd.GeoDataFrame]:
-    """Create empty GeoDataFrames for nodes and edges with consistent schema."""
-    # Create an empty GeoDataFrame for nodes with specified columns, index name, and CRS
+    """Helper to create empty nodes and edges GDFs for dual_graph, compatible with its calling signature."""
+    # Prepare columns for empty_nodes_gdf
+    # Ensure "geometry" is present for the geometry column.
+    final_node_cols = list(node_schema_cols)  # Start with a copy
+    if "geometry" not in final_node_cols:
+        final_node_cols.append("geometry")
+    # Ensure uniqueness, keeping "geometry" (usually added last if not present)
+    # If node_schema_cols was empty, final_node_cols is now ["geometry"]
+    final_node_cols = list(dict.fromkeys(final_node_cols))
+
     empty_nodes_gdf = gpd.GeoDataFrame(
-        [],
-        columns=node_schema_cols,
-        index=pd.Index([], name=original_id_col_name),
-        crs=gdf_crs,
-        geometry="geometry",
+        columns=final_node_cols,
+        geometry="geometry",  # The column named "geometry" will be the geometry column
+        crs=crs,
     )
-    # Create an empty GeoDataFrame for edges with specified columns, MultiIndex names, and CRS
+
+    # Prepare columns for empty_edges_gdf
+    from_col = f"from_{original_id_col_name}"
+    to_col = f"to_{original_id_col_name}"
+
+    # Start with from/to columns, then add others from edge_schema_cols
+    final_edge_cols = [from_col, to_col]
+    for col in edge_schema_cols:
+        if col not in final_edge_cols:  # Avoid duplicating from/to if they were in edge_schema_cols
+            final_edge_cols.append(col)
+
+    # Ensure "geometry" is present for the geometry column.
+    if "geometry" not in final_edge_cols:
+        final_edge_cols.append("geometry")
+    # Ensure uniqueness
+    # If edge_schema_cols was ["geometry"], final_edge_cols is [from, to, "geometry"]
+    final_edge_cols = list(dict.fromkeys(final_edge_cols))
+
     empty_edges_gdf = gpd.GeoDataFrame(
-        [],
-        columns=edge_schema_cols,
-        index=pd.MultiIndex.from_tuples(
-            [], names=(f"{original_id_col_name}_u", f"{original_id_col_name}_v"),
-        ),
-        crs=gdf_crs,
-        geometry="geometry",
+        columns=final_edge_cols,
+        geometry="geometry",  # The column named "geometry" will be the geometry column
+        crs=crs,
     )
     return empty_nodes_gdf, empty_edges_gdf
 
@@ -1318,15 +1337,22 @@ def _process_homogeneous_edges(
 
         # Prepare edge attributes vectorized
         if keep_geom:
-            edge_attrs_data = edges.to_dict("records")
+            edge_attrs_data = edges.to_dict("records") # This is a list of dicts
         else:
             edge_attrs_data = edges.drop(columns=["geometry"]).to_dict("records")
 
         # Add original edge indices vectorized
         for i, orig_idx in enumerate(edges.index):
             edge_attrs_data[i]["_original_edge_index"] = orig_idx
+            # === Add length calculation here ===
+            if "length" not in edge_attrs_data[i]:
+                geom = edges.geometry.iloc[i]
+                if geom: # Check if geom is not None
+                    edge_attrs_data[i]["length"] = geom.length
+            # === End of addition ===
 
         # Create edges to add
+        # Edges are ( (x1,y1), (x2,y2), attrs )
         edges_to_add = [(start_coords.iloc[i], end_coords.iloc[i], edge_attrs_data[i])
                        for i in range(len(edges))]
 
