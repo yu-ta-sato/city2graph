@@ -1,6 +1,6 @@
+import logging  # Added for caplog
 import math
-import logging # Added for caplog
-import pathlib # Added for path handling
+import pathlib  # Added for path handling
 
 import geopandas as gpd
 import pandas as pd
@@ -21,7 +21,7 @@ def _create_gdf(geometries, attributes_list, crs=TEST_CRS):
     """
     Creates a GeoDataFrame.
     geometries: list of shapely geometry objects
-    attributes_list: list of dictionaries, where each dict contains attributes for a geometry
+    attributes_list: list of dictionaries, where each dict contains attributes for a geometry.
     """
     if not geometries:
         columns = ["geometry"]

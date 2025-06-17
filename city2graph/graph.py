@@ -71,11 +71,8 @@ GRAPH_NO_NODES_MSG = "Graph has no nodes"
 def gdf_to_pyg(
     nodes: dict[str, gpd.GeoDataFrame] | gpd.GeoDataFrame,
     edges: dict[tuple[str, str, str], gpd.GeoDataFrame] | gpd.GeoDataFrame | None = None,
-    node_id_cols: dict[str, str] | str | None = None,
     node_feature_cols: dict[str, list[str]] | list[str] | None = None,
     node_label_cols: dict[str, list[str]] | list[str] | None = None,
-    edge_source_col: str | None = None,
-    edge_target_col: str | None = None,
     edge_feature_cols: dict[str, list[str]] | list[str] | None = None,
     device: str | torch.device | None = None,
     dtype: torch.dtype | None = None,
@@ -84,23 +81,23 @@ def gdf_to_pyg(
 
     This function serves as the main entry point for converting spatial data into 
     PyTorch Geometric graph objects. It automatically detects whether to create 
-    homogeneous or heterogeneous graphs based on input structure and provides 
-    intelligent column detection for edge relationships.
+    homogeneous or heterogeneous graphs based on input structure. Node identifiers
+    are taken from the GeoDataFrame index. Edge relationships are defined by a
+    MultiIndex on the edge GeoDataFrame (source ID, target ID).
 
     Parameters
     ----------
     nodes : dict[str, gpd.GeoDataFrame] or gpd.GeoDataFrame
         Node data. For homogeneous graphs, provide a single GeoDataFrame.
         For heterogeneous graphs, provide a dictionary mapping node type names 
-        to their respective GeoDataFrames.
+        to their respective GeoDataFrames. The index of these GeoDataFrames
+        will be used as node identifiers.
     edges : dict[tuple[str, str, str], gpd.GeoDataFrame] or gpd.GeoDataFrame, optional
         Edge data. For homogeneous graphs, provide a single GeoDataFrame.
         For heterogeneous graphs, provide a dictionary mapping edge type tuples
         (source_type, relation_type, target_type) to their GeoDataFrames.
-    node_id_cols : dict[str, str] or str, optional
-        Column name(s) to use as node identifiers. For heterogeneous graphs,
-        provide a dictionary mapping node types to their ID columns.
-        If None, uses the GeoDataFrame index.
+        The GeoDataFrame must have a MultiIndex where the first level represents
+        source node IDs and the second level represents target node IDs.
     node_feature_cols : dict[str, list[str]] or list[str], optional
         Column names to use as node features. For heterogeneous graphs,
         provide a dictionary mapping node types to their feature columns.
@@ -108,12 +105,6 @@ def gdf_to_pyg(
         Column names to use as node labels for supervised learning tasks.
         For heterogeneous graphs, provide a dictionary mapping node types
         to their label columns.
-    edge_source_col : str, optional
-        Column name containing source node IDs (homogeneous graphs only).
-        If None, attempts automatic detection.
-    edge_target_col : str, optional
-        Column name containing target node IDs (homogeneous graphs only).
-        If None, attempts automatic detection.
     edge_feature_cols : dict[str, list[str]] or list[str], optional
         Column names to use as edge features. For heterogeneous graphs,
         provide a dictionary mapping relation types to their feature columns.
@@ -143,12 +134,15 @@ def gdf_to_pyg(
     Examples
     --------
     >>> # Homogeneous graph from single GeoDataFrames
-    >>> nodes_gdf = gpd.read_file("nodes.geojson")
-    >>> edges_gdf = gpd.read_file("edges.geojson")
+    >>> nodes_gdf = gpd.read_file("nodes.geojson").set_index("node_id")
+    >>> edges_gdf = gpd.read_file("edges.geojson").set_index(["source_id", "target_id"])
     >>> data = gdf_to_pyg(nodes_gdf, edges_gdf, 
     ...                   node_feature_cols=['population', 'area'])
 
     >>> # Heterogeneous graph from dictionaries
+    >>> buildings_gdf = buildings_gdf.set_index("building_id")
+    >>> roads_gdf = roads_gdf.set_index("road_id")
+    >>> connections_gdf = connections_gdf.set_index(["building_id", "road_id"])
     >>> nodes_dict = {'building': buildings_gdf, 'road': roads_gdf}
     >>> edges_dict = {('building', 'connects', 'road'): connections_gdf}
     >>> data = gdf_to_pyg(nodes_dict, edges_dict)
@@ -157,7 +151,6 @@ def gdf_to_pyg(
     -----
     - Preserves original coordinate reference systems (CRS)
     - Maintains index structure for bidirectional conversion
-    - Automatically detects source/target columns using common naming patterns
     - Handles both Point and non-Point geometries (using centroids)
     - Creates empty tensors for missing features/edges
     """
@@ -181,7 +174,7 @@ def gdf_to_pyg(
     is_hetero = isinstance(nodes, dict)
     if is_hetero:
         data = _build_heterogeneous_graph(
-            nodes, edges or {}, node_id_cols, node_feature_cols, node_label_cols,
+            nodes, edges or {}, node_feature_cols, node_label_cols,
             edge_feature_cols or {}, device, dtype,
         )
     else:
@@ -193,8 +186,8 @@ def gdf_to_pyg(
 
         # Create a homogeneous Data object
         data = _build_homogeneous_graph(
-            nodes_gdf, edges_gdf, node_id_cols, node_feature_cols_list,
-            node_label_cols_list, edge_source_col, edge_target_col,
+            nodes_gdf, edges_gdf, node_feature_cols_list,
+            node_label_cols_list,
             edge_feature_cols_list, device, dtype,
         )
 
@@ -442,136 +435,8 @@ def _get_device(device: str | torch.device | None = None) -> torch.device:
 # EDGE COLUMN DETECTION FUNCTIONS
 # ============================================================================
 
-def _get_source_target_keywords(
-    id_col: str | None,
-    source_hints: list[str] | None,
-    target_hints: list[str] | None,
-) -> tuple[list[str], list[str]]:
-    """Build keyword lists for column name matching.
-
-    Parameters
-    ----------
-    id_col : str, optional
-        Primary key column name to include in keyword lists
-    source_hints : list[str], optional
-        Additional keywords to search for in source column names
-    target_hints : list[str], optional
-        Additional keywords to search for in target column names
-
-    Returns
-    -------
-    tuple[list[str], list[str]]
-        Source keywords and target keywords for column matching
-    """
-    source_keywords = ["from", "source", "start", "u"]
-    target_keywords = ["to", "target", "end", "v"]
-
-    if source_hints:
-        source_keywords.extend([hint.lower() for hint in source_hints])
-    if target_hints:
-        target_keywords.extend([hint.lower() for hint in target_hints])
-    if id_col:
-        source_keywords.append(id_col.lower())
-        target_keywords.append(id_col.lower())
-
-    return source_keywords, target_keywords
-
-
-def _find_column_candidates(
-    edge_gdf: gpd.GeoDataFrame,
-    source_keywords: list[str],
-    target_keywords: list[str],
-) -> tuple[list[str], list[str]]:
-    """Find column candidates based on naming patterns.
-
-    Parameters
-    ----------
-    edge_gdf : gpd.GeoDataFrame
-        Edge GeoDataFrame to search for source and target columns
-    source_keywords : list[str]
-        Keywords to search for in source column names
-    target_keywords : list[str]
-        Keywords to search for in target column names
-
-    Returns
-    -------
-    tuple[list[str], list[str]]
-        Lists of potential source and target column names
-    """
-    from_candidates = [
-        col for col in edge_gdf.columns
-        if any(keyword in col.lower() for keyword in source_keywords)
-    ]
-    to_candidates = [
-        col for col in edge_gdf.columns
-        if any(keyword in col.lower() for keyword in target_keywords)
-    ]
-    return from_candidates, to_candidates
-
-
-def _fallback_column_detection(edge_gdf: gpd.GeoDataFrame) -> tuple[str | None, str | None]:
-    """Fallback to positional column detection.
-
-    Parameters
-    ----------
-    edge_gdf : gpd.GeoDataFrame
-        Edge GeoDataFrame to analyze for column positioning
-
-    Returns
-    -------
-    tuple[str | None, str | None]
-        Source and target column names based on position, or (None, None) if insufficient columns
-    """
-    cols = edge_gdf.columns
-    if "geometry" not in cols[:2] and len(cols) >= 2:
-        return cols[0], cols[1]
-    if "geometry" in cols[:1] and len(cols) >= 3:
-        return cols[1], cols[2]
-    return None, None
-
-
-def _detect_edge_columns(
-    edge_gdf: gpd.GeoDataFrame,
-    id_col: str | None = None,
-    source_hints: list[str] | None = None,
-    target_hints: list[str] | None = None,
-) -> tuple[str | None, str | None]:
-    """Detect source and target columns in edge GeoDataFrame.
-
-    Parameters
-    ----------
-    edge_gdf : gpd.GeoDataFrame
-        Edge GeoDataFrame to analyze
-    id_col : str, optional
-        Primary key column name to include in keyword search
-    source_hints : list[str], optional
-        Additional keywords for source column detection
-    target_hints : list[str], optional
-        Additional keywords for target column detection
-
-    Returns
-    -------
-    tuple[str | None, str | None]
-        Source and target column names, or (None, None) if not found
-    """
-    if edge_gdf.empty or len(edge_gdf.columns) < 2:
-        return None, None
-
-    # Special case: MultiIndex with 2 levels
-    if isinstance(edge_gdf.index, pd.MultiIndex) and edge_gdf.index.nlevels == 2:
-        return "source_from_index", "target_from_index"
-
-    source_keywords, target_keywords = _get_source_target_keywords(
-        id_col, source_hints, target_hints,
-    )
-    from_candidates, to_candidates = _find_column_candidates(
-        edge_gdf, source_keywords, target_keywords,
-    )
-
-    if from_candidates and to_candidates:
-        return from_candidates[0], to_candidates[0]
-
-    return _fallback_column_detection(edge_gdf)
+# Removed: _get_source_target_keywords, _find_column_candidates, _fallback_column_detection, _detect_edge_columns
+# These functions are no longer needed as edge relationships are derived from MultiIndex.
 
 
 # ============================================================================
@@ -579,49 +444,32 @@ def _detect_edge_columns(
 # ============================================================================
 
 def _create_node_id_mapping(
-    node_gdf: gpd.GeoDataFrame, id_col: str | None = None,
+    node_gdf: gpd.GeoDataFrame,
 ) -> tuple[dict[str | int, int], str, list[str | int]]:
-    """Create mapping from node IDs to sequential integer indices.
+    """Create mapping from node IDs (from index) to sequential integer indices.
 
     PyTorch Geometric requires nodes to be identified by sequential integers starting from 0.
-    This function creates the necessary mapping from original node identifiers to these indices.
+    This function creates the necessary mapping from original node identifiers (taken from
+    the GeoDataFrame index) to these indices.
 
     Parameters
     ----------
     node_gdf : gpd.GeoDataFrame
-        GeoDataFrame containing node data
-    id_col : str, optional
-        Column name to use for node IDs (defaults to using the index)
+        GeoDataFrame containing node data. The index is used for node IDs.
 
     Returns
     -------
     dict[str | int, int]
         Dictionary mapping original IDs to integer indices
     str
-        Name of the ID column used ("index" if using DataFrame index)
+        Always "index", indicating the DataFrame index was used.
     list[str | int]
         List of original IDs in order
-
-    Raises
-    ------
-    ValueError
-        If specified id_col is not found in the GeoDataFrame
     """
-    # Check if specified column exists
-    if id_col is not None and id_col not in node_gdf.columns:
-        error_msg = f"Provided id_col '{id_col}' not found in node GeoDataFrame"
-        raise ValueError(error_msg)
-
-    if id_col is None:
-        # Use DataFrame index as the node identifier
-        original_ids = node_gdf.index.tolist()
-        id_mapping = {node_id: i for i, node_id in enumerate(original_ids)}
-        return id_mapping, "index", original_ids
-
-    # Use specified column as the node identifier
-    original_ids = node_gdf[id_col].tolist()
-    id_mapping = {node_id: idx for idx, node_id in enumerate(original_ids)}
-    return id_mapping, id_col, original_ids
+    # Use DataFrame index as the node identifier
+    original_ids = node_gdf.index.tolist()
+    id_mapping = {node_id: i for i, node_id in enumerate(original_ids)}
+    return id_mapping, "index", original_ids
 
 
 def _create_node_features(
@@ -769,7 +617,12 @@ def _create_edge_features(
     if not valid_cols:
         return torch.empty((edge_gdf.shape[0], 0), dtype=dtype, device=device)
 
-    features_array = edge_gdf[valid_cols].to_numpy().astype(np.float32)
+    # Select only numeric columns from valid_cols to prevent conversion errors
+    numeric_cols = edge_gdf[valid_cols].select_dtypes(include=np.number).columns.tolist()
+    if not numeric_cols:
+        return torch.empty((edge_gdf.shape[0], 0), dtype=dtype, device=device)
+
+    features_array = edge_gdf[numeric_cols].to_numpy().astype(np.float32)
     return torch.from_numpy(features_array).to(device=device, dtype=dtype)
 
 
@@ -777,14 +630,12 @@ def _create_edge_indices(
     edge_gdf: gpd.GeoDataFrame,
     source_mapping: dict[str | int, int],
     target_mapping: dict[str | int, int] | None = None,
-    source_col: str | None = None,
-    target_col: str | None = None,
 ) -> list[list[int]]:
-    """Create edge connectivity matrix from edge data."""
+    """Create edge connectivity matrix from edge data using MultiIndex."""
     target_mapping = target_mapping or source_mapping
 
-    # Extract source and target IDs
-    source_ids, target_ids = _extract_edge_ids(edge_gdf, source_col, target_col)
+    # Extract source and target IDs from MultiIndex
+    source_ids, target_ids = _extract_edge_ids(edge_gdf)
     if source_ids is None or target_ids is None:
         return []
 
@@ -796,39 +647,22 @@ def _create_edge_indices(
 
 
 def _extract_edge_ids(
-    edge_gdf: gpd.GeoDataFrame, source_col: str | None, target_col: str | None,
+    edge_gdf: gpd.GeoDataFrame,
 ) -> tuple[pd.Series | None, pd.Series | None]:
-    """Extract source and target IDs from edge data."""
+    """Extract source and target IDs from edge data, assuming MultiIndex."""
     if isinstance(edge_gdf.index, pd.MultiIndex) and edge_gdf.index.nlevels == 2:
         return _handle_multiindex_edges(edge_gdf)
-    return _detect_and_extract_edge_columns(edge_gdf, source_col, target_col)
+    logger.warning(
+        "Edge GeoDataFrame does not have a MultiIndex with 2 levels. "
+        "Cannot determine source/target nodes. Edges will be ignored."
+    )
+    return None, None
 
 
 def _handle_multiindex_edges(edge_gdf: gpd.GeoDataFrame) -> tuple[pd.Series, pd.Series]:
     """Extract source and target IDs from MultiIndex DataFrame."""
     return (edge_gdf.index.get_level_values(0),  # First level = source
             edge_gdf.index.get_level_values(1))   # Second level = target
-
-
-def _detect_and_extract_edge_columns(
-    edge_gdf: gpd.GeoDataFrame,
-    source_col: str | None,
-    target_col: str | None,
-) -> tuple[pd.Series | None, pd.Series | None]:
-    """Detect and extract source/target columns from regular DataFrame."""
-    if source_col is None or target_col is None:
-        detected_source, detected_target = _detect_edge_columns(edge_gdf)
-        source_col = source_col or detected_source
-        target_col = target_col or detected_target
-
-    # Validate that required columns are available
-    if source_col is None or target_col is None:
-        return None, None
-
-    if source_col not in edge_gdf.columns or target_col not in edge_gdf.columns:
-        return None, None
-
-    return edge_gdf[source_col], edge_gdf[target_col]
 
 
 def _attempt_type_conversion(
@@ -955,11 +789,8 @@ def _create_linestring_geometries(
 def _build_homogeneous_graph(
     nodes_gdf: gpd.GeoDataFrame,
     edges_gdf: gpd.GeoDataFrame | None = None,
-    node_id_col: str | None = None,
     node_feature_cols: list[str] | None = None,
     node_label_cols: list[str] | None = None,
-    edge_source_col: str | None = None,
-    edge_target_col: str | None = None,
     edge_feature_cols: list[str] | None = None,
     device: str | torch.device | None = None,
     dtype: torch.dtype | None = None,
@@ -968,10 +799,11 @@ def _build_homogeneous_graph(
     Construct a homogeneous PyTorch Geometric Data object.
 
     Creates a single-type graph where all nodes and edges are treated uniformly.
-    This is the most common graph format for simple network analysis tasks.
+    Node IDs are taken from the nodes_gdf index. Edge relationships are taken
+    from the edges_gdf MultiIndex (source_id, target_id).
 
     Processing Pipeline:
-    1. Create node ID mapping (original IDs → integer indices)
+    1. Create node ID mapping (original IDs from index → integer indices)
     2. Extract node features and positions from geometry
     3. Process node labels if available
     4. Create edge connectivity matrix
@@ -980,15 +812,13 @@ def _build_homogeneous_graph(
     7. Store metadata for bidirectional conversion
 
     Args:
-        nodes_gdf: GeoDataFrame containing node data
-        edges_gdf: GeoDataFrame containing edge data (optional)
-        node_id_col: Column for node identification
+        nodes_gdf: GeoDataFrame containing node data (index used for IDs)
+        edges_gdf: GeoDataFrame containing edge data (MultiIndex used for relationships)
         node_feature_cols: Columns to use as node features
         node_label_cols: Columns to use as node labels
-        edge_source_col: Column containing source node IDs
-        edge_target_col: Column containing target node IDs
         edge_feature_cols: Columns to use as edge features
         device: Target device for tensor creation
+        dtype: Data type for float tensors
 
     Returns
     -------
@@ -1004,7 +834,7 @@ def _build_homogeneous_graph(
     device = _get_device(device)
 
     # Node processing
-    id_mapping, id_col_name, original_ids = _create_node_id_mapping(nodes_gdf, node_id_col)
+    id_mapping, id_col_name, original_ids = _create_node_id_mapping(nodes_gdf)
 
     x = _create_node_features(nodes_gdf, node_feature_cols, device, dtype)
     pos = _create_node_positions(nodes_gdf, device)
@@ -1022,7 +852,7 @@ def _build_homogeneous_graph(
 
     if edges_gdf is not None and not edges_gdf.empty:
         edge_pairs = _create_edge_indices(
-            edges_gdf, id_mapping, id_mapping, edge_source_col, edge_target_col,
+            edges_gdf, id_mapping, id_mapping,
         )
         if edge_pairs:
             edge_index = torch.tensor(
@@ -1068,7 +898,6 @@ def _build_homogeneous_graph(
 def _build_heterogeneous_graph(
     nodes_dict: dict[str, gpd.GeoDataFrame],
     edges_dict: dict[tuple[str, str, str], gpd.GeoDataFrame] | None = None,
-    node_id_cols: dict[str, str] | None = None,
     node_feature_cols: dict[str, list[str]] | None = None,
     node_label_cols: dict[str, list[str]] | None = None,
     edge_feature_cols: dict[str, list[str]] | None = None,
@@ -1084,7 +913,7 @@ def _build_heterogeneous_graph(
 
     # Process nodes and get mappings
     node_mappings = _process_hetero_nodes(
-        data, nodes_dict, node_id_cols, node_feature_cols, node_label_cols, device, dtype,
+        data, nodes_dict, node_feature_cols, node_label_cols, device, dtype,
     )
 
     # Process edges
@@ -1103,7 +932,6 @@ def _build_heterogeneous_graph(
 def _process_hetero_nodes(
     data: HeteroData,
     nodes_dict: dict[str, gpd.GeoDataFrame],
-    node_id_cols: dict[str, str] | None,
     node_feature_cols: dict[str, list[str]] | None,
     node_label_cols: dict[str, list[str]] | None,
     device: str | torch.device | None,
@@ -1114,8 +942,7 @@ def _process_hetero_nodes(
     device = _get_device(device)
 
     for node_type, node_gdf in nodes_dict.items():
-        id_col = node_id_cols.get(node_type) if node_id_cols else None
-        id_mapping, id_col_name, original_ids = _create_node_id_mapping(node_gdf, id_col)
+        id_mapping, id_col_name, original_ids = _create_node_id_mapping(node_gdf)
 
         # Store mapping with metadata in unified structure
         node_mappings[node_type] = {
@@ -1161,7 +988,19 @@ def _process_hetero_edges(
         src_type, rel_type, dst_type = edge_type
 
         if src_type not in node_mappings or dst_type not in node_mappings:
+            logger.warning(
+                f"Source type '{src_type}' or destination type '{dst_type}' "
+                f"for edge type {edge_type} not found in node_mappings. Skipping this edge type."
+            )
             continue
+        
+        # Check if edge_gdf is None before attempting to access its properties
+        if edge_gdf is None:
+            logger.warning(f"Edge GeoDataFrame for edge type {edge_type} is None. Skipping.")
+            data[edge_type].edge_index = torch.zeros((2, 0), dtype=torch.long, device=device)
+            data[edge_type].edge_attr = torch.empty((0, 0), dtype=dtype or torch.float, device=device)
+            continue
+
 
         # Get the mapping dictionaries (not the full metadata)
         src_mapping = node_mappings[src_type]["mapping"]
@@ -1169,7 +1008,7 @@ def _process_hetero_edges(
 
         if edge_gdf is not None and not edge_gdf.empty:
             edge_pairs = _create_edge_indices(
-                edge_gdf, src_mapping, dst_mapping, None, None,
+                edge_gdf, src_mapping, dst_mapping,
             )
             edge_index = (torch.tensor(np.array(edge_pairs).T, dtype=torch.long, device=device)
                          if edge_pairs else torch.zeros((2, 0), dtype=torch.long, device=device))
