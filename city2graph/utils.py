@@ -19,6 +19,7 @@ __all__ = [
     "filter_graph_by_distance",
     "gdf_to_nx",
     "nx_to_gdf",
+    "segments_to_graph",
 ]
 
 logger = logging.getLogger(__name__)
@@ -73,9 +74,6 @@ def create_tessellation(
     geopandas.GeoDataFrame
         GeoDataFrame containing the tessellation polygons.
     """
-    # Validate inputs and ensure consistency
-    geometry, primary_barriers = _validate_gdf(geometry, primary_barriers, check_crs=True)
-
     # Create tessellation using momepy based on whether primary_barriers are provided
     if primary_barriers is not None:
 
@@ -134,7 +132,8 @@ def create_tessellation(
 # DUAL GRAPH FUNCTIONS
 # ============================================================================
 
-def dual_graph(gdf: gpd.GeoDataFrame, keep_original_geom: bool = False) -> tuple[gpd.GeoDataFrame, gpd.GeoDataFrame]:
+def dual_graph(gdf: gpd.GeoDataFrame,
+               keep_original_geom: bool = False) -> tuple[gpd.GeoDataFrame, gpd.GeoDataFrame]:
     """
     Convert a GeoDataFrame of LineStrings to a graph representation with nodes and edges.
 
@@ -727,6 +726,65 @@ def nx_to_gdf(
 
 
 # ============================================================================
+# SEGMENTS TO GRAPH CONVERSION FUNCTIONS
+# ============================================================================
+
+def segments_to_graph(segments_gdf: gpd.GeoDataFrame,
+                      as_nx: bool = False) -> tuple[gpd.GeoDataFrame, gpd.GeoDataFrame]:
+    """
+    Convert LineString edges to node-edge representation with unique nodes and MultiIndex edges.
+
+    Parameters
+    ----------
+    segments_gdf : geopandas.GeoDataFrame
+        GeoDataFrame containing segments with LineString geometries
+
+    Returns
+    -------
+    tuple of geopandas.GeoDataFrame
+        (nodes_gdf, edges_with_multiindex_gdf)
+        - nodes_gdf: GeoDataFrame containing unique nodes with Point geometries
+        - edges_with_multiindex_gdf: Original edge GeoDataFrame with MultiIndex (from_node_id, to_node_id)
+    """
+    # Extract start and end coordinates from the geometry
+    start_coords = segments_gdf.geometry.apply(lambda geom: (geom.coords[0][0], geom.coords[0][1]))
+    end_coords = segments_gdf.geometry.apply(lambda geom: (geom.coords[-1][0], geom.coords[-1][1]))
+
+    # Combine all coordinates and remove duplicates
+    all_coords = pd.concat([start_coords, end_coords]).drop_duplicates()
+
+    # Create Point geometries from coordinates
+    node_geometries = [Point(x, y) for x, y in all_coords]
+
+    # Create GeoDataFrame with nodes
+    nodes = gpd.GeoDataFrame(
+        {"node_id": range(len(node_geometries))},
+        geometry=node_geometries,
+        crs=segments_gdf.crs,
+    ).set_index("node_id")
+
+    # Create coordinate to node_id mapping
+    coord_to_id = {coord: idx for idx, coord in enumerate(all_coords)}
+
+    # Map start and end coordinates to node IDs
+    from_node_ids = start_coords.map(coord_to_id)
+    to_node_ids = end_coords.map(coord_to_id)
+
+    # Create edges with MultiIndex
+    edges = segments_gdf.copy()
+    edges.index = pd.MultiIndex.from_arrays(
+        [from_node_ids, to_node_ids],
+        names=["from_node_id", "to_node_id"]
+    )
+
+    # Convert to NetworkX graph if requested
+    if as_nx:
+        return gdf_to_nx(nodes, edges)
+
+    return nodes, edges
+
+
+# ============================================================================
 # GRAPH VALIDATION HELPER FUNCTIONS
 # ============================================================================
 
@@ -786,10 +844,21 @@ def _validate_gdf(nodes: gpd.GeoDataFrame | None,
     # Validate and clean nodes GeoDataFrame
     if nodes is not None:
         nodes = _validate_nodes_gdf(nodes, strict=strict, allow_empty=allow_empty)
+        #if not isinstance(nodes.index, pd.Index) or isinstance(nodes.index, pd.MultiIndex):
+        #    msg = "Nodes GeoDataFrame must have a simple pandas.Index, not a MultiIndex."
+        #    if strict:
+        #        raise ValueError(msg)
+        #    logger.warning("Validation: %s", msg)
+
 
     # Validate and clean edges GeoDataFrame
     if edges is not None:
         edges = _validate_edges_gdf(edges, strict=strict, allow_empty=allow_empty)
+        #if not isinstance(edges.index, pd.MultiIndex):
+        #    msg = "Edges GeoDataFrame must have a pandas.MultiIndex."
+        #    if strict:
+        #        raise ValueError(msg)
+        #    logger.warning("Validation: %s", msg)
 
     # CRS validation
     if check_crs and nodes is not None and edges is not None and not nodes.empty and not edges.empty:

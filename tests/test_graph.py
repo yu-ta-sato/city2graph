@@ -3,6 +3,7 @@ import geopandas as gpd
 import pandas as pd
 import networkx as nx
 from shapely.geometry import Point # Added import
+from unittest.mock import patch # Added import
 
 from city2graph.graph import (
     gdf_to_pyg,
@@ -47,7 +48,7 @@ def test_gdf_to_pyg_homogeneous_round_trip(sample_nodes_gdf, sample_edges_gdf, s
         node_feature_cols=node_feature_cols,
         node_label_cols=node_label_cols,
         edge_feature_cols=edge_feature_cols,
-        device="cpu" # Test with CPU
+        device="cpu", # Test with CPU
     )
 
     assert isinstance(pyg_data, Data)
@@ -236,7 +237,7 @@ def test_gdf_to_pyg_heterogeneous_round_trip(sample_hetero_nodes_dict, sample_he
         original_gdf_sorted = original_gdf.sort_index()
 
         assert isinstance(re_gdf, gpd.GeoDataFrame)
-        
+
         reconstructed_edge_cols = re_gdf.columns.drop("geometry", errors="ignore")
 
         # Determine expected columns based on what was requested and if it's valid
@@ -568,4 +569,194 @@ def test_pyg_to_nx_hetero_structure(sample_hetero_nodes_dict, sample_hetero_edge
     edge_types_in_nx = {data.get("edge_type") for _, _, data in nx_graph.edges(data=True)}
     expected_rel_types = {rel for _, rel, _ in sample_hetero_edges_dict.keys()}
     assert edge_types_in_nx == expected_rel_types
+
+# Tests for when TORCH_AVAILABLE is False (simulated via mocking)
+
+def test_gdf_to_pyg_torch_unavailable(sample_nodes_gdf):
+    """Test gdf_to_pyg raises ImportError if torch is unavailable."""
+    with patch('city2graph.graph.TORCH_AVAILABLE', False):
+        with pytest.raises(ImportError, match="PyTorch required."):
+            gdf_to_pyg(sample_nodes_gdf)
+
+def test_pyg_to_gdf_torch_unavailable():
+    """Test pyg_to_gdf raises ImportError if torch is unavailable."""
+    # Create a dummy Data object for testing, as it's needed by the function signature
+    # This object won't be deeply inspected if TORCH_AVAILABLE is false.
+    dummy_pyg_data = Data() if TORCH_AVAILABLE else object() # Use object() if Data itself is not defined
+    # The _validate_pyg function, called by pyg_to_gdf, checks TORCH_AVAILABLE first.
+    with patch('city2graph.graph.TORCH_AVAILABLE', False):
+        with pytest.raises(ImportError, match="PyTorch required."):
+            pyg_to_gdf(dummy_pyg_data)
+
+def test_nx_to_pyg_torch_unavailable(sample_nx_graph):
+    """Test nx_to_pyg raises ImportError if torch is unavailable."""
+    with patch('city2graph.graph.TORCH_AVAILABLE', False):
+        with pytest.raises(ImportError, match="PyTorch required."):
+            nx_to_pyg(sample_nx_graph)
+
+def test_pyg_to_nx_torch_unavailable():
+    """Test pyg_to_nx raises ImportError if torch is unavailable."""
+    dummy_pyg_data = Data() if TORCH_AVAILABLE else object()
+    with patch('city2graph.graph.TORCH_AVAILABLE', False):
+        with pytest.raises(ImportError, match="PyTorch required."):
+            pyg_to_nx(dummy_pyg_data)
+
+@requires_torch
+@pytest.mark.parametrize("input_node_features, input_node_labels, input_edge_features, generic_test_type", [
+    (None, None, None, None),
+    (["feature1"], ["label1"], ["edge_feature1"], None),
+    (["feature1"], None, None, "node_x_generic"), # New case for generic node feature names
+    (None, ["label1"], None, "node_y_generic"),   # New case for generic node label names
+    (None, None, ["edge_feature1"], "edge_attr_generic"), # New case for generic edge feature names
+])
+def test_nx_to_pyg_round_trip(sample_nx_graph, sample_crs, input_node_features, input_node_labels, input_edge_features, generic_test_type):
+    """Test nx_to_pyg and pyg_to_nx for round trip conversion."""
+    # Convert NX to PyG
+    pyg_data = nx_to_pyg(
+        sample_nx_graph,
+        node_feature_cols=input_node_features,
+        node_label_cols=input_node_labels,
+        edge_feature_cols=input_edge_features,
+        device="cpu"
+    )
+
+    assert isinstance(pyg_data, Data)
+    assert pyg_data.crs == sample_crs
+
+    # Modify pyg_data metadata if testing for generic attribute names
+    if generic_test_type == "node_x_generic":
+        if hasattr(pyg_data, "x") and pyg_data.x.shape[1] > 0:
+            pyg_data._node_feature_cols = []
+    elif generic_test_type == "node_y_generic":
+        if hasattr(pyg_data, "y") and pyg_data.y is not None and pyg_data.y.shape[1] > 0:
+            pyg_data._node_label_cols = []
+    elif generic_test_type == "edge_attr_generic":
+        if hasattr(pyg_data, "edge_attr") and pyg_data.edge_attr.shape[1] > 0:
+            pyg_data._edge_feature_cols = []
+
+
+    # Check node features tensor based on input_node_features
+    if input_node_features:
+        assert hasattr(pyg_data, "x")
+        assert pyg_data.x.shape[0] == sample_nx_graph.number_of_nodes()
+        # Count actual features extracted, not just len(input_node_features)
+        # as some input features might not exist in the graph.
+        # For sample_nx_graph, "feature1" exists.
+        if "feature1" in input_node_features:
+             assert pyg_data.x.shape[1] >= 1 # Should be 1 if only "feature1"
+        else:
+             assert pyg_data.x.shape[1] == 0 # If input_node_features don't exist
+    else: # If input_node_features is None
+        assert hasattr(pyg_data, "x")
+        assert pyg_data.x.shape[1] == 0
+
+    # Check node labels tensor
+    if input_node_labels:
+        assert hasattr(pyg_data, "y")
+        assert pyg_data.y.shape[0] == sample_nx_graph.number_of_nodes()
+        if "label1" in input_node_labels:
+            assert pyg_data.y.shape[1] >= 1
+        else:
+            assert pyg_data.y.shape[1] == 0
+    elif generic_test_type != "node_y_generic": # if not specifically testing generic y, and input_node_labels is None
+        assert not hasattr(pyg_data, "y") or pyg_data.y is None
+
+
+    # Check edge features tensor
+    if input_edge_features:
+        assert hasattr(pyg_data, "edge_attr")
+        assert pyg_data.edge_attr.shape[0] == sample_nx_graph.number_of_edges()
+        if "edge_feature1" in input_edge_features:
+            assert pyg_data.edge_attr.shape[1] >= 1
+        else:
+            assert pyg_data.edge_attr.shape[1] == 0
+    else: # If input_edge_features is None
+        assert hasattr(pyg_data, "edge_attr")
+        assert pyg_data.edge_attr.shape[1] == 0
+
+    # Convert PyG back to NX
+    reconstructed_nx_graph = pyg_to_nx(pyg_data)
+
+    assert isinstance(reconstructed_nx_graph, nx.Graph)
+    assert reconstructed_nx_graph.graph.get("crs") == sample_crs
+    assert reconstructed_nx_graph.number_of_nodes() == sample_nx_graph.number_of_nodes()
+    assert reconstructed_nx_graph.number_of_edges() == sample_nx_graph.number_of_edges()
+
+    original_ids_map = {}
+    if hasattr(pyg_data, "_node_mappings") and "default" in pyg_data._node_mappings:
+        id_mapping_inv = {v: k for k, v in pyg_data._node_mappings["default"]["mapping"].items()}
+        for i in range(reconstructed_nx_graph.number_of_nodes()):
+            original_ids_map[i] = id_mapping_inv.get(i)
+    else:
+        # Fallback for sample_nx_graph if metadata somehow missing (should not happen)
+        for i in range(reconstructed_nx_graph.number_of_nodes()):
+            original_ids_map[i] = i + 1
+
+
+    for reconstructed_node_id in reconstructed_nx_graph.nodes():
+        original_node_id = original_ids_map.get(reconstructed_node_id)
+        assert original_node_id is not None, f"Could not map reconstructed node ID {reconstructed_node_id}"
+        assert original_node_id in sample_nx_graph.nodes, f"Original node ID {original_node_id} not in sample_nx_graph"
+
+        original_attrs = sample_nx_graph.nodes[original_node_id]
+        reconstructed_attrs = reconstructed_nx_graph.nodes[reconstructed_node_id]
+
+        # Node features assertions
+        if generic_test_type == "node_x_generic":
+            # Expect "feat_0" if input_node_features was ["feature1"]
+            if "feature1" in original_attrs and pyg_data.x.shape[1] > 0: # Ensure original feature existed and was extracted
+                assert "feat_0" in reconstructed_attrs, f"Generic attribute feat_0 missing in node {reconstructed_node_id}"
+                assert abs(original_attrs["feature1"] - reconstructed_attrs["feat_0"]) < 1e-5, \
+                    f"Value mismatch for feat_0 in node {reconstructed_node_id}"
+        elif input_node_features:
+            for feat in input_node_features:
+                if feat in original_attrs: # Only assert if the feature was in the original graph
+                    assert feat in reconstructed_attrs, f"Feature {feat} missing in reconstructed node {reconstructed_node_id}"
+                    assert abs(original_attrs.get(feat, 0) - reconstructed_attrs.get(feat, 0)) < 1e-5
+        
+        # Node labels assertions
+        if generic_test_type == "node_y_generic":
+            # Expect "label_0" if input_node_labels was ["label1"]
+            if "label1" in original_attrs and pyg_data.y is not None and pyg_data.y.shape[1] > 0:
+                assert "label_0" in reconstructed_attrs, f"Generic attribute label_0 missing in node {reconstructed_node_id}"
+                assert abs(original_attrs["label1"] - reconstructed_attrs["label_0"]) < 1e-5, \
+                    f"Value mismatch for label_0 in node {reconstructed_node_id}"
+        elif input_node_labels:
+            for label in input_node_labels:
+                if label in original_attrs:
+                    assert label in reconstructed_attrs, f"Label {label} missing in reconstructed node {reconstructed_node_id}"
+                    assert abs(original_attrs.get(label, 0) - reconstructed_attrs.get(label, 0)) < 1e-5
+        
+        if "geometry" in original_attrs:
+            assert "pos" in reconstructed_attrs
+            original_point = original_attrs["geometry"]
+            reconstructed_point_coords = reconstructed_attrs["pos"]
+            assert isinstance(original_point, Point)
+            assert isinstance(reconstructed_point_coords, tuple) and len(reconstructed_point_coords) == 2
+            assert abs(original_point.x - reconstructed_point_coords[0]) < 1e-5
+            assert abs(original_point.y - reconstructed_point_coords[1]) < 1e-5
+
+    # Compare edge attributes
+    for u_re, v_re, reconstructed_edge_attrs in reconstructed_nx_graph.edges(data=True):
+        u_orig = original_ids_map.get(u_re)
+        v_orig = original_ids_map.get(v_re)
+        assert u_orig is not None and v_orig is not None, "Could not map edge nodes to original IDs"
+
+        original_edge_attrs = None
+        if sample_nx_graph.has_edge(u_orig, v_orig):
+            original_edge_attrs = sample_nx_graph.edges[u_orig, v_orig]
+        elif sample_nx_graph.has_edge(v_orig, u_orig):
+            original_edge_attrs = sample_nx_graph.edges[v_orig, u_orig]
+        assert original_edge_attrs is not None, f"Edge ({u_orig}, {v_orig}) not found in original graph"
+
+        if generic_test_type == "edge_attr_generic":
+            # Expect "edge_feat_0" if input_edge_features was ["edge_feature1"]
+            if "edge_feature1" in original_edge_attrs and pyg_data.edge_attr.shape[1] > 0:
+                assert "edge_feat_0" in reconstructed_edge_attrs
+                assert abs(original_edge_attrs["edge_feature1"] - reconstructed_edge_attrs["edge_feat_0"]) < 1e-5
+        elif input_edge_features:
+            for feat in input_edge_features:
+                if feat in original_edge_attrs:
+                    assert feat in reconstructed_edge_attrs
+                    assert abs(original_edge_attrs.get(feat, 0) - reconstructed_edge_attrs.get(feat, 0)) < 1e-5
 

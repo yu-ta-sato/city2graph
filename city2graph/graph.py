@@ -416,9 +416,6 @@ def _get_device(device: str | torch.device | None = None) -> torch.device:
     TypeError
         If device is not a valid type
     """
-    if not TORCH_AVAILABLE:
-        raise ImportError(TORCH_ERROR_MSG)
-
     if device is None:
         return torch.device("cuda" if torch.cuda.is_available() else "cpu")
     if isinstance(device, str):
@@ -549,40 +546,21 @@ def _create_node_positions(
 
     Notes
     -----
-    - Point geometries: Uses direct x, y coordinates
-    - Other geometries: Uses centroid coordinates
-    - Mixed geometries: Handles each type appropriately
+    - Uses centroid coordinates for all geometry types.
     - Coordinates are in the original CRS of the GeoDataFrame
     """
+    # Get the device for tensor creation
     device = _get_device(device)
 
-    if "geometry" not in node_gdf.columns:
-        return None
-
+    # Get the geometry column
     geom_series = node_gdf.geometry
-    is_point_mask = geom_series.geom_type == "Point"
 
-    if is_point_mask.all():
-        # All points - direct extraction
-        pos_data = np.column_stack([geom_series.x.to_numpy(), geom_series.y.to_numpy()])
-    else:
-        # Mixed geometries - use centroids for non-points
-        pos_data = np.zeros((len(geom_series), 2))
-
-        if is_point_mask.any():
-            point_coords = np.column_stack([
-                geom_series[is_point_mask].x.to_numpy(),
-                geom_series[is_point_mask].y.to_numpy(),
-            ])
-            pos_data[is_point_mask] = point_coords
-
-        if (~is_point_mask).any():
-            centroids = geom_series[~is_point_mask].centroid
-            centroid_coords = np.column_stack([
-                centroids.x.to_numpy(),
-                centroids.y.to_numpy(),
-            ])
-            pos_data[~is_point_mask] = centroid_coords
+    # Get centroids of geometries
+    centroids = geom_series.centroid
+    pos_data = np.column_stack([
+        centroids.x.to_numpy(),
+        centroids.y.to_numpy(),
+    ])
 
     return torch.tensor(pos_data, dtype=torch.float, device=device)
 
@@ -619,18 +597,19 @@ def _create_edge_features(
     device = _get_device(device)
     dtype = dtype or torch.float
 
+    # If no feature columns specified, return empty tensor
     if feature_cols is None:
         return torch.empty((edge_gdf.shape[0], 0), dtype=dtype, device=device)
 
+    # Find valid columns that exist in the GeoDataFrame
     valid_cols = list(set(feature_cols) & set(edge_gdf.columns))
     if not valid_cols:
         return torch.empty((edge_gdf.shape[0], 0), dtype=dtype, device=device)
 
     # Select only numeric columns from valid_cols to prevent conversion errors
     numeric_cols = edge_gdf[valid_cols].select_dtypes(include=np.number).columns.tolist()
-    if not numeric_cols:
-        return torch.empty((edge_gdf.shape[0], 0), dtype=dtype, device=device)
 
+    # Convert to numpy array with consistent float32 type
     features_array = edge_gdf[numeric_cols].to_numpy().astype(np.float32)
     return torch.from_numpy(features_array).to(device=device, dtype=dtype)
 
@@ -645,8 +624,6 @@ def _create_edge_indices(
 
     # Extract source and target IDs from MultiIndex
     source_ids, target_ids = _extract_edge_ids(edge_gdf)
-    if source_ids is None or target_ids is None:
-        return []
 
     # Convert types if needed and validate
     source_ids = _attempt_type_conversion(source_ids, source_mapping, "Source")
@@ -719,9 +696,6 @@ def _map_edge_ids_to_indices(
     valid_dst_mask = target_ids.isin(target_mapping.keys())
     valid_edges_mask = valid_src_mask & valid_dst_mask
 
-    if not valid_edges_mask.any():
-        return []
-
     # Process valid edges using vectorized operations
     valid_sources = source_ids[valid_edges_mask]
     valid_targets = target_ids[valid_edges_mask]
@@ -768,9 +742,6 @@ def _create_linestring_geometries(
     valid_src_mask = src_indices < len(src_pos)
     valid_dst_mask = dst_indices < len(dst_pos)
     valid_mask = valid_src_mask & valid_dst_mask
-
-    if not valid_mask.any():
-        return [None] * len(src_indices)
 
     # Get valid indices and coordinates
     valid_src_indices = src_indices[valid_mask]
@@ -852,8 +823,6 @@ def _build_homogeneous_graph(
     y = None
     if node_label_cols:
         y = _create_node_features(nodes_gdf, node_label_cols, device, dtype)
-    elif "y" in nodes_gdf.columns:
-        y = torch.tensor(nodes_gdf["y"].to_numpy(), dtype=dtype or torch.float, device=device)
 
     # Edge processing
     edge_index = torch.zeros((2, 0), dtype=torch.long, device=device)
@@ -887,12 +856,10 @@ def _build_homogeneous_graph(
     data._node_index_names = nodes_gdf.index.names if hasattr(nodes_gdf.index, "names") else None
     if edges_gdf is not None and hasattr(edges_gdf.index, "names"):
         data._edge_index_names = edges_gdf.index.names
+
         # Store original edge index values for reconstruction
-        if isinstance(edges_gdf.index, pd.MultiIndex):
-            data._edge_index_values = [edges_gdf.index.get_level_values(i).tolist()
-                                     for i in range(edges_gdf.index.nlevels)]
-        else:
-            data._edge_index_values = edges_gdf.index.tolist()
+        data._edge_index_values = [edges_gdf.index.get_level_values(i).tolist()
+                                    for i in range(edges_gdf.index.nlevels)]
     else:
         data._edge_index_names = None
         data._edge_index_values = None
@@ -971,10 +938,6 @@ def _process_hetero_nodes(
         label_cols = node_label_cols.get(node_type) if node_label_cols else None
         if label_cols:
             data[node_type].y = _create_node_features(node_gdf, label_cols, device, dtype)
-        elif "y" in node_gdf.columns:
-            data[node_type].y = torch.tensor(
-                node_gdf["y"].to_numpy(), dtype=dtype or torch.float, device=device,
-            )
 
     return node_mappings
 
@@ -999,10 +962,10 @@ def _process_hetero_edges(
         if src_type not in node_mappings or dst_type not in node_mappings:
             logger.warning(
                 f"Source type '{src_type}' or destination type '{dst_type}' "
-                f"for edge type {edge_type} not found in node_mappings. Skipping this edge type."
+                f"for edge type {edge_type} not found in node_mappings. Skipping this edge type.",
             )
             continue
-        
+
         # Check if edge_gdf is None before attempting to access its properties
         if edge_gdf is None:
             logger.warning(f"Edge GeoDataFrame for edge type {edge_type} is None. Skipping.")
@@ -1046,23 +1009,23 @@ def _store_hetero_metadata(
     data._node_label_cols = node_label_cols or {}
     data._edge_feature_cols = edge_feature_cols or {}
 
-    # Store index names for preservation
+    # Store index names for reconstruction
     data._node_index_names = {}
     for node_type, node_gdf in nodes_dict.items():
         if hasattr(node_gdf.index, "names"):
             data._node_index_names[node_type] = node_gdf.index.names
 
+    # Store edge index names and values for reconstruction
     data._edge_index_names = {}
     data._edge_index_values = {}
     for edge_type, edge_gdf in edges_dict.items():
         if edge_gdf is not None and hasattr(edge_gdf.index, "names"):
+            # Store edge index names
             data._edge_index_names[edge_type] = edge_gdf.index.names
+
             # Store original edge index values for reconstruction
-            if isinstance(edge_gdf.index, pd.MultiIndex):
-                data._edge_index_values[edge_type] = [edge_gdf.index.get_level_values(i).tolist()
-                                                    for i in range(edge_gdf.index.nlevels)]
-            else:
-                data._edge_index_values[edge_type] = edge_gdf.index.tolist()
+            data._edge_index_values[edge_type] = [edge_gdf.index.get_level_values(i).tolist()
+                                                for i in range(edge_gdf.index.nlevels)]
 
     # Set CRS
     crs_values = [gdf.crs for gdf in nodes_dict.values() if hasattr(gdf, "crs") and gdf.crs]
@@ -1478,15 +1441,25 @@ def _add_features_to_attrs(
     prefix: str,
 ) -> None:
     """Add tensor data to attribute dictionary with proper column names."""
+    if tensor_data is None or tensor_data.size == 0:
+        return
+
     if column_names and len(column_names) > 0:
         # Use original column names
-        for j, col_name in enumerate(column_names):
-            if j < len(tensor_data):
-                attrs[col_name] = float(tensor_data[j])
+        # Ensure we don't go out of bounds for tensor_data
+        num_elements_to_process = min(len(column_names), len(tensor_data))
+        update_dict = {
+            column_names[j]: float(tensor_data[j])
+            for j in range(num_elements_to_process)
+        }
+        attrs.update(update_dict)
     else:
         # Fallback to generic names
-        for j, value in enumerate(tensor_data):
-            attrs[f"{prefix}_{j}"] = float(value)
+        update_dict = {
+            f"{prefix}_{j}": float(value)
+            for j, value in enumerate(tensor_data)
+        }
+        attrs.update(update_dict)
 
 
 def _add_node_attributes(

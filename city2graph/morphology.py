@@ -19,6 +19,7 @@ from .utils import create_tessellation
 from .utils import dual_graph
 from .utils import filter_graph_by_distance
 from .utils import gdf_to_nx
+from .utils import segments_to_graph
 
 # Define the public API for this module
 __all__ = [
@@ -165,7 +166,10 @@ def morphological_graph(
         if not math.isinf(clipping_buffer):
             # Finite clipping_buffer: use distance + clipping_buffer for segs_buffer radius
             segs_buffer_radius = distance + clipping_buffer
-            segs_buffer = filter_graph_by_distance(segments_gdf, center_point, segs_buffer_radius) # Segments for tessellation context, filtered by larger radius
+
+            # Segments for tessellation context, filtered by larger radius
+            segs_buffer = filter_graph_by_distance(segments_gdf, center_point, segs_buffer_radius)
+
         else: # clipping_buffer is math.inf
             # Fallback to 'distance' as radius for segs_buffer
             segs_buffer = filter_graph_by_distance(segments_gdf, center_point, distance) # Segments for tessellation context, filtered by distance
