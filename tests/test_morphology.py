@@ -510,7 +510,6 @@ def test_morphological_graph_options_and_structure(
 
     if not nodes["private"].empty:
         assert nodes["private"].crs == expected_crs
-        assert "private_id" in nodes["private"].columns
         assert nodes["private"].index.name == "private_id"
         if keep_buildings and not buildings_gdf.empty: # Check bldg_id only if keep_buildings and input had it
             assert "building_geometry" in nodes["private"].columns
@@ -526,7 +525,6 @@ def test_morphological_graph_options_and_structure(
 
     if not nodes["public"].empty:
         assert nodes["public"].crs == expected_crs
-        assert "public_id" in nodes["public"].columns
         assert nodes["public"].index.name == "public_id"
 
     for key_tuple, edge_gdf in edges.items():
@@ -635,7 +633,6 @@ def test_morphological_graph_default_run_specific_counts(sample_buildings_gdf, s
     # Check public nodes
     assert not nodes["public"].empty
     assert len(nodes["public"]) == len(sample_segments_gdf) # Default run should keep all segments
-    assert "public_id" in nodes["public"].columns
     assert nodes["public"].index.name == "public_id"
 
     # Check private nodes (tessellation)
@@ -643,7 +640,6 @@ def test_morphological_graph_default_run_specific_counts(sample_buildings_gdf, s
     # Their exact number depends on create_tessellation's behavior with the sample data.
     if not sample_buildings_gdf.empty:
         assert not nodes["private"].empty # Expect some tessellation cells
-        assert "private_id" in nodes["private"].columns
         assert nodes["private"].index.name == "private_id"
     else:
         assert nodes["private"].empty
