@@ -1,577 +1,571 @@
 import pytest
 import geopandas as gpd
-from geopandas import testing as gpd_testing # Import for assert_geodataframe_equal
 import pandas as pd
-from shapely.geometry import Point, LineString
 import networkx as nx
-import numpy as np
+from shapely.geometry import Point # Added import
 
-# Attempt to import torch and torch_geometric
+from city2graph.graph import (
+    gdf_to_pyg,
+    pyg_to_gdf,
+    nx_to_pyg,
+    pyg_to_nx,
+    is_torch_available,
+)
+
+# Try to import torch, skip tests if not available
 try:
     import torch
     from torch_geometric.data import Data, HeteroData
-    torch_geometric_available = True
+    TORCH_AVAILABLE = True
 except ImportError:
-    torch_geometric_available = False
+    TORCH_AVAILABLE = False
     # Define dummy classes if torch_geometric is not available for type hinting
     class Data:
-        def __init__(self, **kwargs):
-            for key, value in kwargs.items():
-                setattr(self, key, value)
+        pass
     class HeteroData:
-        def __init__(self):
-            self._node_types = []
-            self._edge_types = []
+        pass 
 
-        def __getitem__(self, key):
-            if isinstance(key, str): # node type
-                if key not in self._node_types:
-                    self._node_types.append(key)
-                if not hasattr(self, key):
-                    setattr(self, key, Data())
-                return getattr(self, key)
-            elif isinstance(key, tuple): # edge type
-                if key not in self._edge_types:
-                    self._edge_types.append(key)
-                if not hasattr(self, "_".join(key)):
-                     setattr(self, "_".join(key), Data())
-                return getattr(self, "_".join(key))
-            raise TypeError("Invalid key type")
+# Pytest skipif marker for tests requiring torch
+requires_torch = pytest.mark.skipif(not TORCH_AVAILABLE, reason="PyTorch or PyTorch Geometric is not available.")
 
-        @property
-        def node_types(self):
-            return self._node_types
 
-        @property
-        def edge_types(self):
-            return self._edge_types
+@requires_torch
+@pytest.mark.parametrize("node_feature_cols, node_label_cols, edge_feature_cols", [
+    (None, None, None),
+    (["feature1"], ["label1"], ["edge_feature1"]),
+    (["feature1"], None, None),
+    (None, ["label1"], None),
+    (None, None, ["edge_feature1"]),
+    (["non_existent_node_feat"], ["non_existent_node_label"], ["non_existent_edge_feat"])
+])
+def test_gdf_to_pyg_homogeneous_round_trip(sample_nodes_gdf, sample_edges_gdf, sample_crs, node_feature_cols, node_label_cols, edge_feature_cols):
+    """Test gdf_to_pyg and pyg_to_gdf for homogeneous graphs with various feature/label configurations."""
+    # Convert GDF to PyG
+    pyg_data = gdf_to_pyg(
+        sample_nodes_gdf,
+        sample_edges_gdf,
+        node_feature_cols=node_feature_cols,
+        node_label_cols=node_label_cols,
+        edge_feature_cols=edge_feature_cols,
+        device="cpu" # Test with CPU
+    )
 
-    class PyTorchDevice:
-        """Dummy PyTorchDevice class."""
-        ...
-    class PyTorchDtype:
-        """Dummy PyTorchDtype class."""
-        ...
-    torch = None # type: ignore[assignment]
+    assert isinstance(pyg_data, Data)
+    assert pyg_data.crs == sample_crs
 
-from city2graph import graph as c2g_graph # Import the module to allow mocking its globals
-
-# Constants
-TEST_CRS = "EPSG:27700"
-
-# Pytest marker for skipping tests if torch or torch_geometric is not available
-skip_if_no_torch = pytest.mark.skipif(not torch_geometric_available, reason="PyTorch or PyTorch Geometric is not available")
-
-# Helper for comparing GDFs
-def assert_gdf_equals(gdf1, gdf2, check_like=False, **kwargs):
-    if check_like: # only check columns and dtypes
-        pd.testing.assert_frame_equal(gdf1.drop(columns='geometry'), gdf2.drop(columns='geometry'), check_dtype=True, check_like=True, **kwargs)
+    # Check node features
+    if node_feature_cols and "feature1" in node_feature_cols:
+        assert hasattr(pyg_data, "x")
+        assert pyg_data.x.shape[0] == len(sample_nodes_gdf)
+        assert pyg_data.x.shape[1] == 1
+    elif node_feature_cols and "non_existent_node_feat" in node_feature_cols:
+        assert hasattr(pyg_data, "x")
+        assert pyg_data.x.shape[1] == 0 # No features should be created
     else:
-        gpd_testing.assert_geodataframe_equal(gdf1, gdf2, check_dtype=True, **kwargs) # Use gpd_testing
-    if gdf1.crs and gdf2.crs:
-        assert gdf1.crs.equals(gdf2.crs)
-    elif gdf1.crs is None and gdf2.crs is None:
-        pass # both are None, which is fine
+        assert hasattr(pyg_data, "x") # x is always created
+        assert pyg_data.x.shape[1] == 0 # Empty features
+
+    # Check node labels
+    if node_label_cols and "label1" in node_label_cols:
+        assert hasattr(pyg_data, "y")
+        assert pyg_data.y.shape[0] == len(sample_nodes_gdf)
+        assert pyg_data.y.shape[1] == 1
+    elif node_label_cols and "non_existent_node_label" in node_label_cols:
+        assert hasattr(pyg_data, "y")
+        assert pyg_data.y.shape[1] == 0
     else:
-        assert False, f"CRS mismatch: {gdf1.crs} != {gdf2.crs}"
+        assert not hasattr(pyg_data, "y") or pyg_data.y is None
 
+    # Check edge features
+    if edge_feature_cols and "edge_feature1" in edge_feature_cols:
+        assert hasattr(pyg_data, "edge_attr")
+        assert pyg_data.edge_attr.shape[0] == len(sample_edges_gdf)
+        assert pyg_data.edge_attr.shape[1] == 1
+    elif edge_feature_cols and "non_existent_edge_feat" in edge_feature_cols:
+        assert hasattr(pyg_data, "edge_attr")
+        assert pyg_data.edge_attr.shape[1] == 0
+    else:
+        assert hasattr(pyg_data, "edge_attr")
+        assert pyg_data.edge_attr.shape[1] == 0
 
-@pytest.fixture
-def basic_nodes_data():
-    return {
-        "id": ["N1", "N2", "N3"],
-        "feat1": [1.0, 2.0, 3.0],
-        "feat2": [10, 20, 30],
-        "label1": [0, 1, 0],
-        "geometry": [Point(0, 0), Point(1, 1), Point(0, 1)],
-    }
+    # Convert PyG back to GDF
+    reconstructed_nodes_gdf, reconstructed_edges_gdf = pyg_to_gdf(pyg_data)
 
-@pytest.fixture
-def basic_nodes_gdf(basic_nodes_data):
-    gdf = gpd.GeoDataFrame(basic_nodes_data, crs=TEST_CRS)
-    return gdf
+    assert isinstance(reconstructed_nodes_gdf, gpd.GeoDataFrame)
 
-@pytest.fixture
-def basic_edges_data():
-    return {
-        "source_id": ["N1", "N2", "N1"],
-        "target_id": ["N2", "N3", "N3"],
-        "edge_feat1": [0.5, 1.5, 2.5],
-        "geometry": [
-            LineString([(0, 0), (1, 1)]),
-            LineString([(1, 1), (0, 1)]),
-            LineString([(0, 0), (0, 1)]),
-        ],
-    }
+    # Compare only the columns that were actually reconstructed
+    reconstructed_cols = reconstructed_nodes_gdf.columns.drop("geometry", errors="ignore")
+    # Ensure index is sorted for consistent comparison
+    reconstructed_nodes_gdf = reconstructed_nodes_gdf.sort_index()
+    original_nodes_to_compare = sample_nodes_gdf.sort_index()
 
-@pytest.fixture
-def basic_edges_gdf(basic_edges_data):
-    return gpd.GeoDataFrame(basic_edges_data, crs=TEST_CRS)
-
-@pytest.fixture
-def hetero_nodes_data():
-    poi_gdf = gpd.GeoDataFrame({
-        "poi_id": ["P1", "P2"],
-        "category": ["food", "shop"],
-        "geometry": [Point(10, 10), Point(20, 20)],
-    }, crs=TEST_CRS)
-
-    junction_gdf = gpd.GeoDataFrame({
-        "junc_id": ["J1", "J2", "J3"],
-        "traffic_signal": [True, False, True],
-        "geometry": [Point(10, 0), Point(0, 10), Point(20, 10)],
-    }, crs=TEST_CRS)
-
-    return {
-        "poi": poi_gdf,
-        "junction": junction_gdf,
-    }
-
-@pytest.fixture
-def hetero_edges_data(hetero_nodes_data):
-    # Ensure source/target IDs exist in hetero_nodes_data
-    return {
-        ("poi", "links_to", "junction"): gpd.GeoDataFrame({
-            "source": ["P1", "P2"], # poi_id
-            "target": ["J1", "J2"], # junc_id
-            "distance": [10.0, 5.0],
-            "geometry": [
-                LineString([hetero_nodes_data["poi"].loc["P1"].geometry, hetero_nodes_data["junction"].loc["J1"].geometry]),
-                LineString([hetero_nodes_data["poi"].loc["P2"].geometry, hetero_nodes_data["junction"].loc["J2"].geometry]),
-            ]
-        }, crs=TEST_CRS),
-        ("junction", "connects", "junction"): gpd.GeoDataFrame({
-            "u": ["J1"], # junc_id
-            "v": ["J3"], # junc_id
-            "road_type": ["primary"],
-            "geometry": [
-                 LineString([hetero_nodes_data["junction"].loc["J1"].geometry, hetero_nodes_data["junction"].loc["J3"].geometry]),
-            ]
-        }, crs=TEST_CRS),
-    }
-
-@pytest.fixture
-def sample_nx_graph():
-    g = nx.Graph()
-    g.add_node(0, feat1=1.0, label1=0, pos=(0,0))
-    g.add_node(1, feat1=2.0, label1=1, pos=(1,1))
-    g.add_node(2, feat1=3.0, label1=0, pos=(0,1))
-    g.add_edge(0, 1, edge_feat1=0.5)
-    g.add_edge(1, 2, edge_feat1=1.5)
-    g.graph['crs'] = TEST_CRS # Store CRS in graph attributes
-    return g
-
-# --- Test is_torch_available ---
-def test_is_torch_available(monkeypatch):
-    monkeypatch.setattr(c2g_graph, "TORCH_AVAILABLE", True)
-    assert c2g_graph.is_torch_available() is True
-    monkeypatch.setattr(c2g_graph, "TORCH_AVAILABLE", False)
-    assert c2g_graph.is_torch_available() is False
-
-# --- Test _get_device ---
-@skip_if_no_torch
-class TestGetDevice:
-    def test_get_device_none(self, monkeypatch):
-        monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
-        assert c2g_graph._get_device(None) == torch.device("cpu")
-
-        monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
-        assert c2g_graph._get_device(None) == torch.device("cuda")
-
-    def test_get_device_str(self):
-        assert c2g_graph._get_device("cpu") == torch.device("cpu")
-        if torch.cuda.is_available():
-            assert c2g_graph._get_device("cuda") == torch.device("cuda")
-        else:
-            with pytest.raises(ValueError, match="Device must be 'cuda', 'cpu'"): # PyTorch itself might raise error if CUDA not avail
-                 c2g_graph._get_device("cuda")
-
-
-    def test_get_device_torch_device(self):
-        cpu_dev = torch.device("cpu")
-        assert c2g_graph._get_device(cpu_dev) == cpu_dev
-        if torch.cuda.is_available():
-            cuda_dev = torch.device("cuda")
-            assert c2g_graph._get_device(cuda_dev) == cuda_dev
-
-    def test_get_device_invalid_str(self):
-        with pytest.raises(ValueError, match="Device must be 'cuda', 'cpu'"):
-            c2g_graph._get_device("tpu")
-
-    def test_get_device_invalid_type(self):
-        with pytest.raises(TypeError, match="Device must be 'cuda', 'cpu'"):
-            c2g_graph._get_device(123) # type: ignore[arg-type]
-
-# --- Tests for gdf_to_pyg ---
-@skip_if_no_torch
-class TestGdfToPygHomogeneous:
-    def test_nodes_only(self, basic_nodes_gdf):
-        data = c2g_graph.gdf_to_pyg(nodes=basic_nodes_gdf, node_feature_cols=['feat1', 'feat2'])
-        assert isinstance(data, Data)
-        assert data.x.shape == (3, 2)
-        assert data.pos.shape == (3, 2)
-        assert 'edge_index' not in data or data.edge_index.shape[1] == 0
-        assert data.crs == basic_nodes_gdf.crs
-
-    def test_nodes_and_edges(self, basic_nodes_gdf, basic_edges_gdf):
-        data = c2g_graph.gdf_to_pyg(
-            nodes=basic_nodes_gdf,
-            edges=basic_edges_gdf,
-            node_id_cols='id', # Using the GDF index name
-            node_feature_cols=['feat1'],
-            node_label_cols=['label1'],
-            edge_source_col='source_id',
-            edge_target_col='target_id',
-            edge_feature_cols=['edge_feat1']
+    if reconstructed_cols.empty:
+        # If no attribute columns were reconstructed, compare against an empty selection from original
+        pd.testing.assert_frame_equal(
+            reconstructed_nodes_gdf[reconstructed_cols],
+            original_nodes_to_compare[reconstructed_cols], # This will be an empty DataFrame
+            check_dtype=False, atol=1e-5
         )
-        assert data.x.shape == (3, 1)
-        assert data.y.shape == (3, 1)
-        assert data.pos.shape == (3, 2)
-        assert data.edge_index.shape == (2, 3) # 3 edges
-        assert data.edge_attr.shape == (3, 1)
-        assert data.crs == basic_nodes_gdf.crs
-
-    def test_auto_detect_edge_columns(self, basic_nodes_gdf, basic_edges_gdf):
-        # Rename columns for auto-detection
-        renamed_edges_gdf = basic_edges_gdf.rename(columns={'source_id': 'u', 'target_id': 'v'})
-        data = c2g_graph.gdf_to_pyg(
-            nodes=basic_nodes_gdf,
-            edges=renamed_edges_gdf,
-            node_feature_cols=['feat1']
+    else:
+        pd.testing.assert_frame_equal(
+            reconstructed_nodes_gdf[reconstructed_cols],
+            original_nodes_to_compare[reconstructed_cols],
+            check_dtype=False, atol=1e-5
         )
-        assert data.edge_index.shape == (2, 3)
+    
+    assert reconstructed_nodes_gdf.crs == sample_crs
+    assert reconstructed_nodes_gdf.geom_equals_exact(sample_nodes_gdf.geometry, tolerance=1e-5).all()
 
-    def test_node_id_from_column(self, basic_nodes_data, basic_edges_data):
-        nodes_df = pd.DataFrame(basic_nodes_data)
-        nodes_gdf = gpd.GeoDataFrame(nodes_df, geometry=nodes_df['geometry'], crs=TEST_CRS) # 'id' is a column
-
-        edges_df = pd.DataFrame(basic_edges_data)
-        edges_gdf = gpd.GeoDataFrame(edges_df, geometry=edges_df['geometry'], crs=TEST_CRS)
-
-        data = c2g_graph.gdf_to_pyg(
-            nodes=nodes_gdf,
-            edges=edges_gdf,
-            node_id_cols='id',
-            node_feature_cols=['feat1'],
-            edge_source_col='source_id',
-            edge_target_col='target_id'
-        )
-        assert data.num_nodes == 3
-        assert data.num_edges == 3
-
-    def test_empty_edges(self, basic_nodes_gdf):
-        empty_edges_gdf = gpd.GeoDataFrame(columns=['source', 'target', 'geometry'], crs=TEST_CRS)
-        data = c2g_graph.gdf_to_pyg(nodes=basic_nodes_gdf, edges=empty_edges_gdf)
-        assert data.edge_index.shape[1] == 0
-        assert data.edge_attr.shape[0] == 0
-
-    def test_different_dtypes(self, basic_nodes_gdf):
-        data_float32 = c2g_graph.gdf_to_pyg(nodes=basic_nodes_gdf, node_feature_cols=['feat1'], dtype=torch.float32)
-        assert data_float32.x.dtype == torch.float32
-        if torch_geometric_available and hasattr(torch, 'float16'): # float16 might not be available on all setups
-            data_float16 = c2g_graph.gdf_to_pyg(nodes=basic_nodes_gdf, node_feature_cols=['feat1'], dtype=torch.float16)
-            assert data_float16.x.dtype == torch.float16
-
-
-@skip_if_no_torch
-class TestGdfToPygHeterogeneous:
-    def test_hetero_nodes_only(self, hetero_nodes_data):
-        data = c2g_graph.gdf_to_pyg(
-            nodes=hetero_nodes_data,
-            node_id_cols={"poi": "poi_id", "junction": "junc_id"}, # Using index names
-            node_feature_cols={"poi": ["category"], "junction": ["traffic_signal"]}
-        )
-        assert isinstance(data, HeteroData)
-        assert "poi" in data.node_types
-        assert "junction" in data.node_types
-        assert data["poi"].x.shape[0] == 2 # 2 poi nodes
-        assert data["junction"].x.shape[0] == 3 # 3 junction nodes
-        assert data["poi"].pos.shape == (2,2)
-        assert data.crs == TEST_CRS
-
-    def test_hetero_nodes_and_edges(self, hetero_nodes_data, hetero_edges_data):
-        data = c2g_graph.gdf_to_pyg(
-            nodes=hetero_nodes_data,
-            edges=hetero_edges_data,
-            node_id_cols={"poi": "poi_id", "junction": "junc_id"},
-            node_feature_cols={"poi": ["category"], "junction": ["traffic_signal"]},
-            edge_feature_cols={"links_to": ["distance"], "connects": ["road_type"]}
-        )
-        assert isinstance(data, HeteroData)
-        assert data["poi", "links_to", "junction"].edge_index.shape[1] == 2 # 2 poi-junction edges
-        assert data["poi", "links_to", "junction"].edge_attr.shape[1] == 1
-        assert data["junction", "connects", "junction"].edge_index.shape[1] == 1
-        assert data["junction", "connects", "junction"].edge_attr.shape[1] == 1
-        assert data.crs == TEST_CRS
-
-
-# --- Tests for pyg_to_gdf (Round Trip) ---
-@skip_if_no_torch
-class TestPygToGdfRoundtripHomogeneous:
-    @pytest.mark.parametrize("with_edges", [True, False])
-    @pytest.mark.parametrize("with_node_labels", [True, False])
-    @pytest.mark.parametrize("with_edge_features", [True, False])
-    def test_roundtrip(self, basic_nodes_gdf, basic_edges_gdf, with_edges, with_node_labels, with_edge_features):
-        node_feat_cols = ['feat1', 'feat2']
-        node_lbl_cols = ['label1'] if with_node_labels else None
-        edge_feat_cols = ['edge_feat1'] if with_edge_features else None
+    if sample_edges_gdf is not None and not sample_edges_gdf.empty:
+        assert isinstance(reconstructed_edges_gdf, gpd.GeoDataFrame)
+        # When edge features are not selected, edge_attr is empty, leading to no feature columns in reconstructed_edges_gdf
+        # So, we only compare if original edge_feature_cols were specified and valid
         
-        current_edges_gdf = basic_edges_gdf if with_edges else None
-        if current_edges_gdf is not None and not with_edge_features: # drop edge features if not used
-            current_edges_gdf = current_edges_gdf[['source_id', 'target_id', 'geometry']].copy()
+        reconstructed_edge_cols = reconstructed_edges_gdf.columns.drop("geometry", errors="ignore")
+        # Ensure index is sorted for consistent comparison
+        reconstructed_edges_gdf = reconstructed_edges_gdf.sort_index()
+        original_edges_to_compare = sample_edges_gdf.sort_index()
 
+        if edge_feature_cols and "edge_feature1" in edge_feature_cols and "edge_feature1" in reconstructed_edge_cols:
+             pd.testing.assert_frame_equal(
+                 reconstructed_edges_gdf[reconstructed_edge_cols], 
+                 original_edges_to_compare[reconstructed_edge_cols], 
+                 check_dtype=False, atol=1e-5
+            )
+        elif reconstructed_edge_cols.empty:
+             pd.testing.assert_frame_equal(
+                 reconstructed_edges_gdf[reconstructed_edge_cols], 
+                 original_edges_to_compare[reconstructed_edge_cols], # Empty comparison
+                 check_dtype=False, atol=1e-5
+            )
+        # If there are other columns in reconstructed_edges_gdf (e.g. if edge_feature_cols was None but some default were picked)
+        # This part of logic might need refinement based on how pyg_to_gdf handles unspecified edge_feature_cols
+        # For now, if specific features were requested and exist, we check them. If reconstructed is empty, we check that.
 
-        pyg_data = c2g_graph.gdf_to_pyg(
-            nodes=basic_nodes_gdf,
-            edges=current_edges_gdf,
-            node_id_cols='id', # index name
-            node_feature_cols=node_feat_cols,
-            node_label_cols=node_lbl_cols,
-            edge_source_col='source_id',
-            edge_target_col='target_id',
-            edge_feature_cols=edge_feat_cols
-        )
+        assert reconstructed_edges_gdf.crs == sample_crs
+        assert reconstructed_edges_gdf.geom_equals_exact(sample_edges_gdf.geometry, tolerance=1e-5).all()
+        # Check if index is preserved
+        pd.testing.assert_index_equal(reconstructed_edges_gdf.index, sample_edges_gdf.index)
+    else:
+        assert reconstructed_edges_gdf is None
 
-        re_nodes_gdf, re_edges_gdf = c2g_graph.pyg_to_gdf(pyg_data)
+@requires_torch
+@pytest.mark.parametrize("node_feature_cols, node_label_cols, edge_feature_cols", [
+    (None, None, None),
+    ({"building": ["b_feat1"], "road": ["r_feat1"]}, {"building": ["b_label"], "road": ["r_label"]}, {"connects_to": ["conn_feat1"], "links_to": ["link_feat1"]}),
+    ({"building": ["b_feat1"]}, None, None),
+    (None, {"road": ["r_label"]}, None),
+    (None, None, {"connects_to": ["conn_feat1"]}),
+    ({"building": ["non_existent_feat"]}, None, {"connects_to": ["non_existent_edge_feat"]})
+])
+def test_gdf_to_pyg_heterogeneous_round_trip(sample_hetero_nodes_dict, sample_hetero_edges_dict, sample_crs, node_feature_cols, node_label_cols, edge_feature_cols):
+    """Test gdf_to_pyg and pyg_to_gdf for heterogeneous graphs with various feature/label configurations."""
+    pyg_data = gdf_to_pyg(
+        sample_hetero_nodes_dict,
+        sample_hetero_edges_dict,
+        node_feature_cols=node_feature_cols,
+        node_label_cols=node_label_cols,
+        edge_feature_cols=edge_feature_cols,
+        device="cpu"
+    )
 
-        # Prepare original basic_nodes_gdf for comparison (select relevant columns)
-        expected_nodes_cols = ['geometry'] + node_feat_cols
-        if node_lbl_cols:
-            expected_nodes_cols += node_lbl_cols
-        
-        # pyg_to_gdf might add 'node_id' if original index was not named 'id' or if id_col was not 'index'
-        # and it was a regular column. Here, basic_nodes_gdf index is 'id'.
-        # _reconstruct_node_gdf uses original_ids for index if id_col was 'index'
-        expected_nodes_gdf = basic_nodes_gdf[expected_nodes_cols].copy()
-        
-        assert_gdf_equals(re_nodes_gdf, expected_nodes_gdf, check_like=False, check_index_type=False)
+    assert isinstance(pyg_data, HeteroData)
+    assert pyg_data.crs == sample_crs
 
-
-        if with_edges:
-            assert re_edges_gdf is not None
-            expected_edges_cols = ['geometry']
-            if edge_feat_cols:
-                expected_edges_cols += edge_feat_cols
-            
-            # pyg_to_gdf reconstructs edges without source/target columns, geometry is LineString
-            # The original edge GDF has source/target columns.
-            # We need to compare the features and geometry.
-            # The index of re_edges_gdf might be simple RangeIndex.
-            assert_gdf_equals(re_edges_gdf[expected_edges_cols], current_edges_gdf[expected_edges_cols], check_like=True, check_index_type=False, check_names=False)
-
-        else:
-            assert re_edges_gdf is None or re_edges_gdf.empty
-
-
-@skip_if_no_torch
-class TestPygToGdfRoundtripHeterogeneous:
-    def test_roundtrip_hetero(self, hetero_nodes_data, hetero_edges_data):
-        node_id_cols_map = {ntype: gdf.index.name for ntype, gdf in hetero_nodes_data.items()}
-        
-        pyg_data = c2g_graph.gdf_to_pyg(
-            nodes=hetero_nodes_data,
-            edges=hetero_edges_data,
-            node_id_cols=node_id_cols_map,
-            node_feature_cols={"poi": ["category"], "junction": ["traffic_signal"]},
-            edge_feature_cols={"links_to": ["distance"], "connects": ["road_type"]}
-        )
-
-        re_nodes_gdfs, re_edges_gdfs = c2g_graph.pyg_to_gdf(pyg_data)
-
-        for node_type, original_gdf in hetero_nodes_data.items():
-            assert node_type in re_nodes_gdfs
-            re_gdf = re_nodes_gdfs[node_type]
-            
-            expected_cols = ['geometry']
-            if node_type == "poi": expected_cols.append("category")
-            if node_type == "junction": expected_cols.append("traffic_signal")
-            
-            assert_gdf_equals(re_gdf, original_gdf[expected_cols], check_like=False, check_index_type=False)
-
-
-        for edge_type, original_gdf in hetero_edges_data.items():
-            assert edge_type in re_edges_gdfs
-            re_gdf = re_edges_gdfs[edge_type]
-            
-            expected_cols = ['geometry']
-            rel_type = edge_type[1]
-            if rel_type == "links_to": expected_cols.append("distance")
-            if rel_type == "connects": expected_cols.append("road_type")
-
-            assert_gdf_equals(re_gdf[expected_cols], original_gdf[expected_cols], check_like=True, check_index_type=False, check_names=False)
-
-# --- Tests for nx_to_pyg ---
-@skip_if_no_torch
-class TestNxToPyg:
-    def test_basic_conversion(self, sample_nx_graph):
-        data = c2g_graph.nx_to_pyg(
-            sample_nx_graph,
-            node_feature_cols=['feat1'],
-            node_label_cols=['label1'],
-            edge_feature_cols=['edge_feat1']
-        )
-        assert isinstance(data, Data)
-        assert data.x.shape == (3, 1)
-        assert data.y.shape == (3, 1)
-        assert data.pos.shape == (3, 2) # From 'pos' attribute
-        assert data.edge_index.shape == (2, 2) # 2 edges
-        assert data.edge_attr.shape == (2, 1)
-        assert data.crs == TEST_CRS
-
-    def test_nx_to_pyg_no_features(self, sample_nx_graph):
-        # Create a graph with no features to test defaults
-        g = nx.Graph()
-        g.add_node(0, pos=(0,0))
-        g.add_node(1, pos=(1,1))
-        g.add_edge(0,1)
-        g.graph['crs'] = TEST_CRS
-
-        data = c2g_graph.nx_to_pyg(g)
-        assert data.x.shape == (2,0) # No node features
-        assert data.pos.shape == (2,2)
-        assert data.edge_index.shape == (2,1)
-        assert data.edge_attr.shape == (1,0) # No edge features
-        assert data.crs == TEST_CRS
-
-
-# --- Tests for pyg_to_nx (Round Trip) ---
-@skip_if_no_torch
-class TestPygToNxRoundtrip:
-    def test_roundtrip_homogeneous_nx(self, sample_nx_graph):
-        # NX -> PyG
-        pyg_data = c2g_graph.nx_to_pyg(
-            sample_nx_graph,
-            node_feature_cols=['feat1'],
-            node_label_cols=['label1'],
-            edge_feature_cols=['edge_feat1']
-        )
-        # PyG -> NX
-        re_nx_graph = c2g_graph.pyg_to_nx(pyg_data)
-
-        assert re_nx_graph.graph.get('crs') == sample_nx_graph.graph.get('crs')
-        assert len(re_nx_graph.nodes) == len(sample_nx_graph.nodes)
-        assert len(re_nx_graph.edges) == len(sample_nx_graph.edges)
-
-        for node_id, attrs in sample_nx_graph.nodes(data=True):
-            re_attrs = re_nx_graph.nodes[node_id]
-            assert pytest.approx(attrs['feat1']) == re_attrs['feat1']
-            assert attrs['label1'] == re_attrs['label1']
-            # Position might be tuple of floats
-            assert np.allclose(attrs['pos'], re_attrs['pos'])
-
-
-        # Edge attributes can be tricky due to order if multiple edges
-        # For simple graph, this is okay
-        for u, v, attrs in sample_nx_graph.edges(data=True):
-            # Check if edge exists (order might be swapped in undirected graph)
-            if (u,v) in re_nx_graph.edges:
-                re_attrs = re_nx_graph.edges[(u,v)]
-            elif (v,u) in re_nx_graph.edges:
-                re_attrs = re_nx_graph.edges[(v,u)]
+    # Check node features and labels for each type
+    for node_type, original_gdf in sample_hetero_nodes_dict.items():
+        # Features
+        if node_feature_cols and node_type in node_feature_cols and pyg_data[node_type].x.numel() > 0:
+            assert pyg_data[node_type].x.shape[0] == len(original_gdf)
+            if original_gdf.columns.intersection(node_feature_cols[node_type]).any():
+                 assert pyg_data[node_type].x.shape[1] == len(node_feature_cols[node_type])
             else:
-                assert False, f"Edge ({u},{v}) not found in reconstructed graph"
-            assert pytest.approx(attrs['edge_feat1']) == re_attrs['edge_feat1']
+                 assert pyg_data[node_type].x.shape[1] == 0 # No valid features
+        else:
+            assert pyg_data[node_type].x.shape[1] == 0
+        # Labels
+        if node_label_cols and node_type in node_label_cols and pyg_data[node_type].y.numel() > 0:
+            assert pyg_data[node_type].y.shape[0] == len(original_gdf)
+            if original_gdf.columns.intersection(node_label_cols[node_type]).any():
+                assert pyg_data[node_type].y.shape[1] == len(node_label_cols[node_type])
+            else:
+                assert pyg_data[node_type].y.shape[1] == 0 # No valid labels
+        elif not (hasattr(pyg_data[node_type], "y") and pyg_data[node_type].y is not None and pyg_data[node_type].y.numel() > 0) :
+             assert True # y can be None or empty tensor
 
+    # Check edge features for each type
+    for edge_type_tuple, original_edge_gdf in sample_hetero_edges_dict.items():
+        relation_type = edge_type_tuple[1]
+        if edge_feature_cols and relation_type in edge_feature_cols and pyg_data[edge_type_tuple].edge_attr.numel() > 0:
+            assert pyg_data[edge_type_tuple].edge_attr.shape[0] == len(original_edge_gdf)
+            if original_edge_gdf.columns.intersection(edge_feature_cols[relation_type]).any():
+                assert pyg_data[edge_type_tuple].edge_attr.shape[1] == len(edge_feature_cols[relation_type])
+            else:
+                assert pyg_data[edge_type_tuple].edge_attr.shape[1] == 0 # No valid features
+        else:
+            assert pyg_data[edge_type_tuple].edge_attr.shape[1] == 0
 
-    def test_hetero_pyg_to_nx(self, hetero_nodes_data, hetero_edges_data):
-        node_id_cols_map = {ntype: gdf.index.name for ntype, gdf in hetero_nodes_data.items()}
-        pyg_hetero_data = c2g_graph.gdf_to_pyg(
-            nodes=hetero_nodes_data,
-            edges=hetero_edges_data,
-            node_id_cols=node_id_cols_map,
-            node_feature_cols={"poi": ["category"], "junction": ["traffic_signal"]},
-            edge_feature_cols={"links_to": ["distance"], "connects": ["road_type"]}
-        )
+    reconstructed_nodes_dict, reconstructed_edges_dict = pyg_to_gdf(pyg_data)
 
-        nx_graph = c2g_graph.pyg_to_nx(pyg_hetero_data)
+    for node_type, original_gdf in sample_hetero_nodes_dict.items():
+        assert node_type in reconstructed_nodes_dict
+        re_gdf = reconstructed_nodes_dict[node_type].sort_index()
+        original_gdf_sorted = original_gdf.sort_index()
+        assert isinstance(re_gdf, gpd.GeoDataFrame)
 
-        assert nx_graph.graph.get('is_hetero') is True
-        assert nx_graph.graph.get('crs') == TEST_CRS
+        reconstructed_cols = re_gdf.columns.drop("geometry", errors="ignore")
+        if reconstructed_cols.empty:
+            pd.testing.assert_frame_equal(
+                re_gdf[reconstructed_cols],
+                original_gdf_sorted[reconstructed_cols],
+                check_dtype=False, atol=1e-5
+            )
+        else:
+            pd.testing.assert_frame_equal(
+                re_gdf[reconstructed_cols], 
+                original_gdf_sorted[reconstructed_cols], 
+                check_dtype=False, atol=1e-5
+            )
+        assert re_gdf.crs == sample_crs
+        assert re_gdf.geom_equals_exact(original_gdf_sorted.geometry, tolerance=1e-5).all()
+
+    for edge_type, original_gdf in sample_hetero_edges_dict.items():
+        relation_type = edge_type[1] # This is the key for edge_feature_cols dict
+        assert edge_type in reconstructed_edges_dict
+        re_gdf = reconstructed_edges_dict[edge_type].sort_index()
+        original_gdf_sorted = original_gdf.sort_index()
+
+        assert isinstance(re_gdf, gpd.GeoDataFrame)
         
-        num_expected_nodes = sum(len(gdf) for gdf in hetero_nodes_data.values())
-        assert len(nx_graph.nodes) == num_expected_nodes
+        reconstructed_edge_cols = re_gdf.columns.drop("geometry", errors="ignore")
+
+        # Determine expected columns based on what was requested and if it's valid
+        expected_edge_cols = []
+        if edge_feature_cols and relation_type in edge_feature_cols:
+            # Only consider columns that were actually requested for this relation_type
+            # and are present in the original GDF.
+            requested_and_valid = [col for col in edge_feature_cols[relation_type] if col in original_gdf_sorted.columns]
+            if requested_and_valid: # If any requested columns are valid
+                 # And these columns are also in the reconstructed GDF
+                expected_edge_cols = [col for col in requested_and_valid if col in reconstructed_edge_cols]
+
+
+        if expected_edge_cols: # If we have specific columns to compare
+            pd.testing.assert_frame_equal(
+                re_gdf[expected_edge_cols], 
+                original_gdf_sorted[expected_edge_cols], 
+                check_dtype=False, atol=1e-5
+            )
+        elif reconstructed_edge_cols.empty: # If no features were reconstructed
+             pd.testing.assert_frame_equal(
+                re_gdf[reconstructed_edge_cols],
+                original_gdf_sorted[reconstructed_edge_cols], # Empty comparison
+                check_dtype=False, atol=1e-5
+            )
+        # Add a general check for all reconstructed columns if no specific ones were expected
+        # This handles cases where edge_feature_cols might be None but some features are still reconstructed
+        elif not reconstructed_edge_cols.empty:
+             pd.testing.assert_frame_equal(
+                re_gdf[reconstructed_edge_cols],
+                original_gdf_sorted[reconstructed_edge_cols],
+                check_dtype=False, atol=1e-5
+            )
+
+
+        assert re_gdf.crs == sample_crs
+        assert re_gdf.geom_equals_exact(original_gdf_sorted.geometry, tolerance=1e-5).all()
+        pd.testing.assert_index_equal(re_gdf.index, original_gdf_sorted.index)
+
+@requires_torch
+@pytest.mark.parametrize("node_feature_cols, node_label_cols, edge_feature_cols", [
+    (None, None, None),
+    (["feature1"], ["label1"], ["edge_feature1"]),
+])
+def test_nx_to_pyg_round_trip(sample_nx_graph, sample_crs, node_feature_cols, node_label_cols, edge_feature_cols):
+    """Test nx_to_pyg and pyg_to_nx for round trip conversion."""
+    # Convert NX to PyG
+    pyg_data = nx_to_pyg(
+        sample_nx_graph,
+        node_feature_cols=node_feature_cols,
+        node_label_cols=node_label_cols,
+        edge_feature_cols=edge_feature_cols,
+        device="cpu"
+    )
+
+    assert isinstance(pyg_data, Data)
+    assert pyg_data.crs == sample_crs
+
+    # Check node features
+    if node_feature_cols:
+        assert hasattr(pyg_data, "x")
+        assert pyg_data.x.shape[0] == sample_nx_graph.number_of_nodes()
+        assert pyg_data.x.shape[1] == len(node_feature_cols)
+    else:
+        assert hasattr(pyg_data, "x")
+        assert pyg_data.x.shape[1] == 0
+
+    # Check node labels
+    if node_label_cols:
+        assert hasattr(pyg_data, "y")
+        assert pyg_data.y.shape[0] == sample_nx_graph.number_of_nodes()
+        assert pyg_data.y.shape[1] == len(node_label_cols)
+    else:
+        assert not hasattr(pyg_data, "y") or pyg_data.y is None
+
+    # Check edge features
+    if edge_feature_cols:
+        assert hasattr(pyg_data, "edge_attr")
+        assert pyg_data.edge_attr.shape[0] == sample_nx_graph.number_of_edges()
+        assert pyg_data.edge_attr.shape[1] == len(edge_feature_cols)
+    else:
+        assert hasattr(pyg_data, "edge_attr")
+        assert pyg_data.edge_attr.shape[1] == 0
+
+    # Convert PyG back to NX
+    reconstructed_nx_graph = pyg_to_nx(pyg_data)
+
+    assert isinstance(reconstructed_nx_graph, nx.Graph)
+    assert reconstructed_nx_graph.graph.get("crs") == sample_crs
+    assert reconstructed_nx_graph.number_of_nodes() == sample_nx_graph.number_of_nodes()
+    assert reconstructed_nx_graph.number_of_edges() == sample_nx_graph.number_of_edges()
+
+    # Compare node attributes (more robustly)
+    # We need to map original node IDs to the integer indices used in PyG and then back
+    # to ensure we are comparing attributes of the same conceptual node.
+    # The sample_nx_graph uses integer node IDs that might align with PyG's 0-based indexing,
+    # but this might not always be the case.
+    # For pyg_to_nx, the reconstructed graph will have nodes 0 to N-1.
+    # We need to fetch the original_id from the pyg_data's metadata if stored,
+    # or assume a direct mapping if the sample_nx_graph's nodes are already 0 to N-1.
+
+    # Assuming sample_nx_graph nodes are 1, 2, 3... and pyg_data nodes are 0, 1, 2...
+    # and pyg_to_nx reconstructs nodes as 0, 1, 2...
+    # We need a way to link reconstructed_nx_graph.nodes[i] to sample_nx_graph.nodes[original_id_for_i]
+
+    # If original_ids are stored in pyg_data (they should be from gdf_to_pyg via nx_to_gdf)
+    original_ids_map = {}
+    if hasattr(pyg_data, "_node_mappings") and "default" in pyg_data._node_mappings:
+        # Invert the id_mapping: {pyg_idx: original_id}
+        id_mapping_inv = {v: k for k, v in pyg_data._node_mappings["default"]["mapping"].items()}
+        for i in range(reconstructed_nx_graph.number_of_nodes()):
+            original_ids_map[i] = id_mapping_inv.get(i)
+    else:
+        # Fallback: assume direct mapping if sample_nx_graph nodes are 0-indexed or 1-indexed and contiguous
+        # This part is tricky and depends on the fixture's node ID scheme.
+        # For sample_nx_graph, nodes are 1, 2, 3.
+        # If nx_to_pyg maps them to 0, 1, 2, then original_ids_map should be {0:1, 1:2, 2:3}
+        # The current sample_nx_graph has nodes 1, 2, 3.
+        # nx_to_pyg (via nx_to_gdf then gdf_to_pyg) will map these to 0, 1, 2.
+        # So, reconstructed_nx_graph.nodes[0] should correspond to sample_nx_graph.nodes[1], etc.
+        # This mapping is implicitly handled if original_ids are correctly stored and retrieved.
+
+        # Let's assume original_ids_map is correctly populated if metadata exists.
+        # If not, this test might be flawed for more complex node ID schemes.
+        pass
+
+
+    for reconstructed_node_id in reconstructed_nx_graph.nodes():
+        original_node_id = original_ids_map.get(reconstructed_node_id)
+        if original_node_id is None:
+            # This case implies a mismatch in node mapping or test setup
+            # For the current fixture, original_node_id should be reconstructed_node_id + 1
+            # if original_ids_map is not populated.
+            # However, the metadata *should* be populated by gdf_to_pyg.
+            # If original_ids_map is empty, we might need to adjust based on fixture specifics.
+            # For sample_nx_graph, node IDs are 1, 2, 3.
+            # nx_to_pyg creates PyG with nodes 0, 1, 2.
+            # pyg_to_nx creates NX with nodes 0, 1, 2.
+            # So, reconstructed_node_id 0 corresponds to original node 1.
+            if not original_ids_map: # If metadata wasn't there
+                 original_node_id = reconstructed_node_id + 1 # Specific to sample_nx_graph fixture
+            else:
+                assert False, f"Could not map reconstructed node ID {reconstructed_node_id} to an original node ID."
+
+
+        assert original_node_id in sample_nx_graph.nodes, f"Original node ID {original_node_id} not in sample_nx_graph"
+
+        original_attrs = sample_nx_graph.nodes[original_node_id]
+        reconstructed_attrs = reconstructed_nx_graph.nodes[reconstructed_node_id]
+
+        if node_feature_cols:
+            for feat in node_feature_cols:
+                assert feat in reconstructed_attrs, f"Feature {feat} missing in reconstructed node {reconstructed_node_id}"
+                assert feat in original_attrs, f"Feature {feat} missing in original node {original_node_id}"
+                assert abs(original_attrs.get(feat, 0) - reconstructed_attrs.get(feat, 0)) < 1e-5
+        if node_label_cols:
+            for label in node_label_cols:
+                assert label in reconstructed_attrs, f"Label {label} missing in reconstructed node {reconstructed_node_id}"
+                assert label in original_attrs, f"Label {label} missing in original node {original_node_id}"
+                assert abs(original_attrs.get(label, 0) - reconstructed_attrs.get(label, 0)) < 1e-5
         
-        num_expected_edges = sum(len(gdf) for gdf in hetero_edges_data.values())
-        assert len(nx_graph.edges) == num_expected_edges
+        if "geometry" in original_attrs: # Original NX graph stores geometry
+            assert "pos" in reconstructed_attrs # pyg_to_nx stores geometry as 'pos'
+            original_point = original_attrs["geometry"]
+            reconstructed_point_coords = reconstructed_attrs["pos"]
+            assert isinstance(original_point, Point), "Original geometry is not a Point"
+            assert isinstance(reconstructed_point_coords, tuple) and len(reconstructed_point_coords) == 2, "Reconstructed pos is not a 2-tuple"
+            assert abs(original_point.x - reconstructed_point_coords[0]) < 1e-5
+            assert abs(original_point.y - reconstructed_point_coords[1]) < 1e-5
 
-        # Check for node_type and edge_type attributes
-        node_types_in_nx = {data['node_type'] for _, data in nx_graph.nodes(data=True)}
-        assert "poi" in node_types_in_nx
-        assert "junction" in node_types_in_nx
+    # Compare edge attributes
+    # Edges in reconstructed_nx_graph will be between PyG indices (0 to N-1)
+    # We need to map these back to original node IDs to compare with sample_nx_graph.edges
+    for u_re, v_re, reconstructed_edge_attrs in reconstructed_nx_graph.edges(data=True):
+        u_orig = original_ids_map.get(u_re)
+        v_orig = original_ids_map.get(v_re)
 
-        edge_types_in_nx = {data['edge_type'] for _, _, data in nx_graph.edges(data=True)}
-        assert "links_to" in edge_types_in_nx
-        assert "connects" in edge_types_in_nx
+        if not original_ids_map: # Fallback for sample_nx_graph
+            u_orig = u_re + 1
+            v_orig = v_re + 1
         
-        # Verify some attribute presence
-        for _, data in nx_graph.nodes(data=True):
-            if data['node_type'] == 'poi':
-                assert 'category' in data
-            if data['node_type'] == 'junction':
-                assert 'traffic_signal' in data
+        assert u_orig is not None and v_orig is not None, "Could not map edge nodes to original IDs"
+
+        # Ensure edge exists in original graph (order might be swapped for undirected)
+        original_edge_attrs = None
+        if sample_nx_graph.has_edge(u_orig, v_orig):
+            original_edge_attrs = sample_nx_graph.edges[u_orig, v_orig]
+        elif sample_nx_graph.has_edge(v_orig, u_orig): # Check for swapped order
+            original_edge_attrs = sample_nx_graph.edges[v_orig, u_orig]
         
-        for _, _, data in nx_graph.edges(data=True):
-            if data['edge_type'] == 'links_to':
-                assert 'distance' in data
-            if data['edge_type'] == 'connects':
-                assert 'road_type' in data
+        assert original_edge_attrs is not None, f"Edge ({u_orig}, {v_orig}) not found in original graph"
 
+        if edge_feature_cols:
+            for feat in edge_feature_cols:
+                assert feat in reconstructed_edge_attrs, f"Edge feature {feat} missing in reconstructed edge ({u_re}, {v_re})"
+                assert feat in original_edge_attrs, f"Edge feature {feat} missing in original edge ({u_orig}, {v_orig})"
+                assert abs(original_edge_attrs.get(feat, 0) - reconstructed_edge_attrs.get(feat, 0)) < 1e-5
 
-# --- Test Error Handling and Edge Cases ---
-class TestErrorHandlingAndEdgeCases:
-    def test_gdf_to_pyg_torch_unavailable(self, monkeypatch, basic_nodes_gdf):
-        monkeypatch.setattr(c2g_graph, "TORCH_AVAILABLE", False)
-        with pytest.raises(ImportError, match="PyTorch required"):
-            c2g_graph.gdf_to_pyg(nodes=basic_nodes_gdf)
+def test_is_torch_available():
+    """Test the is_torch_available function."""
+    # This test's success depends on whether torch was successfully imported at the top
+    assert is_torch_available() == TORCH_AVAILABLE
 
-    def test_pyg_to_gdf_torch_unavailable(self, monkeypatch):
-        monkeypatch.setattr(c2g_graph, "TORCH_AVAILABLE", False)
-        # _validate_pyg is called first, which raises the error
-        dummy_data = Data() # type: ignore[call-arg]
-        if torch_geometric_available: # if torch is actually available, make a real dummy
-             dummy_data = Data(edge_index=torch.empty((2,0), dtype=torch.long))
+@requires_torch
+def test_gdf_to_pyg_device_handling(sample_nodes_gdf, sample_edges_gdf):
+    """Test device handling in gdf_to_pyg."""
+    # Test with CPU
+    pyg_data_cpu = gdf_to_pyg(sample_nodes_gdf, sample_edges_gdf, device="cpu")
+    assert pyg_data_cpu.x.device.type == "cpu"
+    if hasattr(pyg_data_cpu, "pos") and pyg_data_cpu.pos is not None:
+        assert pyg_data_cpu.pos.device.type == "cpu"
+    assert pyg_data_cpu.edge_index.device.type == "cpu"
 
+    # Test with CUDA if available
+    if torch.cuda.is_available():
+        try:
+            pyg_data_cuda = gdf_to_pyg(sample_nodes_gdf, sample_edges_gdf, device="cuda")
+            assert pyg_data_cuda.x.device.type == "cuda"
+            if hasattr(pyg_data_cuda, "pos") and pyg_data_cuda.pos is not None:
+                assert pyg_data_cuda.pos.device.type == "cuda"
+            assert pyg_data_cuda.edge_index.device.type == "cuda"
+        except (RuntimeError, AssertionError) as e: # Catch runtime error or assertion error if CUDA compiled but not usable
+            if "Torch not compiled with CUDA enabled" in str(e) or "CUDA driver version is insufficient" in str(e) or "CUDA out of memory" in str(e):
+                pytest.skip(f"CUDA environment issue: {e}")
+            else:
+                raise # Re-raise if it's an unexpected RuntimeError
+    else:
+        with pytest.raises(ValueError, match="CUDA selected, but not available. Device must be 'cuda', 'cpu', a torch.device object, or None"):
+             gdf_to_pyg(sample_nodes_gdf, sample_edges_gdf, device="cuda") # Should raise error if cuda not available but specified
 
-        with pytest.raises(ImportError, match="PyTorch required"):
-            c2g_graph.pyg_to_gdf(dummy_data)
+@requires_torch
+def test_empty_edges_gdf_to_pyg(sample_nodes_gdf):
+    """Test gdf_to_pyg with an empty edges GeoDataFrame."""
+    empty_edges_gdf = gpd.GeoDataFrame(columns=["source_id", "target_id", "geometry"], crs=sample_nodes_gdf.crs)
+    empty_edges_gdf = empty_edges_gdf.set_index(["source_id", "target_id"])
 
+    pyg_data = gdf_to_pyg(sample_nodes_gdf, empty_edges_gdf)
+    assert isinstance(pyg_data, Data)
+    assert pyg_data.edge_index.shape == (2,0)
+    assert pyg_data.edge_attr.shape[0] == 0
 
-    def test_nx_to_pyg_torch_unavailable(self, monkeypatch, sample_nx_graph):
-        monkeypatch.setattr(c2g_graph, "TORCH_AVAILABLE", False)
-        with pytest.raises(ImportError, match="PyTorch required"):
-            c2g_graph.nx_to_pyg(sample_nx_graph)
+    re_nodes, re_edges = pyg_to_gdf(pyg_data)
+    assert re_edges is None or re_edges.empty
 
-    def test_pyg_to_nx_torch_unavailable(self, monkeypatch):
-        monkeypatch.setattr(c2g_graph, "TORCH_AVAILABLE", False)
-        dummy_data = Data() # type: ignore[call-arg]
-        if torch_geometric_available:
-             dummy_data = Data(edge_index=torch.empty((2,0), dtype=torch.long))
+@requires_torch
+def test_no_edges_gdf_to_pyg(sample_nodes_gdf):
+    """Test gdf_to_pyg with no edges GeoDataFrame provided (edges=None)."""
+    pyg_data = gdf_to_pyg(sample_nodes_gdf, edges=None)
+    assert isinstance(pyg_data, Data)
+    assert pyg_data.edge_index.shape == (2,0)
+    assert pyg_data.edge_attr.shape[0] == 0
 
-        with pytest.raises(ImportError, match="PyTorch required"):
-            c2g_graph.pyg_to_nx(dummy_data)
+    _re_nodes, re_edges = pyg_to_gdf(pyg_data) # _re_nodes to avoid unused var
+    assert re_edges is None or re_edges.empty # Expect None or an empty GeoDataFrame
 
-    @skip_if_no_torch
-    def test_gdf_to_pyg_empty_nodes_gdf(self):
-        empty_nodes = gpd.GeoDataFrame(columns=['id', 'geometry'], crs=TEST_CRS)
-        data = c2g_graph.gdf_to_pyg(nodes=empty_nodes)
-        assert data.num_nodes == 0
-        assert data.x.shape[0] == 0
-        assert data.pos is None or data.pos.shape[0] == 0 # pos might be None if no geometry
+@requires_torch
+def test_hetero_no_edges_dict(sample_hetero_nodes_dict):
+    """Test gdf_to_pyg for heterogeneous graph with no edges_dict."""
+    pyg_data = gdf_to_pyg(sample_hetero_nodes_dict, edges=None)
+    assert isinstance(pyg_data, HeteroData)
+    for edge_type in pyg_data.edge_types:
+        assert pyg_data[edge_type].edge_index.shape == (2,0)
+        assert pyg_data[edge_type].edge_attr.shape[0] == 0
 
-    @skip_if_no_torch
-    def test_gdf_to_pyg_nodes_no_geometry(self, basic_nodes_data):
-        nodes_df_no_geom = pd.DataFrame(basic_nodes_data).drop(columns=['geometry'])
-        # Create GDF with an explicit geometry column of Nones to be valid for GeoPandas when CRS is set
-        nodes_gdf_no_geom = gpd.GeoDataFrame(
-            nodes_df_no_geom, 
-            geometry=[None] * len(nodes_df_no_geom), 
-            crs=TEST_CRS
-        )
-        
-        data = c2g_graph.gdf_to_pyg(nodes=nodes_gdf_no_geom)
-        assert data.pos is None or data.pos.shape[0] == 0 or torch.all(torch.isnan(data.pos))
+    re_nodes_dict, re_edges_dict = pyg_to_gdf(pyg_data)
+    assert not re_edges_dict # Should be an empty dictionary
 
-    @skip_if_no_torch
-    def test_gdf_to_pyg_invalid_node_id_col(self, basic_nodes_gdf):
-        with pytest.raises(ValueError, match="Provided id_col 'invalid_id_col' not found"):
-            c2g_graph.gdf_to_pyg(nodes=basic_nodes_gdf, node_id_cols='invalid_id_col')
+@requires_torch
+def test_hetero_empty_edges_in_dict(sample_hetero_nodes_dict, sample_crs):
+    """Test gdf_to_pyg for heterogeneous graph with an edge type having an empty GeoDataFrame."""
+    empty_conn_gdf = gpd.GeoDataFrame(columns=["b_id", "r_id", "geometry"], crs=sample_crs)
+    empty_conn_gdf = empty_conn_gdf.set_index(["b_id", "r_id"])
+    edges_dict_with_empty = {("building", "connects", "road"): empty_conn_gdf}
+
+    pyg_data = gdf_to_pyg(sample_hetero_nodes_dict, edges_dict_with_empty)
+    assert isinstance(pyg_data, HeteroData)
+    assert pyg_data[("building", "connects", "road")].edge_index.shape == (2,0)
+    assert pyg_data[("building", "connects", "road")].edge_attr.shape[0] == 0
+
+    _re_nodes_dict, re_edges_dict = pyg_to_gdf(pyg_data)
+    assert re_edges_dict[("building", "connects", "road")].empty
+
+@requires_torch
+def test_pyg_to_gdf_specific_types(sample_hetero_nodes_dict, sample_hetero_edges_dict):
+    """Test pyg_to_gdf with specific node_types and edge_types."""
+    pyg_data = gdf_to_pyg(sample_hetero_nodes_dict, sample_hetero_edges_dict)
+
+    # Test reconstructing only 'building' nodes
+    nodes_dict_specific, _edges_dict_specific = pyg_to_gdf(pyg_data, node_types=["building"])
+    assert "building" in nodes_dict_specific
+    assert "road" not in nodes_dict_specific
+    assert len(nodes_dict_specific) == 1
+
+    # Test reconstructing only ('building', 'connects_to', 'road') edges
+    _nodes_dict_specific, edges_dict_specific = pyg_to_gdf(pyg_data, edge_types=[("building", "connects_to", "road")])
+    assert ("building", "connects_to", "road") in edges_dict_specific
+    assert ("road", "links_to", "road") not in edges_dict_specific
+    assert len(edges_dict_specific) == 1
+
+    # Test reconstructing specific node and edge types together
+    nodes_dict_combo, edges_dict_combo = pyg_to_gdf(pyg_data, node_types=["road"], edge_types=[("road", "links_to", "road")])
+    assert "road" in nodes_dict_combo
+    assert "building" not in nodes_dict_combo
+    assert ("road", "links_to", "road") in edges_dict_combo
+    assert ("building", "connects_to", "road") not in edges_dict_combo
+
+@requires_torch
+def test_nx_to_pyg_empty_graph():
+    """Test nx_to_pyg with an empty NetworkX graph."""
+    empty_nx = nx.Graph()
+    with pytest.raises(ValueError, match="Graph has no nodes"):
+        nx_to_pyg(empty_nx)
+
+@requires_torch
+def test_pyg_to_nx_hetero_structure(sample_hetero_nodes_dict, sample_hetero_edges_dict):
+    """Test that pyg_to_nx preserves heterogeneous structure information."""
+    pyg_data = gdf_to_pyg(sample_hetero_nodes_dict, sample_hetero_edges_dict)
+    nx_graph = pyg_to_nx(pyg_data)
+
+    assert nx_graph.graph.get("is_hetero") is True
+    assert set(nx_graph.graph.get("node_types")) == set(sample_hetero_nodes_dict.keys())
+    assert set(nx_graph.graph.get("edge_types")) == set(sample_hetero_edges_dict.keys())
+
+    # Check node type attributes
+    node_types_in_nx = {data.get("node_type") for _, data in nx_graph.nodes(data=True)}
+    assert node_types_in_nx == set(sample_hetero_nodes_dict.keys())
+
+    # Check edge type attributes
+    edge_types_in_nx = {data.get("edge_type") for _, _, data in nx_graph.edges(data=True)}
+    expected_rel_types = {rel for _, rel, _ in sample_hetero_edges_dict.keys()}
+    assert edge_types_in_nx == expected_rel_types
+

@@ -412,7 +412,7 @@ def _get_device(device: str | torch.device | None = None) -> torch.device:
     ImportError
         If PyTorch is not available
     ValueError
-        If device string is not 'cpu' or 'cuda'
+        If device string is not 'cpu' or 'cuda', or if 'cuda' is selected but not available.
     TypeError
         If device is not a valid type
     """
@@ -425,8 +425,17 @@ def _get_device(device: str | torch.device | None = None) -> torch.device:
         device_lower = device.lower()
         if device_lower not in {"cpu", "cuda"}:
             raise ValueError(DEVICE_ERROR_MSG)
+        if device_lower == "cuda" and not torch.cuda.is_available():
+            # Raise ValueError consistent with the test's expectation
+            msg = f"CUDA selected, but not available. {DEVICE_ERROR_MSG}"
+            raise ValueError(msg)
         return torch.device(device_lower)
     if isinstance(device, torch.device):
+        if device.type == "cuda" and not torch.cuda.is_available():
+            # Also handle cases where a torch.device("cuda") object is passed
+            # when CUDA is not available.
+            msg = f"CUDA selected, but not available. {DEVICE_ERROR_MSG}"
+            raise ValueError(msg)
         return device
     raise TypeError(DEVICE_ERROR_MSG)
 
