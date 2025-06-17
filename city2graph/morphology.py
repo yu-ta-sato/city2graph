@@ -1066,8 +1066,7 @@ def _set_node_index(gdf: gpd.GeoDataFrame, col: str) -> gpd.GeoDataFrame:
         # If `col` is the intended index name, it can be assigned after.
         return gdf.set_index(pd.Index([])) # Safest for empty
 
-    return gdf.set_index(col, drop=False) # Key change: drop=False
-
+    return gdf.set_index(col, drop=True)
 
 def _set_edge_index(
     gdf: gpd.GeoDataFrame,
