@@ -435,8 +435,9 @@ def filter_graph_by_distance(graph: gpd.GeoDataFrame | nx.Graph,
         graph = _validate_nx(graph)
         original_crs = graph.graph.get("crs")
     else:
-        # gdf_to_nx will validate the GeoDataFrame internally
-        graph = gdf_to_nx(edges=graph)
+        # Convert segments to graph representation, which creates nodes and a MultiIndex on edges
+        nodes, edges = segments_to_graph(graph)
+        graph = gdf_to_nx(nodes=nodes, edges=edges)
         original_crs = graph.graph["crs"]
 
     # Extract node positions or return empty result if not available
@@ -774,7 +775,7 @@ def segments_to_graph(segments_gdf: gpd.GeoDataFrame,
     edges = segments_gdf.copy()
     edges.index = pd.MultiIndex.from_arrays(
         [from_node_ids, to_node_ids],
-        names=["from_node_id", "to_node_id"]
+        names=["from_node_id", "to_node_id"],
     )
 
     # Convert to NetworkX graph if requested
@@ -787,6 +788,25 @@ def segments_to_graph(segments_gdf: gpd.GeoDataFrame,
 # ============================================================================
 # GRAPH VALIDATION HELPER FUNCTIONS
 # ============================================================================
+
+
+def _validate_gdf_crs(
+    nodes: gpd.GeoDataFrame, edges: gpd.GeoDataFrame, strict: bool
+) -> None:
+    """Validate CRS consistency between nodes and edges."""
+    if not nodes.empty and not edges.empty:
+        if nodes.crs != edges.crs:
+            msg = f"CRS mismatch: nodes CRS ({nodes.crs}) != edges CRS ({edges.crs})"
+            if strict:
+                raise ValueError(msg)
+            logger.warning("Validation: %s", msg)
+
+        # Check for missing CRS only if both have data
+        if nodes.crs is None or edges.crs is None:
+            msg = "Both nodes and edges must have a defined CRS"
+            if strict:
+                raise ValueError(msg)
+            logger.warning("Validation: %s", msg)
 
 
 def _validate_gdf(nodes: gpd.GeoDataFrame | None,
@@ -844,36 +864,25 @@ def _validate_gdf(nodes: gpd.GeoDataFrame | None,
     # Validate and clean nodes GeoDataFrame
     if nodes is not None:
         nodes = _validate_nodes_gdf(nodes, strict=strict, allow_empty=allow_empty)
-        #if not isinstance(nodes.index, pd.Index) or isinstance(nodes.index, pd.MultiIndex):
-        #    msg = "Nodes GeoDataFrame must have a simple pandas.Index, not a MultiIndex."
-        #    if strict:
-        #        raise ValueError(msg)
-        #    logger.warning("Validation: %s", msg)
+        if not isinstance(nodes.index, pd.Index) or isinstance(nodes.index, pd.MultiIndex):
+            msg = "Nodes GeoDataFrame must have a simple pandas.Index, not a MultiIndex."
+            if strict:
+                raise ValueError(msg)
+            logger.warning("Validation: %s", msg)
 
 
     # Validate and clean edges GeoDataFrame
     if edges is not None:
         edges = _validate_edges_gdf(edges, strict=strict, allow_empty=allow_empty)
-        #if not isinstance(edges.index, pd.MultiIndex):
-        #    msg = "Edges GeoDataFrame must have a pandas.MultiIndex."
-        #    if strict:
-        #        raise ValueError(msg)
-        #    logger.warning("Validation: %s", msg)
+        if not isinstance(edges.index, pd.MultiIndex):
+            msg = "Edges GeoDataFrame must have a pandas.MultiIndex."
+            if strict:
+                raise ValueError(msg)
+            logger.warning("Validation: %s", msg)
 
     # CRS validation
-    if check_crs and nodes is not None and edges is not None and not nodes.empty and not edges.empty:
-        if nodes.crs != edges.crs:
-            msg = f"CRS mismatch: nodes CRS ({nodes.crs}) != edges CRS ({edges.crs})"
-            if strict:
-                raise ValueError(msg)
-            logger.warning("Validation: %s", msg)
-
-        # Check for missing CRS only if both have data
-        if nodes.crs is None or edges.crs is None:
-            msg = "Both nodes and edges must have a defined CRS"
-            if strict:
-                raise ValueError(msg)
-            logger.warning("Validation: %s", msg)
+    if check_crs and nodes is not None and edges is not None:
+        _validate_gdf_crs(nodes, edges, strict)
 
     return nodes, edges
 

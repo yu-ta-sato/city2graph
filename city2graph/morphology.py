@@ -19,6 +19,7 @@ from .utils import create_tessellation
 from .utils import dual_graph
 from .utils import filter_graph_by_distance
 from .utils import gdf_to_nx
+from .utils import nx_to_gdf
 from .utils import segments_to_graph
 
 # Define the public API for this module
@@ -151,13 +152,25 @@ def morphological_graph(
     # A copy is made to avoid SettingWithCopyWarning if segments_gdf might be a slice,
     # especially before adding/modifying a column.
     segments_gdf = segments_gdf.copy()
-    segments_gdf[_final_public_id_col] = segments_gdf.index # Use original index as public ID
+    segments_gdf[_final_public_id_col] = segments_gdf.index  # Use original index as public ID
+
+    # Convert segments to a graph representation for efficient filtering.
+    if not segments_gdf.empty:
+        # segments_to_graph returns nodes and edges with a MultiIndex.
+        # gdf_to_nx converts these to a NetworkX graph.
+        nodes_unfiltered, edges_unfiltered = segments_to_graph(segments_gdf)
+        graph_for_filtering = gdf_to_nx(nodes=nodes_unfiltered, edges=edges_unfiltered)
+    else:
+        # Create empty structures to avoid errors downstream
+        nodes_unfiltered, edges_unfiltered = segments_to_graph(segments_gdf)
+        graph_for_filtering = nx.Graph()
 
     # Filter segments by network distance for the final graph if center_point and distance are provided
     if center_point is not None and distance is not None and not segments_gdf.empty:
-        segs = filter_graph_by_distance(segments_gdf, center_point, distance) # Filtered segments
+        segs_graph = filter_graph_by_distance(graph_for_filtering, center_point, distance)
+        segs = nx_to_gdf(segs_graph, nodes=False, edges=True)
     else:
-        segs = segments_gdf # Use all segments if no filtering criteria
+        segs = edges_unfiltered
 
     # Create a buffered version of the graph for tessellation creation (segs_buffer)
     # This segs_buffer is used for _prepare_barriers -> create_tessellation
@@ -166,16 +179,19 @@ def morphological_graph(
         if not math.isinf(clipping_buffer):
             # Finite clipping_buffer: use distance + clipping_buffer for segs_buffer radius
             segs_buffer_radius = distance + clipping_buffer
-
-            # Segments for tessellation context, filtered by larger radius
-            segs_buffer = filter_graph_by_distance(segments_gdf, center_point, segs_buffer_radius)
-
-        else: # clipping_buffer is math.inf
+            segs_buffer_graph = filter_graph_by_distance(
+                graph_for_filtering, center_point, segs_buffer_radius,
+            )
+            segs_buffer = nx_to_gdf(segs_buffer_graph, nodes=False, edges=True)
+        else:  # clipping_buffer is math.inf
             # Fallback to 'distance' as radius for segs_buffer
-            segs_buffer = filter_graph_by_distance(segments_gdf, center_point, distance) # Segments for tessellation context, filtered by distance
+            segs_buffer_graph = filter_graph_by_distance(
+                graph_for_filtering, center_point, distance,
+            )
+            segs_buffer = nx_to_gdf(segs_buffer_graph, nodes=False, edges=True)
     else:
         # No center_point or no distance, so segs_buffer is not filtered by distance
-        segs_buffer = segments_gdf # Use all segments for tessellation context
+        segs_buffer = edges_unfiltered
 
     # Prepare barriers from the buffered segments (segs_buffer) for tessellation
     barriers = _prepare_barriers(segs_buffer, primary_barrier_col)
@@ -257,7 +273,7 @@ def morphological_graph(
             priv_priv, "from_private_id", "to_private_id", # Private-private edges
         ),
         ("public", "connected_to", "public"): _set_edge_index(
-            pub_pub, "from_public_id", "to_public_id", # Public-public edges
+            pub_pub, "from_private_id", "to_private_id", # Private-private edges
         ),
         ("private", "faced_to", "public"): _set_edge_index(
             priv_pub, "private_id", "public_id", # Private-public edges
@@ -503,22 +519,20 @@ def public_to_public_graph(
     This function identifies topological connections between public space geometries
     (typically street segments) using the dual graph approach to find segments
     that share endpoints or connection points.
-    Input `public_gdf` is expected to have a 'public_id' column.
+    The input `public_gdf` must have a 'public_id' column that will be used to
+    identify segments.
 
     Parameters
     ----------
     public_gdf : geopandas.GeoDataFrame
         GeoDataFrame containing public space geometries (typically LineString).
-        Expected to have a 'public_id' column.
-    tolerance : float, default=1e-8
-        Distance tolerance for detecting endpoint connections between segments.
-        (Note: tolerance is not used in current `dual_graph` call)
+        Must have a 'public_id' column.
 
     Returns
     -------
     geopandas.GeoDataFrame
         GeoDataFrame containing edge geometries between connected public segments.
-        Columns include from_public_id, to_public_id, and geometry.
+        The GeoDataFrame will have a MultiIndex ('from_public_id', 'to_public_id').
 
     Raises
     ------
@@ -533,38 +547,33 @@ def public_to_public_graph(
     The function uses the dual graph approach where each LineString becomes a node,
     and edges represent topological connections between segments. Edge geometries
     are created as LineStrings connecting the centroids of connected segments.
-    Input public_gdf is expected to have a 'public_id' column.
     """
     # Input validation
     _validate_single_gdf_input(public_gdf, "public_gdf", {"LineString"})
 
-    # Handle empty or insufficient data: return empty edges GeoDataFrame
+    # Handle empty or insufficient data: return empty edges GeoDataFrame with MultiIndex
     if public_gdf.empty or len(public_gdf) < 2:
-        return _create_empty_edges_gdf(public_gdf.crs, "from_public_id", "to_public_id")
+        empty_gdf = _create_empty_edges_gdf(public_gdf.crs, "from_public_id", "to_public_id")
+        return empty_gdf.set_index(["from_public_id", "to_public_id"])
 
-    # Create dual graph (nodes are segments, edges are connections) using city2graph.dual_graph
-    # Assumes 'public_id' (from original index) is used by dual_graph.
+    # Ensure 'public_id' column exists
+    if "public_id" not in public_gdf.columns:
+        msg = "Input `public_gdf` must have a 'public_id' column."
+        raise ValueError(msg)
+
+    # Use 'public_id' as the index for dual_graph processing
+    public_gdf_indexed = public_gdf.set_index("public_id")
+
+    # Create dual graph (nodes are segments, edges are connections)
     _, edges_gdf_dual = dual_graph(
-        public_gdf, keep_original_geom=True,
-    ) # edges_gdf_dual is the key output here
-
-    # Extract 'from' and 'to' public IDs from the MultiIndex of edges_gdf_dual
-    u_ids = edges_gdf_dual.index.get_level_values(0).to_series(
-        index=edges_gdf_dual.index, name="from_public_id",
-    )
-    v_ids = edges_gdf_dual.index.get_level_values(1).to_series(
-        index=edges_gdf_dual.index, name="to_public_id",
+        public_gdf_indexed, keep_original_geom=True,
     )
 
-    # Create a new DataFrame for edges with 'from_public_id', 'to_public_id', and geometry
-    edges_df = pd.DataFrame({
-        "from_public_id": u_ids.to_numpy(),
-        "to_public_id": v_ids.to_numpy(),
-        "geometry": edges_gdf_dual.geometry.to_numpy(), # Geometries from dual_graph edges
-    })
+    # Rename the MultiIndex levels for clarity and consistency
+    if isinstance(edges_gdf_dual.index, pd.MultiIndex):
+        edges_gdf_dual.index.names = ["from_public_id", "to_public_id"]
 
-    # Convert the DataFrame to a GeoDataFrame, preserving CRS
-    return gpd.GeoDataFrame(edges_df, geometry="geometry", crs=public_gdf.crs)
+    return edges_gdf_dual
 
 
 # ============================================================================
