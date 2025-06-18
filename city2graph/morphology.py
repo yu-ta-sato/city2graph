@@ -273,7 +273,7 @@ def morphological_graph(
             priv_priv, "from_private_id", "to_private_id", # Private-private edges
         ),
         ("public", "connected_to", "public"): _set_edge_index(
-            pub_pub, "from_private_id", "to_private_id", # Private-private edges
+            pub_pub, "from_public_id", "to_public_id", # Public-public edges
         ),
         ("private", "faced_to", "public"): _set_edge_index(
             priv_pub, "private_id", "public_id", # Private-public edges
@@ -532,7 +532,7 @@ def public_to_public_graph(
     -------
     geopandas.GeoDataFrame
         GeoDataFrame containing edge geometries between connected public segments.
-        The GeoDataFrame will have a MultiIndex ('from_public_id', 'to_public_id').
+        The GeoDataFrame will have 'from_public_id' and 'to_public_id' columns.
 
     Raises
     ------
@@ -551,10 +551,9 @@ def public_to_public_graph(
     # Input validation
     _validate_single_gdf_input(public_gdf, "public_gdf", {"LineString"})
 
-    # Handle empty or insufficient data: return empty edges GeoDataFrame with MultiIndex
+    # Handle empty or insufficient data: return empty edges GeoDataFrame
     if public_gdf.empty or len(public_gdf) < 2:
-        empty_gdf = _create_empty_edges_gdf(public_gdf.crs, "from_public_id", "to_public_id")
-        return empty_gdf.set_index(["from_public_id", "to_public_id"])
+        return _create_empty_edges_gdf(public_gdf.crs, "from_public_id", "to_public_id")
 
     # Ensure 'public_id' column exists
     if "public_id" not in public_gdf.columns:
@@ -573,11 +572,14 @@ def public_to_public_graph(
     if isinstance(edges_gdf_dual.index, pd.MultiIndex):
         edges_gdf_dual.index.names = ["from_public_id", "to_public_id"]
 
+    if not edges_gdf_dual.empty:
+        return edges_gdf_dual.reset_index()
+
     return edges_gdf_dual
 
 
 # ============================================================================
-# HELPER FUNCTIONS FOR VALIDATION AND DATA PROCESSING
+# HELPER FUNCTIONS FOR VALIDATION AND DATA PROCESSIçNG
 # ============================================================================
 
 

@@ -262,7 +262,7 @@ def pyg_to_gdf(
     # Data → pandas
     # ------------------------------------------------------------------
     nodes_gdf = _reconstruct_node_gdf(data, None, metadata)
-    edges_gdf = _reconstruct_edge_gdf(data, None, metadata) if _has_edges(data, metadata) else None
+    edges_gdf = _reconstruct_edge_gdf(data, None, metadata)
     return nodes_gdf, edges_gdf
 
 
@@ -626,62 +626,16 @@ def _create_edge_indices(
     source_ids, target_ids = _extract_edge_ids(edge_gdf)
 
     # Convert types if needed and validate
-    source_ids = _attempt_type_conversion(source_ids, source_mapping, "Source")
-    target_ids = _attempt_type_conversion(target_ids, target_mapping, "Target")
+    source_ids = pd.Series(source_ids) if isinstance(source_ids, pd.Index) else source_ids
+    target_ids = pd.Series(target_ids) if isinstance(target_ids, pd.Index) else target_ids
 
     return _map_edge_ids_to_indices(source_ids, target_ids, source_mapping, target_mapping)
 
 
-def _extract_edge_ids(
-    edge_gdf: gpd.GeoDataFrame,
-) -> tuple[pd.Series | None, pd.Series | None]:
-    """Extract source and target IDs from edge data, assuming MultiIndex."""
-    if isinstance(edge_gdf.index, pd.MultiIndex) and edge_gdf.index.nlevels == 2:
-        return _handle_multiindex_edges(edge_gdf)
-    logger.warning(
-        "Edge GeoDataFrame does not have a MultiIndex with 2 levels. "
-        "Cannot determine source/target nodes. Edges will be ignored."
-    )
-    return None, None
-
-
-def _handle_multiindex_edges(edge_gdf: gpd.GeoDataFrame) -> tuple[pd.Series, pd.Series]:
+def _extract_edge_ids(edge_gdf: gpd.GeoDataFrame) -> tuple[pd.Series, pd.Series]:
     """Extract source and target IDs from MultiIndex DataFrame."""
     return (edge_gdf.index.get_level_values(0),  # First level = source
             edge_gdf.index.get_level_values(1))   # Second level = target
-
-
-def _attempt_type_conversion(
-    ids: pd.Series | pd.Index,
-    mapping: dict[str | int, int],
-    id_type: str) -> pd.Series:
-    """Attempt to convert IDs to match mapping key types."""
-    if len(ids) == 0 or not mapping:
-        return pd.Series(ids) if isinstance(ids, pd.Index) else ids
-
-    # Convert Index to Series if needed
-    if isinstance(ids, pd.Index):
-        ids = pd.Series(ids)
-
-    # Check if any IDs match the mapping keys
-    if ids.isin(mapping.keys()).sum() > 0:
-        return ids
-
-    # Try type conversion
-    sample_id = ids.iloc[0] if len(ids) > 0 else None
-    sample_key = next(iter(mapping.keys())) if mapping else None
-
-    if (sample_id is not None and sample_key is not None and
-        not isinstance(sample_id, type(sample_key))):
-        try:
-            if isinstance(sample_key, str):
-                return ids.astype(str)
-            if isinstance(sample_key, int):
-                return ids.astype(int)
-        except (ValueError, TypeError):
-            logger.debug("%s ID type conversion failed", id_type)
-
-    return ids
 
 
 def _map_edge_ids_to_indices(
@@ -954,25 +908,8 @@ def _process_hetero_edges(
     device = _get_device(device)
 
     for edge_type, edge_gdf in edges_dict.items():
-        if not isinstance(edge_type, tuple) or len(edge_type) != 3:
-            continue
-
+        # Extract source, relation, and destination types from edge_type tuple
         src_type, rel_type, dst_type = edge_type
-
-        if src_type not in node_mappings or dst_type not in node_mappings:
-            logger.warning(
-                f"Source type '{src_type}' or destination type '{dst_type}' "
-                f"for edge type {edge_type} not found in node_mappings. Skipping this edge type.",
-            )
-            continue
-
-        # Check if edge_gdf is None before attempting to access its properties
-        if edge_gdf is None:
-            logger.warning(f"Edge GeoDataFrame for edge type {edge_type} is None. Skipping.")
-            data[edge_type].edge_index = torch.zeros((2, 0), dtype=torch.long, device=device)
-            data[edge_type].edge_attr = torch.empty((0, 0), dtype=dtype or torch.float, device=device)
-            continue
-
 
         # Get the mapping dictionaries (not the full metadata)
         src_mapping = node_mappings[src_type]["mapping"]
@@ -1089,11 +1026,6 @@ def _validate_pyg(data: Data | HeteroData) -> dict[str, Any]:
                 f"{edge_type}_has_edge_attr": has_edge_attr,
             })
     else:
-        # Validate homogeneous structure
-        if not hasattr(data, "edge_index"):
-            msg = "PyG object must have edge_index attribute"
-            raise ValueError(msg)
-
         has_x = hasattr(data, "x") and data.x is not None
         has_pos = hasattr(data, "pos") and data.pos is not None
         has_y = hasattr(data, "y") and data.y is not None
@@ -1111,14 +1043,6 @@ def _validate_pyg(data: Data | HeteroData) -> dict[str, Any]:
     return metadata
 
 
-def _has_edges(_data: Data | HeteroData, metadata: dict[str, Any]) -> bool:
-    """Check if data has edges using metadata."""
-    if metadata["is_hetero"]:
-        return any(metadata.get(f"{edge_type}_has_edge_index", False)
-                  for edge_type in metadata["edge_types"])
-    return metadata["has_edge_index"]
-
-
 # ============================================================================
 # GRAPH RECONSTRUCTION FUNCTIONS
 # ============================================================================
@@ -1132,13 +1056,6 @@ def _extract_tensor_data(
 
     features_array = tensor.detach().cpu().numpy()
 
-    if column_names is None:
-        num_features = features_array.shape[1] if len(features_array.shape) > 1 else 1
-        column_names = [f"feature_{i}" for i in range(num_features)]
-
-    if len(features_array.shape) == 1:
-        return {column_names[0]: features_array}
-
     num_cols = min(len(column_names), features_array.shape[1])
     return {column_names[i]: features_array[:, i] for i in range(num_cols)}
 
@@ -1146,60 +1063,25 @@ def _extract_tensor_data(
 def _get_node_data_info(data: Data | HeteroData, node_type: str | None, metadata: dict[str, Any]) -> tuple[Data, int]:
     """Get node data and number of nodes."""
     node_data = data[node_type] if metadata["is_hetero"] and node_type else data
-
-    # Determine number of nodes
-    if hasattr(node_data, "num_nodes") and node_data.num_nodes is not None:
-        return node_data, int(node_data.num_nodes)
-    if hasattr(node_data, "x") and node_data.x is not None:
-        return node_data, node_data.x.size(0)
-    if hasattr(node_data, "pos") and node_data.pos is not None:
-        return node_data, node_data.pos.size(0)
-
-    return node_data, 0
+    return node_data, int(node_data.num_nodes)
 
 
 def _get_mapping_info(data: Data | HeteroData, node_type: str | None, metadata: dict[str, Any]) -> dict | None:
     """Get mapping info for the given node type."""
-    if not metadata["has_node_mappings"]:
-        return None
-
     mapping_key = "default" if not metadata["is_hetero"] or not node_type else node_type
     return data._node_mappings.get(mapping_key)
 
 
-def _extract_node_ids(mapping_info: dict, num_nodes: int) -> dict[str, list]:
-    """Extract node IDs from mapping info."""
-    if not isinstance(mapping_info, dict):
-        return {}
-
-    id_col = mapping_info.get("id_col", "node_id")
-    original_ids = mapping_info.get("original_ids", list(range(num_nodes)))
-
-    if id_col and id_col != "index":
-        return {id_col: original_ids[:num_nodes]}
-    return {}
-
-
 def _extract_index_values(mapping_info: dict, num_nodes: int) -> list | None:
     """Extract index values from mapping info."""
-    if (isinstance(mapping_info, dict) and
-        mapping_info.get("id_col") == "index"):
-        original_ids = mapping_info.get("original_ids", list(range(num_nodes)))
-        return original_ids[:num_nodes]
-    return None
+    original_ids = mapping_info.get("original_ids", list(range(num_nodes)))
+    return original_ids[:num_nodes]
 
 
-def _create_geometry_from_positions(node_data: Data, metadata: dict[str, Any], node_type: str | None) -> gpd.array.GeometryArray | None:
+def _create_geometry_from_positions(node_data: Data) -> gpd.array.GeometryArray | None:
     """Create geometry from node positions."""
-    pos_key = f"{node_type}_has_pos" if metadata["is_hetero"] and node_type else "has_pos"
-
-    if not metadata.get(pos_key, False):
-        return None
-
     pos_array = node_data.pos.detach().cpu().numpy()
-    if len(pos_array.shape) == 2 and pos_array.shape[1] >= 2:
-        return gpd.points_from_xy(pos_array[:, 0], pos_array[:, 1])
-    return None
+    return gpd.points_from_xy(pos_array[:, 0], pos_array[:, 1])
 
 
 def _extract_node_features_and_labels(
@@ -1237,17 +1119,16 @@ def _set_gdf_index_and_crs(
     # Set index names
     if metadata["has_node_index_names"]:
         index_names = None
+        # Get index names based on heterogeneity and node type
         if metadata["is_hetero"] and node_type and node_type in data._node_index_names:
             index_names = data._node_index_names[node_type]
         elif not metadata["is_hetero"]:
             index_names = data._node_index_names
 
+        # Set index name if available
         if (index_names and hasattr(gdf.index, "names") and
             isinstance(index_names, list) and len(index_names) > 0):
-            if len(index_names) == 1 and index_names[0] is not None:
                 gdf.index.name = index_names[0]
-            elif len(index_names) > 1:
-                gdf.index.names = index_names
 
     # Set CRS
     if metadata["has_crs"]:
@@ -1258,25 +1139,19 @@ def _reconstruct_node_gdf(
     data: Data | HeteroData, node_type: str | None = None, metadata: dict[str, Any] | None = None,
 ) -> gpd.GeoDataFrame:
     """Reconstruct node GeoDataFrame from PyTorch Geometric data."""
-    if metadata is None:
-        metadata = _validate_pyg(data)
-
     node_data, num_nodes = _get_node_data_info(data, node_type, metadata)
     mapping_info = _get_mapping_info(data, node_type, metadata)
 
     # Extract node IDs and features/labels
-    gdf_data = _extract_node_ids(mapping_info, num_nodes) if mapping_info else {}
+    gdf_data = {}
     features_labels = _extract_node_features_and_labels(data, node_data, node_type, metadata)
     gdf_data.update(features_labels)
 
     # Create geometry and index
-    geometry = _create_geometry_from_positions(node_data, metadata, node_type)
+    geometry = _create_geometry_from_positions(node_data)
     index_values = _extract_index_values(mapping_info, num_nodes) if mapping_info else None
 
-    # Fallback data if empty
-    if not gdf_data and num_nodes > 0 and index_values is None:
-        gdf_data = {"node_id": list(range(num_nodes))}
-
+    # Create GeoDataFrame
     gdf = gpd.GeoDataFrame(gdf_data, geometry=geometry, index=index_values)
     _set_gdf_index_and_crs(gdf, data, node_type, metadata)
 
@@ -1290,9 +1165,6 @@ def _reconstruct_edge_index(
     edge_data_dict: dict[str, list | np.ndarray],
 ) -> pd.Index | pd.MultiIndex | None:
     """Reconstruct edge index from stored values."""
-    if not hasattr(data, "_edge_index_values"):
-        return None
-
     stored_values = None
     if is_hetero and edge_type and edge_type in data._edge_index_values:
         stored_values = data._edge_index_values[edge_type]
@@ -1302,25 +1174,12 @@ def _reconstruct_edge_index(
     if not stored_values:
         return None
 
-    if edge_data_dict:
-        num_rows = len(next(iter(edge_data_dict.values())))
-    elif isinstance(stored_values, list) and stored_values:
-        num_rows = len(stored_values[0])
-    else:
-        num_rows = 0
+    # Determine number of rows based on edge data or stored values
+    num_rows = len(next(iter(edge_data_dict.values()))) if edge_data_dict else len(stored_values[0])
 
-    if isinstance(stored_values, list) and len(stored_values) > 0:
-        if isinstance(stored_values[0], list):
-            # MultiIndex case: stored_values is a list of lists for each level
-            if len(stored_values) > 1:
-                arrays = [stored_values[i][:num_rows] for i in range(len(stored_values))]
-                return pd.MultiIndex.from_arrays(arrays)
-            # Single level but stored as list of lists
-            return stored_values[0][:num_rows]
-        # Regular Index case
-        return stored_values[:num_rows]
-
-    return None
+    # Handle MultiIndex case
+    arrays = [stored_values[i][:num_rows] for i in range(len(stored_values))]
+    return pd.MultiIndex.from_arrays(arrays)
 
 
 def _extract_edge_features(
@@ -1331,12 +1190,8 @@ def _extract_edge_features(
     if hasattr(edge_data, "edge_attr") and edge_data.edge_attr is not None:
         feature_cols = getattr(data, "_edge_feature_cols", {})
         if is_hetero and edge_type:
-            # For hetero edges, try to get relation type from edge tuple
-            if isinstance(edge_type, tuple) and len(edge_type) == 3:
                 rel_type = edge_type[1]
                 cols = feature_cols.get(rel_type)
-            else:
-                cols = None
         else:
             cols = feature_cols
         features_dict = _extract_tensor_data(edge_data.edge_attr, cols)
@@ -1348,62 +1203,47 @@ def _create_edge_geometries(
     edge_data: Data, edge_type: str | tuple | None, is_hetero: bool, data: Data | HeteroData,
 ) -> gpd.array.GeometryArray | None:
     """Create edge geometries from edge indices and node positions."""
-    if not (hasattr(edge_data, "edge_index") and edge_data.edge_index is not None):
-        return None
-
+    # Get edge index array
     edge_index_array = edge_data.edge_index.detach().cpu().numpy()
-    if edge_index_array.shape[0] != 2:
-        return None
 
+    # Set default positions as None
     src_pos = dst_pos = None
 
+    # If hetero and specific edge type, get source and destination positions
     if is_hetero and isinstance(edge_type, tuple) and len(edge_type) == 3:
         src_type, _, dst_type = edge_type
         if hasattr(data[src_type], "pos") and data[src_type].pos is not None:
             src_pos = data[src_type].pos.detach().cpu().numpy()
         if hasattr(data[dst_type], "pos") and data[dst_type].pos is not None:
             dst_pos = data[dst_type].pos.detach().cpu().numpy()
+
+    # If not hetero or no specific edge type, use default positions
     elif hasattr(data, "pos") and data.pos is not None:
         pos = data.pos.detach().cpu().numpy()
         src_pos = dst_pos = pos
 
-    if src_pos is not None and dst_pos is not None:
-        geometries = _create_linestring_geometries(edge_index_array, src_pos, dst_pos)
-        return gpd.array.from_shapely(geometries)
-
-    return None
+    geometries = _create_linestring_geometries(edge_index_array, src_pos, dst_pos)
+    return gpd.array.from_shapely(geometries)
 
 
 def _set_edge_index_names(
     gdf: gpd.GeoDataFrame, data: Data | HeteroData, edge_type: str | tuple | None, is_hetero: bool,
 ) -> None:
     """Set index names on edge GeoDataFrame."""
-    if not hasattr(data, "_edge_index_names"):
-        return
-
     index_names = None
     if is_hetero and edge_type and edge_type in data._edge_index_names:
         index_names = data._edge_index_names[edge_type]
     elif not is_hetero and data._edge_index_names:
         index_names = data._edge_index_names
 
-    if index_names and hasattr(gdf.index, "names") and isinstance(index_names, list) and len(index_names) > 0:
-        if len(index_names) == 1 and index_names[0] is not None:
-            gdf.index.name = index_names[0]
-        elif len(index_names) > 1 and isinstance(gdf.index, pd.MultiIndex):
-            gdf.index.names = index_names
-        elif len(index_names) > 1:
-            # For regular Index with multiple stored names, just use the first one
-            gdf.index.name = index_names[0]
-
+    if (hasattr(gdf.index, "names") and isinstance(index_names, list) and
+        len(index_names) > 1 and isinstance(gdf.index, pd.MultiIndex)):
+        gdf.index.names = index_names
 
 def _reconstruct_edge_gdf(
     data: Data | HeteroData, edge_type: str | tuple[str, str, str] | None = None, metadata: dict[str, Any] | None = None,
 ) -> gpd.GeoDataFrame:
     """Reconstruct edge GeoDataFrame from PyTorch Geometric data."""
-    if metadata is None:
-        metadata = _validate_pyg(data)
-
     is_hetero = metadata["is_hetero"]
 
     edge_data = data[edge_type] if is_hetero and edge_type else data
@@ -1554,13 +1394,7 @@ def _add_homo_nodes_to_graph(graph: nx.Graph, data: Data) -> None:
     node_label_cols = getattr(data, "_node_label_cols", None)
 
     # Determine number of nodes
-    num_nodes = 0
-    if hasattr(data, "x") and data.x is not None:
-        num_nodes = data.x.size(0)
-    elif hasattr(data, "pos") and data.pos is not None:
-        num_nodes = data.pos.size(0)
-    elif hasattr(data, "y") and data.y is not None:
-        num_nodes = data.y.size(0)
+    num_nodes = data.x.size(0)
 
     # Add nodes with preserved attribute names using comprehension
     [graph.add_node(i, **{

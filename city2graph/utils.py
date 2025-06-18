@@ -790,25 +790,6 @@ def segments_to_graph(segments_gdf: gpd.GeoDataFrame,
 # ============================================================================
 
 
-def _validate_gdf_crs(
-    nodes: gpd.GeoDataFrame, edges: gpd.GeoDataFrame, strict: bool
-) -> None:
-    """Validate CRS consistency between nodes and edges."""
-    if not nodes.empty and not edges.empty:
-        if nodes.crs != edges.crs:
-            msg = f"CRS mismatch: nodes CRS ({nodes.crs}) != edges CRS ({edges.crs})"
-            if strict:
-                raise ValueError(msg)
-            logger.warning("Validation: %s", msg)
-
-        # Check for missing CRS only if both have data
-        if nodes.crs is None or edges.crs is None:
-            msg = "Both nodes and edges must have a defined CRS"
-            if strict:
-                raise ValueError(msg)
-            logger.warning("Validation: %s", msg)
-
-
 def _validate_gdf(nodes: gpd.GeoDataFrame | None,
                   edges: gpd.GeoDataFrame | None,
                   strict: bool = True,
@@ -863,22 +844,22 @@ def _validate_gdf(nodes: gpd.GeoDataFrame | None,
 
     # Validate and clean nodes GeoDataFrame
     if nodes is not None:
-        nodes = _validate_nodes_gdf(nodes, strict=strict, allow_empty=allow_empty)
         if not isinstance(nodes.index, pd.Index) or isinstance(nodes.index, pd.MultiIndex):
             msg = "Nodes GeoDataFrame must have a simple pandas.Index, not a MultiIndex."
             if strict:
                 raise ValueError(msg)
             logger.warning("Validation: %s", msg)
+        nodes = _validate_nodes_gdf(nodes, strict=strict, allow_empty=allow_empty)
 
 
     # Validate and clean edges GeoDataFrame
     if edges is not None:
-        edges = _validate_edges_gdf(edges, strict=strict, allow_empty=allow_empty)
         if not isinstance(edges.index, pd.MultiIndex):
             msg = "Edges GeoDataFrame must have a pandas.MultiIndex."
             if strict:
                 raise ValueError(msg)
             logger.warning("Validation: %s", msg)
+        edges = _validate_edges_gdf(edges, strict=strict, allow_empty=allow_empty)
 
     # CRS validation
     if check_crs and nodes is not None and edges is not None:
@@ -901,13 +882,6 @@ def _validate_nodes_gdf(nodes: gpd.GeoDataFrame,
 
     original_count = len(nodes)
 
-    # Check for geographic CRS (disallowed for most operations)
-    if hasattr(nodes, "crs") and nodes.crs and str(nodes.crs) == "EPSG:4326":
-        msg = "Nodes are in geographic CRS (EPSG:4326). Consider reprojecting to a projected CRS."
-        if strict:
-            raise ValueError(msg)
-        logger.warning("Validation: %s", msg)
-
     # Create composite mask for all invalid conditions
     null_mask = nodes.geometry.isna()
     invalid_mask = ~nodes.geometry.is_valid
@@ -921,14 +895,8 @@ def _validate_nodes_gdf(nodes: gpd.GeoDataFrame,
         # Fallback: assume all centroids are valid initially
         centroid_mask = pd.Series(data=False, index=nodes.index)
 
-    # Check for valid geometry types for nodes (Point, Polygon, MultiPolygon)
-    valid_node_types = nodes.geometry.apply(
-        lambda g: isinstance(g, (Point, shapely.geometry.Polygon, shapely.geometry.MultiPolygon))
-        if g is not None else False,
-    )
-
     # Combine all masks - keep only valid geometries
-    valid_mask = ~(null_mask | invalid_mask | empty_mask | centroid_mask) & valid_node_types
+    valid_mask = ~(null_mask | invalid_mask | empty_mask | centroid_mask)
     nodes_clean = nodes[valid_mask]
 
     # Log removal statistics
@@ -940,11 +908,6 @@ def _validate_nodes_gdf(nodes: gpd.GeoDataFrame,
         logger.warning("Validation: Removing %d nodes with empty geometries", empty_mask.sum())
     if centroid_mask.any():
         logger.warning("Validation: Removing %d nodes with invalid centroids", centroid_mask.sum())
-    if not valid_node_types.all():
-        logger.warning(
-            "Validation: Removing %d nodes with invalid geometry types "
-            "(not Point, Polygon, or MultiPolygon)", (~valid_node_types).sum(),
-        )
 
     removed_count = original_count - len(nodes_clean)
     if removed_count > 0:
@@ -966,13 +929,6 @@ def _validate_edges_gdf(edges: gpd.GeoDataFrame,
         return edges
 
     original_count = len(edges)
-
-    # Check for geographic CRS (disallowed for most operations)
-    if hasattr(edges, "crs") and edges.crs and str(edges.crs) == "EPSG:4326":
-        msg = "Edges are in geographic CRS (EPSG:4326). Consider reprojecting to a projected CRS."
-        if strict:
-            raise ValueError(msg)
-        logger.warning("Validation: %s", msg)
 
     # Create composite mask for all invalid conditions
     null_mask = edges.geometry.isna()
@@ -1007,6 +963,25 @@ def _validate_edges_gdf(edges: gpd.GeoDataFrame,
         logger.warning("Validation: Removed %d invalid edges out of %d total", removed_count, original_count)
 
     return edges_clean
+
+
+def _validate_gdf_crs(
+    nodes: gpd.GeoDataFrame, edges: gpd.GeoDataFrame, strict: bool
+) -> None:
+    """Validate CRS consistency between nodes and edges."""
+    if not nodes.empty and not edges.empty:
+        if nodes.crs != edges.crs:
+            msg = f"CRS mismatch: nodes CRS ({nodes.crs}) != edges CRS ({edges.crs})"
+            if strict:
+                raise ValueError(msg)
+            logger.warning("Validation: %s", msg)
+
+        # Check for missing CRS only if both have data
+        if nodes.crs is None or edges.crs is None:
+            msg = "Both nodes and edges must have a defined CRS"
+            if strict:
+                raise ValueError(msg)
+            logger.warning("Validation: %s", msg)
 
 
 def _validate_nx(graph: nx.Graph,

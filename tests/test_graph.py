@@ -1,34 +1,34 @@
-import pytest
-import geopandas as gpd
-import pandas as pd
-import networkx as nx
-from shapely.geometry import Point # Added import
-from unittest.mock import patch # Added import
+from unittest.mock import patch  # Added import
 
-from city2graph.graph import (
-    gdf_to_pyg,
-    pyg_to_gdf,
-    nx_to_pyg,
-    pyg_to_nx,
-    is_torch_available,
-)
+import geopandas as gpd
+import networkx as nx
+import pandas as pd
+import pytest
+from shapely.geometry import Point  # Added import
+
+from city2graph.graph import _get_device
+from city2graph.graph import gdf_to_pyg
+from city2graph.graph import is_torch_available
+from city2graph.graph import nx_to_pyg
+from city2graph.graph import pyg_to_gdf
+from city2graph.graph import pyg_to_nx
 
 # Try to import torch, skip tests if not available
 try:
     import torch
-    from torch_geometric.data import Data, HeteroData
+    from torch_geometric.data import Data
+    from torch_geometric.data import HeteroData
     TORCH_AVAILABLE = True
 except ImportError:
     TORCH_AVAILABLE = False
     # Define dummy classes if torch_geometric is not available for type hinting
-    class Data:
+    class Data:  # noqa: D101
         pass
-    class HeteroData:
-        pass 
+    class HeteroData:  # noqa: D101
+        pass
 
 # Pytest skipif marker for tests requiring torch
 requires_torch = pytest.mark.skipif(not TORCH_AVAILABLE, reason="PyTorch or PyTorch Geometric is not available.")
-
 
 @requires_torch
 @pytest.mark.parametrize("node_feature_cols, node_label_cols, edge_feature_cols", [
@@ -105,15 +105,15 @@ def test_gdf_to_pyg_homogeneous_round_trip(sample_nodes_gdf, sample_edges_gdf, s
         pd.testing.assert_frame_equal(
             reconstructed_nodes_gdf[reconstructed_cols],
             original_nodes_to_compare[reconstructed_cols], # This will be an empty DataFrame
-            check_dtype=False, atol=1e-5
+            check_dtype=False, atol=1e-5,
         )
     else:
         pd.testing.assert_frame_equal(
             reconstructed_nodes_gdf[reconstructed_cols],
             original_nodes_to_compare[reconstructed_cols],
-            check_dtype=False, atol=1e-5
+            check_dtype=False, atol=1e-5,
         )
-    
+
     assert reconstructed_nodes_gdf.crs == sample_crs
     assert reconstructed_nodes_gdf.geom_equals_exact(sample_nodes_gdf.geometry, tolerance=1e-5).all()
 
@@ -121,7 +121,7 @@ def test_gdf_to_pyg_homogeneous_round_trip(sample_nodes_gdf, sample_edges_gdf, s
         assert isinstance(reconstructed_edges_gdf, gpd.GeoDataFrame)
         # When edge features are not selected, edge_attr is empty, leading to no feature columns in reconstructed_edges_gdf
         # So, we only compare if original edge_feature_cols were specified and valid
-        
+
         reconstructed_edge_cols = reconstructed_edges_gdf.columns.drop("geometry", errors="ignore")
         # Ensure index is sorted for consistent comparison
         reconstructed_edges_gdf = reconstructed_edges_gdf.sort_index()
@@ -131,13 +131,13 @@ def test_gdf_to_pyg_homogeneous_round_trip(sample_nodes_gdf, sample_edges_gdf, s
              pd.testing.assert_frame_equal(
                  reconstructed_edges_gdf[reconstructed_edge_cols], 
                  original_edges_to_compare[reconstructed_edge_cols], 
-                 check_dtype=False, atol=1e-5
+                 check_dtype=False, atol=1e-5,
             )
         elif reconstructed_edge_cols.empty:
              pd.testing.assert_frame_equal(
                  reconstructed_edges_gdf[reconstructed_edge_cols], 
                  original_edges_to_compare[reconstructed_edge_cols], # Empty comparison
-                 check_dtype=False, atol=1e-5
+                 check_dtype=False, atol=1e-5,
             )
         # If there are other columns in reconstructed_edges_gdf (e.g. if edge_feature_cols was None but some default were picked)
         # This part of logic might need refinement based on how pyg_to_gdf handles unspecified edge_feature_cols
@@ -167,7 +167,7 @@ def test_gdf_to_pyg_heterogeneous_round_trip(sample_hetero_nodes_dict, sample_he
         node_feature_cols=node_feature_cols,
         node_label_cols=node_label_cols,
         edge_feature_cols=edge_feature_cols,
-        device="cpu"
+        device="cpu",
     )
 
     assert isinstance(pyg_data, HeteroData)
@@ -380,7 +380,8 @@ def test_nx_to_pyg_round_trip(sample_nx_graph, sample_crs, node_feature_cols, no
             if not original_ids_map: # If metadata wasn't there
                  original_node_id = reconstructed_node_id + 1 # Specific to sample_nx_graph fixture
             else:
-                assert False, f"Could not map reconstructed node ID {reconstructed_node_id} to an original node ID."
+                msg = f"Could not map reconstructed node ID {reconstructed_node_id} to an original node ID."
+                raise AssertionError(msg)
 
 
         assert original_node_id in sample_nx_graph.nodes, f"Original node ID {original_node_id} not in sample_nx_graph"
@@ -398,13 +399,14 @@ def test_nx_to_pyg_round_trip(sample_nx_graph, sample_crs, node_feature_cols, no
                 assert label in reconstructed_attrs, f"Label {label} missing in reconstructed node {reconstructed_node_id}"
                 assert label in original_attrs, f"Label {label} missing in original node {original_node_id}"
                 assert abs(original_attrs.get(label, 0) - reconstructed_attrs.get(label, 0)) < 1e-5
-        
+
         if "geometry" in original_attrs: # Original NX graph stores geometry
             assert "pos" in reconstructed_attrs # pyg_to_nx stores geometry as 'pos'
             original_point = original_attrs["geometry"]
             reconstructed_point_coords = reconstructed_attrs["pos"]
             assert isinstance(original_point, Point), "Original geometry is not a Point"
-            assert isinstance(reconstructed_point_coords, tuple) and len(reconstructed_point_coords) == 2, "Reconstructed pos is not a 2-tuple"
+            assert isinstance(reconstructed_point_coords, tuple), "Reconstructed pos is not a tuple"
+            assert len(reconstructed_point_coords) == 2, "Reconstructed pos does not have 2 coordinates"
             assert abs(original_point.x - reconstructed_point_coords[0]) < 1e-5
             assert abs(original_point.y - reconstructed_point_coords[1]) < 1e-5
 
@@ -418,8 +420,9 @@ def test_nx_to_pyg_round_trip(sample_nx_graph, sample_crs, node_feature_cols, no
         if not original_ids_map: # Fallback for sample_nx_graph
             u_orig = u_re + 1
             v_orig = v_re + 1
-        
-        assert u_orig is not None and v_orig is not None, "Could not map edge nodes to original IDs"
+
+        assert u_orig is not None, f"Could not map edge node {u_re} to original ID"
+        assert v_orig is not None, f"Could not map edge node {v_re} to original ID"
 
         # Ensure edge exists in original graph (order might be swapped for undirected)
         original_edge_attrs = None
@@ -427,7 +430,7 @@ def test_nx_to_pyg_round_trip(sample_nx_graph, sample_crs, node_feature_cols, no
             original_edge_attrs = sample_nx_graph.edges[u_orig, v_orig]
         elif sample_nx_graph.has_edge(v_orig, u_orig): # Check for swapped order
             original_edge_attrs = sample_nx_graph.edges[v_orig, u_orig]
-        
+
         assert original_edge_attrs is not None, f"Edge ({u_orig}, {v_orig}) not found in original graph"
 
         if edge_feature_cols:
@@ -713,7 +716,7 @@ def test_nx_to_pyg_round_trip(sample_nx_graph, sample_crs, input_node_features, 
                 if feat in original_attrs: # Only assert if the feature was in the original graph
                     assert feat in reconstructed_attrs, f"Feature {feat} missing in reconstructed node {reconstructed_node_id}"
                     assert abs(original_attrs.get(feat, 0) - reconstructed_attrs.get(feat, 0)) < 1e-5
-        
+
         # Node labels assertions
         if generic_test_type == "node_y_generic":
             # Expect "label_0" if input_node_labels was ["label1"]
@@ -726,13 +729,14 @@ def test_nx_to_pyg_round_trip(sample_nx_graph, sample_crs, input_node_features, 
                 if label in original_attrs:
                     assert label in reconstructed_attrs, f"Label {label} missing in reconstructed node {reconstructed_node_id}"
                     assert abs(original_attrs.get(label, 0) - reconstructed_attrs.get(label, 0)) < 1e-5
-        
+
         if "geometry" in original_attrs:
             assert "pos" in reconstructed_attrs
             original_point = original_attrs["geometry"]
             reconstructed_point_coords = reconstructed_attrs["pos"]
             assert isinstance(original_point, Point)
-            assert isinstance(reconstructed_point_coords, tuple) and len(reconstructed_point_coords) == 2
+            assert isinstance(reconstructed_point_coords, tuple)
+            assert len(reconstructed_point_coords) == 2
             assert abs(original_point.x - reconstructed_point_coords[0]) < 1e-5
             assert abs(original_point.y - reconstructed_point_coords[1]) < 1e-5
 
@@ -740,7 +744,8 @@ def test_nx_to_pyg_round_trip(sample_nx_graph, sample_crs, input_node_features, 
     for u_re, v_re, reconstructed_edge_attrs in reconstructed_nx_graph.edges(data=True):
         u_orig = original_ids_map.get(u_re)
         v_orig = original_ids_map.get(v_re)
-        assert u_orig is not None and v_orig is not None, "Could not map edge nodes to original IDs"
+        assert u_orig is not None, f"Could not map edge node {u_re} to original ID"
+        assert v_orig is not None, f"Could not map edge node {v_re} to original ID"
 
         original_edge_attrs = None
         if sample_nx_graph.has_edge(u_orig, v_orig):
@@ -759,4 +764,44 @@ def test_nx_to_pyg_round_trip(sample_nx_graph, sample_crs, input_node_features, 
                 if feat in original_edge_attrs:
                     assert feat in reconstructed_edge_attrs
                     assert abs(original_edge_attrs.get(feat, 0) - reconstructed_edge_attrs.get(feat, 0)) < 1e-5
+
+@requires_torch
+def test_get_device():
+    """Test the _get_device utility function for device handling."""
+    # 1. Test with device=None
+    with patch("torch.cuda.is_available", return_value=True):
+        assert _get_device(None) == torch.device("cuda")
+    with patch("torch.cuda.is_available", return_value=False):
+        assert _get_device(None) == torch.device("cpu")
+
+    # 2. Test with device as a string
+    assert _get_device("cpu") == torch.device("cpu")
+    assert _get_device("CPU") == torch.device("cpu")
+
+    with patch("torch.cuda.is_available", return_value=True):
+        assert _get_device("cuda") == torch.device("cuda")
+        assert _get_device("CUDA") == torch.device("cuda")
+
+    with patch("torch.cuda.is_available", return_value=False), \
+         pytest.raises(ValueError, match="CUDA selected, but not available"):
+        _get_device("cuda")
+
+    with pytest.raises(ValueError, match="Device must be 'cuda', 'cpu'"):
+        _get_device("tpu")
+
+    # 3. Test with device as a torch.device object
+    assert _get_device(torch.device("cpu")) == torch.device("cpu")
+
+    with patch("torch.cuda.is_available", return_value=True):
+        assert _get_device(torch.device('cuda')) == torch.device("cuda")
+
+    with patch("torch.cuda.is_available", return_value=False), \
+         pytest.raises(ValueError, match="CUDA selected, but not available"):
+        _get_device(torch.device("cuda"))
+
+    # 4. Test with invalid device type
+    with pytest.raises(TypeError, match="Device must be 'cuda', 'cpu'"):
+        _get_device(123)
+    with pytest.raises(TypeError, match="Device must be 'cuda', 'cpu'"):
+        _get_device([torch.device("cpu")])
 
