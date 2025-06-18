@@ -16,3 +16,6 @@ docs/source/examples/**
 
 conda/conda-bld/
 docs/build/
+
+.coverage
+.coverage*

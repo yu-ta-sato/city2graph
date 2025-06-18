@@ -555,11 +555,6 @@ def public_to_public_graph(
     if public_gdf.empty or len(public_gdf) < 2:
         return _create_empty_edges_gdf(public_gdf.crs, "from_public_id", "to_public_id")
 
-    # Ensure 'public_id' column exists
-    if "public_id" not in public_gdf.columns:
-        msg = "Input `public_gdf` must have a 'public_id' column."
-        raise ValueError(msg)
-
     # Use 'public_id' as the index for dual_graph processing
     public_gdf_indexed = public_gdf.set_index("public_id")
 
@@ -572,10 +567,7 @@ def public_to_public_graph(
     if isinstance(edges_gdf_dual.index, pd.MultiIndex):
         edges_gdf_dual.index.names = ["from_public_id", "to_public_id"]
 
-    if not edges_gdf_dual.empty:
-        return edges_gdf_dual.reset_index()
-
-    return edges_gdf_dual
+    return edges_gdf_dual.reset_index()
 
 
 # ============================================================================
