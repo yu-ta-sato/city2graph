@@ -629,7 +629,7 @@ def gdf_to_nx(nodes: gpd.GeoDataFrame | dict[str, gpd.GeoDataFrame] | None = Non
     nodes : GeoDataFrame or dict[str, GeoDataFrame], optional
         Point or Polygon geometries for graph nodes; node attributes preserved.
         For heterogeneous graphs, provide a dict mapping node types to GeoDataFrames.
-    edges : GeoDataFrame or dict[tuple[str, str, str], GeoDataFrame], optional
+    edges : GeoDataFrame or dict[tuple[str, str, str], gpd.GeoDataFrame], optional
         LineString geometries for graph edges; edge attributes preserved.
         For heterogeneous graphs, provide a dict mapping edge types to GeoDataFrames.
     node_id_col : str or dict[str, str], optional
@@ -649,7 +649,7 @@ def gdf_to_nx(nodes: gpd.GeoDataFrame | dict[str, gpd.GeoDataFrame] | None = Non
     """
     # Handle heterogeneous graphs (dictionaries of GeoDataFrames)
     if isinstance(nodes, dict) or isinstance(edges, dict):
-        return _gdf_to_nx_heterogeneous(nodes, edges, node_id_col, edge_id_col, keep_geom)
+        return _gdf_to_nx_heterogeneous(nodes, edges, keep_geom)
 
     # Handle homogeneous graphs (single GeoDataFrames) - validation done internally
     return _gdf_to_nx_homogeneous(nodes, edges, node_id_col, edge_id_col, keep_geom)
@@ -1172,7 +1172,6 @@ def _gdf_to_nx_homogeneous(
 def _gdf_to_nx_heterogeneous(
     nodes_dict: dict[str, gpd.GeoDataFrame] | None,
     edges_dict: dict[tuple[str, str, str], gpd.GeoDataFrame] | None,
-    edge_id_cols: dict[tuple[str, str, str], str] | str | None,
     keep_geom: bool,
 ) -> nx.Graph:
     """Convert heterogeneous GeoDataFrames to NetworkX graph."""
@@ -1184,7 +1183,7 @@ def _gdf_to_nx_heterogeneous(
 
     # Process nodes and edges
     _process_hetero_nodes(graph, nodes_dict)
-    _process_hetero_edges(graph, edges_dict, edge_id_cols, keep_geom, nodes_dict)
+    _process_hetero_edges(graph, edges_dict, keep_geom)
 
     return graph
 
@@ -1476,7 +1475,6 @@ def _process_hetero_edges(
     graph: nx.Graph,
     edges_dict: dict[tuple[str, str, str], gpd.GeoDataFrame] | None,
     keep_geom: bool,
-    nodes_dict: dict[str, gpd.GeoDataFrame] | None,
 ) -> None:
     """Process edges for heterogeneous graph."""
     if not edges_dict:
@@ -1490,7 +1488,10 @@ def _process_hetero_edges(
 
         # Add edges with type information
         _add_hetero_edges_to_graph(
-            graph, edge_gdf_validated, edge_type, keep_geom, nodes_dict,
+            graph,
+            edge_gdf_validated,
+            edge_type,
+            keep_geom,
         )
 
 
