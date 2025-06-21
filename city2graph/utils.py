@@ -578,20 +578,30 @@ def _compute_nodes_within_distance(graph: nx.Graph,
                          if hasattr(center_points, "tolist")
                          else list(center_points))
 
-    # Vectorized computation using list comprehensions
-    all_valid_nodes = []
+    # Get nearest nodes for all center points
+    source_nodes = []
     for point in center_points_list:
         try:
-            nearest_node = _get_nearest_node(point, nodes_gdf, node_id=node_id_name)
-            distance_dict = nx.shortest_path_length(graph, nearest_node, weight=edge_attr)
+            source_nodes.append(_get_nearest_node(point, nodes_gdf, node_id=node_id_name))
+        except ValueError:  # idxmin on empty sequence
+            logger.warning("Could not find nearest node; nodes_gdf may be empty.")
+            continue  # Skip this point if no nearest node can be found
 
-            # Extract nodes within distance using list comprehension
-            valid_nodes = [node_id for node_id, dist in distance_dict.items() if dist < distance]
-            all_valid_nodes.extend(valid_nodes)
-        except (nx.NetworkXNoPath, nx.NodeNotFound) as e:
-            logger.warning("Could not compute paths from a center point: %s", e, stacklevel=2)
+    if not source_nodes:
+        return set()
 
-    return set(all_valid_nodes)
+    try:
+        # Use multi-source Dijkstra to find shortest path lengths from all source nodes at once
+        distance_dict = nx.multi_source_dijkstra_path_length(graph, set(source_nodes), weight=edge_attr)
+
+        # Extract nodes within distance using a set comprehension for efficiency
+        return {node_id for node_id, dist in distance_dict.items() if dist < distance}
+
+    except (nx.NetworkXNoPath, nx.NodeNotFound) as e:
+        # This can happen if source_nodes contains nodes not in the graph,
+        # though _get_nearest_node should prevent this.
+        logger.warning("Could not compute paths from center points: %s", e, stacklevel=2)
+        return set()
 
 
 def _normalize_center_points(center_point: Point | gpd.GeoSeries | gpd.GeoDataFrame,
@@ -748,8 +758,11 @@ def segments_to_graph(segments_gdf: gpd.GeoDataFrame,
         - edges_with_multiindex_gdf: Original edge GeoDataFrame with MultiIndex (from_node_id, to_node_id)
     """
     # Extract start and end coordinates from the geometry
-    start_coords = segments_gdf.geometry.apply(lambda geom: (geom.coords[0][0], geom.coords[0][1]))
-    end_coords = segments_gdf.geometry.apply(lambda geom: (geom.coords[-1][0], geom.coords[-1][1]))
+    start_points = segments_gdf.geometry.interpolate(0, normalized=True)
+    end_points = segments_gdf.geometry.interpolate(1, normalized=True)
+
+    start_coords = pd.Series(zip(start_points.x, start_points.y, strict=False), index=segments_gdf.index)
+    end_coords = pd.Series(zip(end_points.x, end_points.y, strict=False), index=segments_gdf.index)
 
     # Combine all coordinates and remove duplicates
     all_coords = pd.concat([start_coords, end_coords]).drop_duplicates()
@@ -936,10 +949,7 @@ def _validate_edges_gdf(edges: gpd.GeoDataFrame,
     empty_mask = edges.geometry.is_empty
 
     # Check for valid geometry types vectorized
-    valid_geom_types = edges.geometry.apply(
-        lambda g: isinstance(g, (LineString, shapely.geometry.MultiLineString))
-        if g is not None else False,
-    )
+    valid_geom_types = edges.geometry.geom_type.isin(["LineString", "MultiLineString"])
 
     # Combine all masks - keep only valid geometries
     valid_mask = ~(null_mask | invalid_mask | empty_mask) & valid_geom_types
@@ -955,7 +965,8 @@ def _validate_edges_gdf(edges: gpd.GeoDataFrame,
     if not valid_geom_types.all():
         logger.warning(
             "Validation: Removing %d edges with invalid geometry types "
-            "(not LineString or MultiLineString)", (~valid_geom_types).sum(),
+            "(not LineString or MultiLineString)",
+            (~valid_geom_types[~null_mask]).sum(),
         )
 
     removed_count = original_count - len(edges_clean)
@@ -1148,20 +1159,20 @@ def _gdf_to_nx_homogeneous(
 
     # Add nodes with original index information
     if nodes is not None:
-        # Vectorized node processing - avoid iterrows()
+        # Vectorized node processing
         centroids = nodes.geometry.centroid
         node_data = nodes.drop(columns="geometry")
 
         # Create node attributes dictionary efficiently
-        node_attrs_dict = {}
+        node_attrs_list = []
         for idx, orig_idx in enumerate(nodes.index):
             attrs = node_data.iloc[idx].to_dict()
             attrs["_original_index"] = orig_idx
             attrs["pos"] = (centroids.iloc[idx].x, centroids.iloc[idx].y)
-            node_attrs_dict[idx] = attrs
+            node_attrs_list.append((idx, attrs))
 
         # Add all nodes with attributes at once
-        graph.add_nodes_from(node_attrs_dict.items())
+        graph.add_nodes_from(node_attrs_list)
 
     # Process edges efficiently
     _process_homogeneous_edges(graph, edges, nodes, keep_geom)
@@ -1203,13 +1214,15 @@ def _create_nodes_gdf_from_graph(graph: nx.Graph) -> gpd.GeoDataFrame:
     # Extract original indices and records in vectorized manner
     original_indices = [attrs.get("_original_index", nid) for nid, attrs in node_data.items()]
 
-    # Build records without loops
-    records = []
-    for nid, attrs in node_data.items():
-        record = {k: v for k, v in attrs.items() if k not in ["pos", "_original_index"]}
-        pos_val = pos.get(nid, (0, 0))
-        record["geometry"] = Point(*pos_val) if isinstance(pos_val, (tuple, list)) else Point(pos_val, 0)
-        records.append(record)
+    # Build records with a list comprehension
+    records = [
+        {
+            **{k: v for k, v in attrs.items() if k not in ["pos", "_original_index"]},
+            "geometry": Point(*(pos_val)) if isinstance(pos_val := pos.get(nid, (0, 0)), (tuple, list))
+            else Point(pos_val, 0),
+        }
+        for nid, attrs in node_data.items()
+    ]
 
     gdf = gpd.GeoDataFrame(records, index=original_indices, crs=crs)
 
@@ -1305,10 +1318,19 @@ def _set_graph_metadata(
 
     if is_hetero:
         # Heterogeneous graph metadata
+        node_index_names = {}
+        edge_index_names = {}
         if isinstance(nodes, dict):
             graph.graph["node_types"] = list(nodes.keys())
+            for node_type, gdf in nodes.items():
+                node_index_names[node_type] = gdf.index.name
         if isinstance(edges, dict):
             graph.graph["edge_types"] = list(edges.keys())
+            for edge_type, gdf in edges.items():
+                edge_index_names[edge_type] = gdf.index.names
+
+        graph.graph["node_index_names"] = node_index_names
+        graph.graph["edge_index_names"] = edge_index_names
 
         # Get CRS from first available GeoDataFrame
         crs = None
@@ -1363,20 +1385,14 @@ def _process_homogeneous_edges(
         valid_v = v_nodes[valid_mask]
 
         # Prepare edge attributes
-        if keep_geom:
-            edge_attrs_data = valid_edges.to_dict("records")
-        else:
-            edge_attrs_data = valid_edges.drop(columns=["geometry"]).to_dict("records")
+        edge_attrs_df = valid_edges if keep_geom else valid_edges.drop(columns=["geometry"])
+        edge_attrs_records = edge_attrs_df.to_dict("records")
 
-        # Add original edge indices vectorized
-        for i, orig_idx in enumerate(valid_edges.index):
-            edge_attrs_data[i]["_original_edge_index"] = orig_idx
-
-        # Create edges to add
-        edges_to_add = [(valid_u.iloc[i], valid_v.iloc[i], edge_attrs_data[i])
-                       for i in range(len(valid_edges))]
-
-        # Add all edges at once
+        # Create edges to add using a generator expression for efficiency
+        edges_to_add = (
+            (u, v, {**attrs, "_original_edge_index": idx})
+            for u, v, attrs, idx in zip(valid_u, valid_v, edge_attrs_records, valid_edges.index, strict=True)
+        )
         graph.add_edges_from(edges_to_add)
     else:
         # Use coordinate tuples as node IDs - vectorized approach
@@ -1385,31 +1401,23 @@ def _process_homogeneous_edges(
 
         # Get unique nodes
         all_coords = pd.concat([start_coords, end_coords]).unique()
-        nodes_to_add = {coord: {"pos": coord} for coord in all_coords}
+        nodes_to_add = [(coord, {"pos": coord}) for coord in all_coords]
 
         # Prepare edge attributes vectorized
-        if keep_geom:
-            edge_attrs_data = edges.to_dict("records") # This is a list of dicts
-        else:
-            edge_attrs_data = edges.drop(columns=["geometry"]).to_dict("records")
+        edge_attrs_df = edges.copy() if keep_geom else edges.drop(columns=["geometry"])
 
-        # Add original edge indices vectorized
-        for i, orig_idx in enumerate(edges.index):
-            edge_attrs_data[i]["_original_edge_index"] = orig_idx
-            # === Add length calculation here ===
-            if "length" not in edge_attrs_data[i]:
-                geom = edges.geometry.iloc[i]
-                if geom: # Check if geom is not None
-                    edge_attrs_data[i]["length"] = geom.length
-            # === End of addition ===
+        # Add original edge indices and length calculation
+        edge_attrs_df["_original_edge_index"] = edges.index
+        if "length" not in edge_attrs_df.columns:
+            edge_attrs_df["length"] = edges.geometry.length
+
+        edge_attrs_records = edge_attrs_df.to_dict("records")
 
         # Create edges to add
-        # Edges are ( (x1,y1), (x2,y2), attrs )
-        edges_to_add = [(start_coords.iloc[i], end_coords.iloc[i], edge_attrs_data[i])
-                       for i in range(len(edges))]
+        edges_to_add = zip(start_coords, end_coords, edge_attrs_records, strict=True)
 
         # Add all nodes and edges at once
-        graph.add_nodes_from(nodes_to_add.items())
+        graph.add_nodes_from(nodes_to_add)
         graph.add_edges_from(edges_to_add)
 
 
@@ -1452,20 +1460,23 @@ def _add_hetero_nodes_to_graph(
     """Add heterogeneous nodes to graph."""
     # Vectorized approach to avoid iterrows()
     centroids = node_gdf.geometry.centroid
-    node_data = node_gdf.drop(columns="geometry")
+    node_data = node_gdf.drop(columns="geometry").to_dict("records")
 
-    # Batch process all nodes
-    nodes_to_add = []
-    for idx, orig_idx in enumerate(node_gdf.index):
-        node_id = offset + idx
-
-        # Store all attributes including type and original index
-        node_attrs = node_data.iloc[idx].to_dict()
-        node_attrs["node_type"] = node_type
-        node_attrs["_original_index"] = orig_idx
-        node_attrs["pos"] = (centroids.iloc[idx].x, centroids.iloc[idx].y)
-
-        nodes_to_add.append((node_id, node_attrs))
+    # Batch process all nodes with a list comprehension
+    nodes_to_add = [
+        (
+            offset + idx,
+            {
+                **attrs,
+                "node_type": node_type,
+                "_original_index": orig_idx,
+                "pos": (centroid.x, centroid.y),
+            },
+        )
+        for idx, (attrs, orig_idx, centroid) in enumerate(
+            zip(node_data, node_gdf.index, centroids, strict=True),
+        )
+    ]
 
     # Add all nodes at once
     graph.add_nodes_from(nodes_to_add)
@@ -1514,25 +1525,41 @@ def _add_hetero_edges_to_graph(
                 node_lookup[node_type] = {}
             node_lookup[node_type][orig_idx] = node_id
 
-    # Process all edges at once
-    edges_to_add = []
-    for orig_idx, row in edge_gdf.iterrows():
-        # Find source and target nodes by matching edge index to node indices
-        if isinstance(orig_idx, tuple) and len(orig_idx) == 2:
-            # MultiIndex case: (source_node_idx, target_node_idx)
-            src_orig_idx, dst_orig_idx = orig_idx
+    if not isinstance(edge_gdf.index, pd.MultiIndex) or edge_gdf.index.nlevels < 2:
+        logger.warning("Skipping edges for %s: index is not a MultiIndex.", str(edge_type))
+        return
 
-            # Find corresponding nodes using lookup
-            u = node_lookup.get(src_type, {}).get(src_orig_idx)
-            v = node_lookup.get(dst_type, {}).get(dst_orig_idx)
+    # Vectorized lookup of node IDs
+    src_orig_indices = edge_gdf.index.get_level_values(0)
+    dst_orig_indices = edge_gdf.index.get_level_values(1)
 
-            if u is not None and v is not None:
-                # Store edge attributes
-                edge_attrs = row.drop("geometry").to_dict() if not keep_geom else row.to_dict()
-                edge_attrs["edge_type"] = rel_type
-                edge_attrs["_original_edge_index"] = orig_idx
+    # Create Series for mapping, preserving the original edge_gdf index
+    u_nodes = pd.Series(src_orig_indices.values, index=edge_gdf.index).map(node_lookup.get(src_type, {}))
+    v_nodes = pd.Series(dst_orig_indices.values, index=edge_gdf.index).map(node_lookup.get(dst_type, {}))
 
-                edges_to_add.append((u, v, edge_attrs))
+    valid_mask = u_nodes.notna() & v_nodes.notna()
+    if not valid_mask.all():
+        logger.warning("Could not find nodes for %d edges of type %s.",
+                     (~valid_mask).sum(), str(edge_type))
+
+    valid_edges_gdf = edge_gdf[valid_mask]
+    u_nodes = u_nodes[valid_mask]
+    v_nodes = v_nodes[valid_mask]
+
+    if valid_edges_gdf.empty:
+        return
+
+    # Prepare edge attributes
+    attrs_df = valid_edges_gdf if keep_geom else valid_edges_gdf.drop(columns="geometry")
+    edge_attrs_data = attrs_df.to_dict("records")
+
+    # Create edges with a list comprehension
+    edges_to_add = [
+        (u, v, {**attrs, "edge_type": rel_type, "_original_edge_index": orig_idx})
+        for u, v, orig_idx, attrs in zip(
+            u_nodes, v_nodes, valid_edges_gdf.index, edge_attrs_data, strict=True,
+        )
+    ]
 
     # Add all edges at once
     graph.add_edges_from(edges_to_add)
@@ -1574,40 +1601,33 @@ def _reconstruct_hetero_nodes(
             continue
 
         # Vectorized processing
-        original_mappings = G.graph.get("_node_mappings", {})
-        type_mapping = original_mappings.get(node_type, {})
-        original_ids = (type_mapping.get("original_ids")
-                       if isinstance(type_mapping, dict) else None)
-
-        # Extract data vectorized
         node_ids, attrs_list = zip(*type_nodes, strict=False)
 
-        # Create indices array
-        indices = [
-            original_ids[i] if original_ids and i < len(original_ids) else node_id
-            for i, node_id in enumerate(node_ids)
-        ]
+        # Extract original indices from node attributes
+        indices = [attrs.get("_original_index") for attrs in attrs_list]
 
-        # Create records array
+        # Create records array, excluding internal attributes
         records = [
             {
-                **{k: v for k, v in attrs.items() if k not in ["pos", "node_type"]},
+                **{k: v for k, v in attrs.items() if k not in ["pos", "node_type", "_original_index"]},
                 "geometry": Point(attrs.get("pos")) if attrs.get("pos") else None,
             }
             for attrs in attrs_list
         ]
 
-        nodes_dict[node_type] = gpd.GeoDataFrame(
+        # Create GeoDataFrame with original indices
+        gdf = gpd.GeoDataFrame(
             records, geometry="geometry", index=indices, crs=crs,
         )
 
-        # Restore index names
-        node_index_names = G.graph.get("_node_index_names", {})
+        # Restore index names from graph metadata
+        node_index_names = G.graph.get("node_index_names", {})
         if node_type in node_index_names:
-            index_names = node_index_names[node_type]
-            if (isinstance(index_names, list) and len(index_names) == 1
-                and index_names[0] is not None):
-                nodes_dict[node_type].index.name = index_names[0]
+            index_name = node_index_names[node_type]
+            if index_name:
+                gdf.index.name = index_name
+
+        nodes_dict[node_type] = gdf
 
     return nodes_dict
 
@@ -1629,41 +1649,44 @@ def _reconstruct_hetero_edges(
             edges_dict[edge_type] = gpd.GeoDataFrame(columns=["geometry"], crs=crs)
             continue
 
-        # Get original edge index values
-        edge_index_values = G.graph.get("_edge_index_values", {})
-        type_edge_values = edge_index_values.get(edge_type, [])
-
         # Vectorized processing
-        indices = [
-            type_edge_values[i] if type_edge_values and i < len(type_edge_values) else (u, v)
-            for i, (u, v, _) in enumerate(type_edges)
+        u_nodes, v_nodes, attrs_list = zip(*type_edges, strict=False)
+
+        # Extract original indices from edge attributes
+        original_indices = [attrs.get("_original_edge_index") for attrs in attrs_list]
+
+        # Create records array, excluding internal attributes
+        records = [
+            {
+                **{k: v for k, v in attrs.items() if k not in ["edge_type", "_original_edge_index"]},
+                "geometry": attrs.get("geometry") or (
+                    LineString([G.nodes[u].get("pos"), G.nodes[v].get("pos")])
+                    if G.nodes[u].get("pos") and G.nodes[v].get("pos")
+                    else None
+                ),
+            }
+            for u, v, attrs in type_edges
         ]
 
-        records = []
-        for u, v, attrs in type_edges:
-            # Create geometry from node positions or existing geometry
-            geometry = attrs.get("geometry")
-            if geometry is None:
-                u_pos = G.nodes[u].get("pos")
-                v_pos = G.nodes[v].get("pos")
-                if u_pos and v_pos:
-                    geometry = LineString([u_pos, v_pos])
+        # Create MultiIndex if original indices are available and are tuples
+        index = None
+        if original_indices and all(isinstance(i, tuple) for i in original_indices if i is not None):
+            index = pd.MultiIndex.from_tuples(original_indices)
+        else:
+            index = original_indices
 
-            record = {k: v for k, v in attrs.items() if k not in ["edge_type"]}
-            record["geometry"] = geometry
-            records.append(record)
-
-        edges_dict[edge_type] = gpd.GeoDataFrame(
-            records, geometry="geometry", index=indices, crs=crs,
+        gdf = gpd.GeoDataFrame(
+            records, geometry="geometry", index=index, crs=crs,
         )
 
-        # Restore index names
-        edge_index_names = G.graph.get("_edge_index_names", {})
+        # Restore index names from graph metadata
+        edge_index_names = G.graph.get("edge_index_names", {})
         if edge_type in edge_index_names:
             index_names = edge_index_names[edge_type]
-            if (isinstance(index_names, list) and len(index_names) == 1
-                and index_names[0] is not None):
-                edges_dict[edge_type].index.name = index_names[0]
+            if index_names and hasattr(gdf.index, "names"):
+                gdf.index.names = index_names
+
+        edges_dict[edge_type] = gdf
 
     return edges_dict
 
