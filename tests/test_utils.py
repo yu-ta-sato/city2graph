@@ -2,6 +2,7 @@
 
 import geopandas as gpd
 import networkx as nx
+import pandas as pd
 import pytest
 
 from city2graph import utils
@@ -225,6 +226,10 @@ def test_gdf_to_nx_and_nx_to_gdf_roundtrip(
     assert "geometry" in edges_trip.columns
     assert all(nodes_trip["geometry"].is_valid)
     assert all(edges_trip["geometry"].is_valid)
+    assert len(sample_nodes_gdf) == len(nodes_trip)
+    assert len(sample_edges_gdf) == len(edges_trip)
+    pd.testing.assert_index_equal(sample_nodes_gdf.index, nodes_trip.index)
+    pd.testing.assert_index_equal(sample_edges_gdf.index, edges_trip.index)
 
 
 @pytest.mark.parametrize(
