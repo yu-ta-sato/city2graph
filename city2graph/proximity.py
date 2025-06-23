@@ -80,7 +80,7 @@ def _build_delaunay_edges(coords: np.ndarray,
         return set()
 
 
-def _validate_network_compatibility(gdf: gpd.GeoDataFrame, 
+def _validate_network_compatibility(gdf: gpd.GeoDataFrame,
                                    network_gdf: gpd.GeoDataFrame) -> None:
     """
     Validate that the input GeoDataFrame and network have compatible CRS.
@@ -171,11 +171,11 @@ def _compute_network_distances(coords: np.ndarray,
         try:
             if has_length:
                 distances = nx.single_source_dijkstra_path_length(
-                    network_graph, source_node, weight="length"
+                    network_graph, source_node, weight="length",
                 )
             else:
                 distances = nx.single_source_shortest_path_length(
-                    network_graph, source_node
+                    network_graph, source_node,
                 )
             all_distances[source_node] = distances
         except nx.NetworkXNoPath:
@@ -192,7 +192,7 @@ def _compute_network_distances(coords: np.ndarray,
 
             # Get distances for all targets
             target_dists = np.array([
-                source_distances.get(target_node, np.inf) 
+                source_distances.get(target_node, np.inf)
                 for target_node in target_nodes
             ])
 
@@ -218,7 +218,7 @@ def _setup_network_computation(gdf: gpd.GeoDataFrame,
     _validate_network_compatibility(gdf, network_gdf)
     network_graph = gdf_to_nx(edges=network_gdf)
     distance_matrix, nearest_network_nodes = _compute_network_distances(
-        coords, node_indices, network_graph
+        coords, node_indices, network_graph,
     )
     return network_graph, distance_matrix, nearest_network_nodes
 
@@ -345,7 +345,7 @@ def knn_graph(gdf: gpd.GeoDataFrame,
 
         # Setup network computation
         network_graph, distance_matrix, nearest_network_nodes = _setup_network_computation(
-            gdf, network_gdf, coords, node_indices
+            gdf, network_gdf, coords, node_indices,
         )
 
         # Find k nearest neighbors based on network distances
@@ -427,7 +427,7 @@ def delaunay_graph(gdf: gpd.GeoDataFrame,
 
     # Calculate distance matrix and get network information if needed
     distance_matrix, network_graph, nearest_network_nodes = _calculate_distance_matrix(
-        coords, node_indices, distance_metric, network_gdf, gdf
+        coords, node_indices, distance_metric, network_gdf, gdf,
     )
 
     # Add distance weights to edges
@@ -478,7 +478,7 @@ def gilbert_graph(gdf: gpd.GeoDataFrame,
 
     # Calculate distance matrix and get network information
     distance_matrix, network_graph, nearest_network_nodes = _calculate_distance_matrix(
-        coords, node_indices, distance_metric, network_gdf, gdf
+        coords, node_indices, distance_metric, network_gdf, gdf,
     )
 
     # Create edges within radius
@@ -578,7 +578,7 @@ def waxman_graph(
 
         # Setup network computation using the helper function
         network_graph, distance_matrix, nearest_network_nodes = _setup_network_computation(
-            gdf, network_gdf, coords, node_indices
+            gdf, network_gdf, coords, node_indices,
         )
 
         # Calculate probabilities based on network distances
@@ -811,7 +811,7 @@ def _calculate_distance_matrix(coords: np.ndarray,
             raise ValueError(msg)
 
         network_graph, distance_matrix, nearest_network_nodes = _setup_network_computation(
-            gdf, network_gdf, coords, node_indices
+            gdf, network_gdf, coords, node_indices,
         )
         return distance_matrix, network_graph, nearest_network_nodes
 

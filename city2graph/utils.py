@@ -7,12 +7,13 @@ import geopandas as gpd
 import momepy
 import networkx as nx
 import pandas as pd
-import shapely
 from shapely.geometry import LineString
 from shapely.geometry import Point
 
 # Define the public API for this module
 __all__ = [
+    "_validate_gdf",
+    "_validate_nx",
     "create_isochrone",
     "create_tessellation",
     "dual_graph",
@@ -24,11 +25,662 @@ __all__ = [
 
 logger = logging.getLogger(__name__)
 
+# ============================================================================
+# CORE DATA STRUCTURES AND VALIDATORS
+# ============================================================================
+
+class GraphMetadata:
+    """Centralized graph metadata management."""
+
+    def __init__(self, crs: str | int | None = None, is_hetero: bool = False) -> None:
+        self.crs = crs
+        self.is_hetero = is_hetero
+        self.node_types: list[str] = []
+        self.edge_types: list[str] = []
+        self.node_index_names: dict[str, Any] = {}
+        self.edge_index_names: dict[str, Any] = {}
+        self.node_geom_cols: list[str] = []
+        self.edge_geom_cols: list[str] = []
+
+    def to_dict(self) -> dict[str, Any]:
+        """Convert to dictionary for NetworkX graph metadata."""
+        return {
+            "crs": self.crs,
+            "is_hetero": self.is_hetero,
+            "node_types": self.node_types,
+            "edge_types": self.edge_types,
+            "node_index_names": self.node_index_names,
+            "edge_index_names": self.edge_index_names,
+            "node_geom_cols": self.node_geom_cols,
+            "edge_geom_cols": self.edge_geom_cols,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "GraphMetadata":
+        """Create from dictionary."""
+        metadata = cls(data.get("crs"), data.get("is_hetero", False))
+        metadata.node_types = data.get("node_types", [])
+        metadata.edge_types = data.get("edge_types", [])
+        metadata.node_index_names = data.get("node_index_names", {})
+        metadata.edge_index_names = data.get("edge_index_names", {})
+        metadata.node_geom_cols = data.get("node_geom_cols", [])
+        metadata.edge_geom_cols = data.get("edge_geom_cols", [])
+        return metadata
+
+class GeoDataProcessor:
+    """Common processor for GeoDataFrame operations."""
+
+    @staticmethod
+    def validate_gdf(
+        gdf: gpd.GeoDataFrame | None,
+        expected_geom_types: list[str] | None = None,
+        allow_empty: bool = True,
+    ) -> gpd.GeoDataFrame | None:
+        """Unified GeoDataFrame validation."""
+        if gdf is None:
+            return None
+
+        if not isinstance(gdf, gpd.GeoDataFrame):
+            msg = "Input must be a GeoDataFrame"
+            raise TypeError(msg)
+
+        if gdf.empty and not allow_empty:
+            msg = "GeoDataFrame cannot be empty"
+            raise ValueError(msg)
+
+        if gdf.empty:
+            return gdf
+
+        # Validate geometry types
+        if expected_geom_types:
+            valid_mask = gdf.geometry.geom_type.isin(expected_geom_types)
+            if not valid_mask.all():
+                invalid_count = (~valid_mask).sum()
+                logger.warning("Removed %d geometries with invalid types", invalid_count)
+                gdf = gdf[valid_mask]
+
+        # Remove invalid geometries
+        invalid_mask = gdf.geometry.isna() | ~gdf.geometry.is_valid | gdf.geometry.is_empty
+        if invalid_mask.any():
+            invalid_count = invalid_mask.sum()
+            logger.warning("Removed %d invalid geometries", invalid_count)
+            gdf = gdf[~invalid_mask]
+
+        return gdf
+
+    @staticmethod
+    def ensure_crs_consistency(*gdfs: gpd.GeoDataFrame | None) -> tuple[gpd.GeoDataFrame | None, ...]:
+        """Ensure all GeoDataFrames have consistent CRS."""
+        non_empty_gdfs = [gdf for gdf in gdfs if gdf is not None and not gdf.empty]
+        if not non_empty_gdfs:
+            return gdfs
+
+        reference_crs = non_empty_gdfs[0].crs
+        for gdf in non_empty_gdfs[1:]:
+            if gdf.crs != reference_crs:
+                msg = "All GeoDataFrames must have the same CRS"
+                raise ValueError(msg)
+
+        return gdfs
+
+    @staticmethod
+    def extract_coordinates(gdf: gpd.GeoDataFrame, start: bool = True) -> pd.Series:
+        """Extract start or end coordinates from LineString geometries."""
+        if start:
+            return gdf.geometry.apply(lambda g: g.coords[0] if g else None)
+        return gdf.geometry.apply(lambda g: g.coords[-1] if g else None)
+
+    @staticmethod
+    def compute_centroids(gdf: gpd.GeoDataFrame) -> gpd.GeoSeries:
+        """Compute centroids efficiently."""
+        return gdf.geometry.centroid
+
+# ============================================================================
+# GRAPH CONVERSION CORE ENGINE
+# ============================================================================
+
+class GraphConverter:
+    """Unified graph conversion engine for both homogeneous and heterogeneous graphs."""
+
+    def __init__(self, keep_geom: bool = True) -> None:
+        self.keep_geom = keep_geom
+        self.processor = GeoDataProcessor()
+
+    def gdf_to_nx(
+        self,
+        nodes: gpd.GeoDataFrame | dict[str, gpd.GeoDataFrame] | None = None,
+        edges: gpd.GeoDataFrame | dict[tuple[str, str, str], gpd.GeoDataFrame] | None = None,
+        node_id_col: str | None = None,
+        edge_id_col: str | None = None,
+    ) -> nx.Graph:
+        """Convert GeoDataFrames to NetworkX graph."""
+        # Determine graph type
+        is_hetero = isinstance(nodes, dict) or isinstance(edges, dict)
+
+        if is_hetero:
+            return self._convert_heterogeneous(nodes, edges)
+        return self._convert_homogeneous(nodes, edges, node_id_col, edge_id_col)
+
+    def nx_to_gdf(
+        self,
+        graph: nx.Graph,
+        nodes: bool = True,
+        edges: bool = True,
+    ) -> (
+        tuple[gpd.GeoDataFrame, gpd.GeoDataFrame] |
+        tuple[dict[str, gpd.GeoDataFrame], dict[tuple[str, str, str], gpd.GeoDataFrame]]
+    ):
+        """Convert NetworkX graph to GeoDataFrames."""
+        metadata = GraphMetadata.from_dict(graph.graph)
+
+        if metadata.is_hetero:
+            return self._reconstruct_heterogeneous(graph, metadata, nodes, edges)
+        return self._reconstruct_homogeneous(graph, metadata, nodes, edges)
+
+    def _convert_homogeneous(
+        self,
+        nodes: gpd.GeoDataFrame | None,
+        edges: gpd.GeoDataFrame | None,
+        _node_id_col: str | None,  # Unused but kept for interface consistency
+        _edge_id_col: str | None,  # Unused but kept for interface consistency
+    ) -> nx.Graph:
+        """Convert homogeneous GeoDataFrames to NetworkX."""
+        # Validate inputs
+        nodes = self.processor.validate_gdf(nodes, allow_empty=True)
+        edges = self.processor.validate_gdf(
+            edges, ["LineString", "MultiLineString"], allow_empty=True,
+        )
+
+        if edges is None:
+            msg = "Must provide edges GeoDataFrame"
+            raise ValueError(msg)
+
+        self.processor.ensure_crs_consistency(nodes, edges)
+
+        # Create graph and metadata
+        graph = nx.Graph()
+        metadata = GraphMetadata(crs=edges.crs, is_hetero=False)
+
+        # Add nodes
+        if nodes is not None:
+            self._add_homogeneous_nodes(graph, nodes)
+            metadata.node_geom_cols = list(nodes.select_dtypes(include=["geometry"]).columns)
+            metadata.node_index_names = nodes.index.name
+
+        # Add edges
+        self._add_homogeneous_edges(graph, edges, nodes)
+        metadata.edge_geom_cols = list(edges.select_dtypes(include=["geometry"]).columns)
+        metadata.edge_index_names = edges.index.names
+
+        # Store metadata
+        graph.graph.update(metadata.to_dict())
+        return graph
+
+    def _convert_heterogeneous(
+        self,
+        nodes_dict: dict[str, gpd.GeoDataFrame],
+        edges_dict: dict[tuple[str, str, str], gpd.GeoDataFrame],
+    ) -> nx.Graph:
+        """Convert heterogeneous GeoDataFrames to NetworkX."""
+        # Validate inputs
+        if nodes_dict:
+            for node_type, node_gdf in nodes_dict.items():
+                nodes_dict[node_type] = self.processor.validate_gdf(node_gdf,
+                                                                    allow_empty=True)
+
+        if edges_dict:
+            for edge_type, edge_gdf in edges_dict.items():
+                edges_dict[edge_type] = self.processor.validate_gdf(
+                    edge_gdf, ["LineString", "MultiLineString"],
+                    allow_empty=True,
+                )
+
+        # Create graph and metadata
+        graph = nx.Graph()
+        metadata = GraphMetadata(is_hetero=True)
+
+        if nodes_dict is not None and nodes_dict:
+            metadata.crs = next(iter(nodes_dict.values())).crs
+            metadata.node_types = list(nodes_dict.keys())
+
+        if edges_dict is not None and edges_dict:
+            if not metadata.crs:
+                metadata.crs = next(iter(edges_dict.values())).crs
+            metadata.edge_types = list(edges_dict.keys())
+
+        # Add nodes and edges
+        node_offset = self._add_heterogeneous_nodes(graph, nodes_dict, metadata)
+        self._add_heterogeneous_edges(graph, edges_dict, node_offset, metadata)
+
+        # Store metadata
+        graph.graph.update(metadata.to_dict())
+        return graph
+
+    def _add_homogeneous_nodes(self, graph: nx.Graph, nodes_gdf: gpd.GeoDataFrame) -> None:
+        """Add homogeneous nodes to graph."""
+        if nodes_gdf.empty:
+            return
+
+        centroids = self.processor.compute_centroids(nodes_gdf)
+        node_data = nodes_gdf if self.keep_geom else nodes_gdf.drop(columns="geometry")
+
+        # Handle case where node_data has no columns after dropping geometry
+        if node_data.empty or len(node_data.columns) == 0:
+            node_attrs_list = [{} for _ in range(len(nodes_gdf))]
+        else:
+            node_attrs_list = node_data.to_dict("records")
+
+        # Vectorized node creation
+        nodes_to_add = [
+            (idx, {
+                **attrs,
+                "_original_index": orig_idx,
+                "pos": (centroid.x, centroid.y),
+            })
+            for idx, (orig_idx, attrs, centroid) in enumerate(
+                zip(nodes_gdf.index, node_attrs_list, centroids, strict=False),
+            )
+        ]
+
+        graph.add_nodes_from(nodes_to_add)
+
+    def _add_homogeneous_edges(
+        self,
+        graph: nx.Graph,
+        edges_gdf: gpd.GeoDataFrame,
+        nodes_gdf: gpd.GeoDataFrame,
+    ) -> None:
+        """Add homogeneous edges to graph."""
+        if edges_gdf.empty:
+            return
+
+        if nodes_gdf is not None and not nodes_gdf.empty:
+            # Use node mapping
+            coord_to_node = {
+                node_data["pos"]: node_id
+                for node_id, node_data in graph.nodes(data=True)
+            }
+
+            start_coords = self.processor.extract_coordinates(edges_gdf, start=True)
+            end_coords = self.processor.extract_coordinates(edges_gdf, start=False)
+
+            u_nodes = start_coords.map(coord_to_node)
+            v_nodes = end_coords.map(coord_to_node)
+
+            # Filter valid edges
+            valid_mask = u_nodes.notna() & v_nodes.notna()
+            valid_edges = edges_gdf[valid_mask]
+            valid_u = u_nodes[valid_mask]
+            valid_v = v_nodes[valid_mask]
+
+            self._create_edge_list(graph, valid_u, valid_v, valid_edges, self.keep_geom)
+        else:
+            # Use coordinate tuples as node IDs
+            start_coords = self.processor.extract_coordinates(edges_gdf, start=True)
+            end_coords = self.processor.extract_coordinates(edges_gdf, start=False)
+
+            # Add unique nodes
+            all_coords = pd.concat([start_coords, end_coords]).unique()
+            nodes_to_add = [(coord, {"pos": coord}) for coord in all_coords]
+            graph.add_nodes_from(nodes_to_add)
+
+            self._create_edge_list(graph, start_coords, end_coords, edges_gdf, self.keep_geom)
+
+    def _add_heterogeneous_nodes(
+        self,
+        graph: nx.Graph,
+        nodes_dict: dict[str, gpd.GeoDataFrame],
+        metadata: "GraphMetadata",
+    ) -> int:
+        """Add heterogeneous nodes to graph."""
+        if not nodes_dict:
+            return {}
+
+        node_offset = {}
+        current_offset = 0
+
+        for node_type, node_gdf in nodes_dict.items():
+            if node_gdf.empty:
+                continue
+
+            node_offset[node_type] = current_offset
+            metadata.node_index_names[node_type] = node_gdf.index.name
+
+            centroids = self.processor.compute_centroids(node_gdf)
+            node_data = node_gdf if self.keep_geom else node_gdf.drop(columns="geometry")
+
+            nodes_to_add = [
+                (current_offset + idx, {
+                    **attrs,
+                    "node_type": node_type,
+                    "_original_index": orig_idx,
+                    "pos": (centroid.x, centroid.y),
+                })
+                for idx, (orig_idx, attrs, centroid) in enumerate(
+                    zip(node_gdf.index, node_data.to_dict("records"), centroids, strict=False),
+                )
+            ]
+
+            graph.add_nodes_from(nodes_to_add)
+            current_offset += len(node_gdf)
+
+        return node_offset
+
+    def _add_heterogeneous_edges(
+        self,
+        graph: nx.Graph,
+        edges_dict: dict[tuple[str, str, str], gpd.GeoDataFrame],
+        _node_offset: int,  # Unused but kept for interface consistency
+        metadata: "GraphMetadata",
+    ) -> None:
+        """Add heterogeneous edges to graph."""
+        if not edges_dict:
+            return
+
+        for edge_type, edge_gdf in edges_dict.items():
+            if edge_gdf.empty:
+                continue
+
+            src_type, rel_type, dst_type = edge_type
+            metadata.edge_index_names[edge_type] = edge_gdf.index.names
+
+            # Create node lookup
+            node_lookup = self._create_node_lookup(graph, [src_type, dst_type])
+
+            if not isinstance(edge_gdf.index, pd.MultiIndex) or edge_gdf.index.nlevels < 2:
+                logger.warning("Skipping edges for %s: index is not a MultiIndex", edge_type)
+                continue
+
+            # Map edge indices to node IDs
+            src_indices = edge_gdf.index.get_level_values(0)
+            dst_indices = edge_gdf.index.get_level_values(1)
+
+            u_nodes = pd.Series(src_indices.values, index=edge_gdf.index).map(node_lookup.get(src_type, {}))
+            v_nodes = pd.Series(dst_indices.values, index=edge_gdf.index).map(node_lookup.get(dst_type, {}))
+
+            valid_mask = u_nodes.notna() & v_nodes.notna()
+            if not valid_mask.all():
+                logger.warning(
+                    "Could not find nodes for %d edges of type %s",
+                    (~valid_mask).sum(), edge_type,
+                )
+
+            valid_edges = edge_gdf[valid_mask]
+            valid_u = u_nodes[valid_mask]
+            valid_v = v_nodes[valid_mask]
+
+            self._create_edge_list(graph, valid_u, valid_v, valid_edges, self.keep_geom, rel_type)
+
+    def _create_edge_list(
+        self,
+        graph: nx.Graph,
+        u_nodes: pd.Series,
+        v_nodes: pd.Series,
+        edges_gdf: gpd.GeoDataFrame,
+        keep_geom: bool,
+        edge_type: str | None = None,
+    ) -> None:
+        """Create edge list for adding to graph."""
+        attrs_df = edges_gdf if keep_geom else edges_gdf.drop(columns="geometry")
+        edge_attrs = attrs_df.to_dict("records")
+
+        edges_to_add = [
+            (u, v, {
+                **attrs,
+                "_original_edge_index": orig_idx,
+                **({"edge_type": edge_type} if edge_type else {}),
+            })
+            for u, v, orig_idx, attrs in zip(
+                u_nodes, v_nodes, edges_gdf.index, edge_attrs, strict=True,
+            )
+        ]
+
+        graph.add_edges_from(edges_to_add)
+
+    def _create_node_lookup(self, graph: nx.Graph, node_types: list[str]) -> dict[str, int]:
+        """Create lookup dictionary for heterogeneous nodes."""
+        node_lookup = {}
+        for node_id, node_data in graph.nodes(data=True):
+            node_type = node_data.get("node_type")
+            orig_idx = node_data.get("_original_index")
+
+            if node_type in node_types and orig_idx is not None:
+                if node_type not in node_lookup:
+                    node_lookup[node_type] = {}
+                node_lookup[node_type][orig_idx] = node_id
+
+        return node_lookup
+
+    def _reconstruct_homogeneous(
+        self,
+        graph: nx.Graph,
+        metadata: "GraphMetadata",
+        nodes: bool = True,
+        edges: bool = True,
+    ) -> tuple[gpd.GeoDataFrame | None, gpd.GeoDataFrame | None]:
+        """Reconstruct homogeneous GeoDataFrames from NetworkX graph."""
+        result = []
+
+        if nodes:
+            nodes_gdf = self._create_homogeneous_nodes_gdf(graph, metadata)
+            result.append(nodes_gdf)
+
+        if edges:
+            edges_gdf = self._create_homogeneous_edges_gdf(graph, metadata)
+            result.append(edges_gdf)
+
+        if len(result) == 1:
+            return result[0]
+        if len(result) == 2:
+            return tuple(result)
+        msg = "Must request at least one of nodes or edges"
+        raise ValueError(msg)
+
+    def _reconstruct_heterogeneous(
+        self,
+        graph: nx.Graph,
+        metadata: "GraphMetadata",
+        nodes: bool = True,
+        edges: bool = True,
+    ) -> tuple[dict[str, gpd.GeoDataFrame], dict[tuple[str, str, str], gpd.GeoDataFrame]]:
+        """Reconstruct heterogeneous GeoDataFrames from NetworkX graph."""
+        nodes_dict = {}
+        edges_dict = {}
+
+        if nodes:
+            nodes_dict = self._create_heterogeneous_nodes_dict(graph, metadata)
+
+        if edges:
+            edges_dict = self._create_heterogeneous_edges_dict(graph, metadata)
+
+        return nodes_dict, edges_dict
+
+    def _create_homogeneous_nodes_gdf(
+        self,
+        graph: nx.Graph,
+        metadata: "GraphMetadata",
+    ) -> gpd.GeoDataFrame:
+        """Create homogeneous nodes GeoDataFrame."""
+        if graph.number_of_nodes() == 0:
+            return gpd.GeoDataFrame(columns=["geometry"], crs=metadata.crs)
+
+        node_data = dict(graph.nodes(data=True))
+
+        # Extract original indices and create records
+        original_indices = [attrs.get("_original_index", nid) for nid, attrs in node_data.items()]
+
+        records = [
+            {
+                **{k: v for k, v in attrs.items() if k not in ["pos", "_original_index"]},
+                "geometry": attrs.get("geometry"),
+            }
+            for nid, attrs in node_data.items()
+        ]
+
+        gdf = gpd.GeoDataFrame(records, index=original_indices, crs=metadata.crs)
+
+        # Restore index name
+        if metadata.is_hetero:
+            # For heterogeneous graphs, node_index_names is a dict
+            index_name = metadata.node_index_names.get("homogeneous")
+        else:
+            # For homogeneous graphs, node_index_names is stored directly
+            index_name = metadata.node_index_names
+        if index_name:
+            gdf.index.name = index_name
+
+        # Convert geometry columns
+        for col in metadata.node_geom_cols:
+            if col in gdf.columns:
+                gdf[col] = gpd.GeoSeries(gdf[col], crs=metadata.crs)
+
+        return gdf
+
+    def _create_homogeneous_edges_gdf(
+        self,
+        graph: nx.Graph,
+        metadata: "GraphMetadata",
+    ) -> gpd.GeoDataFrame:
+        """Create homogeneous edges GeoDataFrame."""
+        if graph.number_of_edges() == 0:
+            return gpd.GeoDataFrame(columns=["geometry"], crs=metadata.crs)
+
+        edge_data = list(graph.edges(data=True))
+
+        # Extract original indices and create records
+        original_indices = [attrs.get("_original_edge_index", (u, v)) for u, v, attrs in edge_data]
+
+        records = [
+            {
+                **{k: v for k, v in attrs.items() if k != "_original_edge_index"},
+                "geometry": attrs.get("geometry"),
+            }
+            for u, v, attrs in edge_data
+        ]
+
+        # Handle MultiIndex
+        if original_indices and isinstance(original_indices[0], tuple):
+            index = pd.MultiIndex.from_tuples(original_indices)
+        else:
+            index = original_indices
+
+        gdf = gpd.GeoDataFrame(records, index=index, crs=metadata.crs)
+
+        # Restore index names
+        if metadata.is_hetero:
+            # For heterogeneous graphs, edge_index_names is a dict
+            index_names = metadata.edge_index_names.get("homogeneous")
+        else:
+            # For homogeneous graphs, edge_index_names is stored directly
+            index_names = metadata.edge_index_names
+        if index_names and hasattr(gdf.index, "names"):
+            gdf.index.names = index_names
+        elif index_names and not hasattr(gdf.index, "names") and len(index_names) == 1:
+            # Handle single index name for non-MultiIndex
+            gdf.index.name = index_names[0]
+
+        # Convert geometry columns
+        for col in metadata.edge_geom_cols:
+            if col in gdf.columns:
+                gdf[col] = gpd.GeoSeries(gdf[col], crs=metadata.crs)
+
+        return gdf
+
+    def _create_heterogeneous_nodes_dict(
+        self,
+        graph: nx.Graph,
+        metadata: "GraphMetadata",
+    ) -> dict[str, gpd.GeoDataFrame]:
+        """Create heterogeneous nodes dictionary."""
+        nodes_dict = {}
+
+        for node_type in metadata.node_types:
+            type_nodes = [
+                (n, d) for n, d in graph.nodes(data=True)
+                if d.get("node_type") == node_type
+            ]
+
+            if not type_nodes:
+                nodes_dict[node_type] = gpd.GeoDataFrame(columns=["geometry"], crs=metadata.crs)
+                continue
+
+            node_ids, attrs_list = zip(*type_nodes, strict=False)
+            indices = [attrs.get("_original_index") for attrs in attrs_list]
+
+            records = [
+                {
+                    **{k: v for k, v in attrs.items()
+                      if k not in ["pos", "node_type", "_original_index"]},
+                    "geometry": attrs.get("geometry"),
+                }
+                for attrs in attrs_list
+            ]
+
+            gdf = gpd.GeoDataFrame(records, geometry="geometry", index=indices, crs=metadata.crs)
+
+            # Restore index name
+            index_name = metadata.node_index_names.get(node_type)
+            if index_name:
+                gdf.index.name = index_name
+
+            nodes_dict[node_type] = gdf
+
+        return nodes_dict
+
+    def _create_heterogeneous_edges_dict(
+        self,
+        graph: nx.Graph,
+        metadata: "GraphMetadata",
+    ) -> dict[tuple[str, str, str], gpd.GeoDataFrame]:
+        """Create heterogeneous edges dictionary."""
+        edges_dict = {}
+
+        for edge_type in metadata.edge_types:
+            src_type, rel_type, dst_type = edge_type
+
+            type_edges = [
+                (u, v, d) for u, v, d in graph.edges(data=True)
+                if d.get("edge_type") == rel_type
+            ]
+
+            if not type_edges:
+                edges_dict[edge_type] = gpd.GeoDataFrame(columns=["geometry"], crs=metadata.crs)
+                continue
+
+            u_nodes, v_nodes, attrs_list = zip(*type_edges, strict=False)
+            original_indices = [attrs.get("_original_edge_index") for attrs in attrs_list]
+
+            records = [
+                {
+                    **{k: v for k, v in attrs.items() if k not in ["edge_type", "_original_edge_index"]},
+                    "geometry": attrs.get("geometry"),
+                }
+                for u, v, attrs in type_edges
+            ]
+
+            # Handle MultiIndex
+            index = None
+            if original_indices and all(
+                isinstance(i, tuple) for i in original_indices if i is not None
+            ):
+                index = pd.MultiIndex.from_tuples(original_indices)
+            else:
+                index = original_indices
+
+            gdf = gpd.GeoDataFrame(records, geometry="geometry", index=index, crs=metadata.crs)
+
+            # Restore index names
+            index_names = metadata.edge_index_names.get(edge_type)
+            if index_names and hasattr(gdf.index, "names"):
+                gdf.index.names = index_names
+
+            edges_dict[edge_type] = gdf
+
+        return edges_dict
 
 # ============================================================================
 # TESSELLATION FUNCTIONS
 # ============================================================================
-
 
 def create_tessellation(
     geometry: gpd.GeoDataFrame | gpd.GeoSeries,
@@ -37,47 +689,76 @@ def create_tessellation(
     segment: float = 0.5,
     threshold: float = 0.05,
     n_jobs: int = -1,
-    **kwargs: Any) -> gpd.GeoDataFrame:  # noqa: ANN401
-    """
-    Create tessellations from the given geometries.
+    **kwargs: Any,  # noqa: ANN401  # Arguments passed to underlying tessellation functions
+) -> gpd.GeoDataFrame:
+    """Create tessellations from given geometries, with optional barriers.
 
-    If primary_barriers are provided, enclosed tessellations are created.
-    If not, morphological tessellations are created.
-    For more details, see momepy.enclosed_tessellation and momepy.morphological_tessellation.
+    This function generates either morphological or enclosed tessellations based on
+    the input geometries. If `primary_barriers` are provided, it creates an
+    enclosed tessellation; otherwise, it generates a morphological tessellation.
 
     Parameters
     ----------
-    geometry : Union[geopandas.GeoDataFrame, geopandas.GeoSeries]
-        Input geometries to create a tessellation for. Should contain the geometries to tessellate.
-    primary_barriers : Optional[Union[gpd.GeoDataFrame, gpd.GeoSeries]], default=None
-        Optional GeoDataFrame or GeoSeries containing barriers to use for enclosed tessellation.
-        If provided, the function will create enclosed tessellation using these barriers.
-        If None, morphological tessellation will be created using the input geometries.
-    shrink : float, default=0.4
-        Distance for negative buffer of tessellations. By default, 0.4.
-        Used for both momepy.enclosed_tessellation and momepy.morphological_tessellation.
-    segment : float, default=0.5
-        Maximum distance between points for tessellations. By default, 0.5.
-        Used for both momepy.enclosed_tessellation and momepy.morphological_tessellation.
-    threshold : float, default=0.05
-        Minimum threshold for a building to be considered within an enclosure. By default, 0.05.
-        Used for both momepy.enclosed_tessellation.
-    n_jobs : int, default=-1
-        Number of parallel jobs to run. By default, -1 (use all available cores).
-        Used for both momepy.enclosed_tessellation.
+    geometry : gpd.GeoDataFrame or gpd.GeoSeries
+        The geometries (typically building footprints) to tessellate around.
+    primary_barriers : gpd.GeoDataFrame or gpd.GeoSeries, optional
+        Geometries (typically road network) to use as barriers for enclosed
+        tessellation. If provided, `momepy.enclosed_tessellation` is used.
+        Default is None.
+    shrink : float, default 0.4
+        The distance to shrink the geometry for the skeleton endpoint generation.
+        Passed to `momepy.morphological_tessellation` or `momepy.enclosed_tessellation`.
+    segment : float, default 0.5
+        The segment length for discretizing the geometry. Passed to
+        `momepy.morphological_tessellation` or `momepy.enclosed_tessellation`.
+    threshold : float, default 0.05
+        The threshold for snapping skeleton endpoints to the boundary. Only used
+        for enclosed tessellation.
+    n_jobs : int, default -1
+        The number of jobs to use for parallel processing. -1 means using all
+        available processors. Only used for enclosed tessellation.
     **kwargs : Any
-        Additional keyword arguments to pass to momepy.enclosed_tessellation.
-        These can include parameters specific to the tessellation method used.
+        Additional keyword arguments passed to the underlying `momepy`
+        tessellation function.
 
     Returns
     -------
-    geopandas.GeoDataFrame
-        GeoDataFrame containing the tessellation polygons.
-    """
-    # Create tessellation using momepy based on whether primary_barriers are provided
-    if primary_barriers is not None:
+    gpd.GeoDataFrame
+        A GeoDataFrame containing the tessellation cells as polygons. Each cell
+        has a unique `tess_id`.
 
-        # Create enclosures for enclosed tessellation
+    Raises
+    ------
+    ValueError
+        If `primary_barriers` are not provided and the geometry is in a
+        geographic CRS (e.g., EPSG:4326), as morphological tessellation
+        requires a projected CRS.
+
+    Examples
+    --------
+    >>> import geopandas as gpd
+    >>> from shapely.geometry import Polygon
+    >>> # Create some building footprints
+    >>> buildings = gpd.GeoDataFrame(
+    ...     geometry=[Polygon([(0, 0), (1, 0), (1, 1), (0, 1)]),
+    ...               Polygon([(2, 2), (3, 2), (3, 3), (2, 3)])],
+    ...     crs="EPSG:32633"
+    ... )
+    >>> # Generate morphological tessellation
+    >>> tessellation = create_tessellation(buildings)
+    >>> print(tessellation.head())
+
+    >>> # Generate enclosed tessellation with roads as barriers
+    >>> from shapely.geometry import LineString
+    >>> roads = gpd.GeoDataFrame(
+    ...     geometry=[LineString([(0, -1), (3, -1)]), LineString([(1.5, -1), (1.5, 4)])],
+    ...     crs="EPSG:32633"
+    ... )
+    >>> enclosed_tess = create_tessellation(buildings, primary_barriers=roads)
+    >>> print(enclosed_tess.head())
+    """
+    if primary_barriers is not None:
+        # Enclosed tessellation
         enclosures = momepy.enclosures(
             primary_barriers=primary_barriers,
             limit=None,
@@ -98,383 +779,681 @@ def create_tessellation(
             )
         except (ValueError, TypeError) as e:
             if "No objects to concatenate" in str(e) or "incorrect geometry type" in str(e):
-                # Return empty tessellation when momepy can't create valid tessellations
-                return gpd.GeoDataFrame(columns=["geometry"], geometry="geometry", crs=geometry.crs)
+                return gpd.GeoDataFrame(
+                    columns=["geometry"], geometry="geometry", crs=geometry.crs,
+                )
             raise
 
-        # Apply ID handling for enclosed tessellation
         tessellation["tess_id"] = [
             f"{i}_{j}"
             for i, j in zip(tessellation["enclosure_index"], tessellation.index, strict=False)
         ]
         tessellation = tessellation.reset_index(drop=True)
     else:
-        # Disallow geographic CRS
+        # Morphological tessellation
         if hasattr(geometry, "crs") and geometry.crs == "EPSG:4326":
             msg = "Geometry is in a geographic CRS"
             raise ValueError(msg)
-        # Create morphological tessellation
+
         try:
             tessellation = momepy.morphological_tessellation(
                 geometry=geometry, clip="bounding_box", shrink=shrink, segment=segment,
             )
         except (ValueError, TypeError) as e:
             if "No objects to concatenate" in str(e) or "incorrect geometry type" in str(e):
-                # Return empty tessellation when momepy can't create valid tessellations
-                return gpd.GeoDataFrame(columns=["geometry"], geometry="geometry", crs=geometry.crs)
+                return gpd.GeoDataFrame(
+                    columns=["geometry"], geometry="geometry", crs=geometry.crs,
+                )
             raise
+
         tessellation["tess_id"] = tessellation.index
 
     return tessellation
 
+# ============================================================================
+# GRAPH DISTANCE AND FILTERING FUNCTIONS
+# ============================================================================
+
+class GraphAnalyzer:
+    """Unified graph analysis operations."""
+
+    def __init__(self) -> None:
+        self.processor = GeoDataProcessor()
+        self.converter = GraphConverter()
+
+    def filter_graph_by_distance(
+        self,
+        graph: gpd.GeoDataFrame | nx.Graph,
+        center_point: Point | gpd.GeoSeries | gpd.GeoDataFrame,
+        distance: float,
+        edge_attr: str = "length",
+        node_id_col: str | None = None,
+    ) -> gpd.GeoDataFrame | nx.Graph:
+        """Extract a filtered graph containing only elements within a given shortest-path distance."""
+        is_graph_input = isinstance(graph, nx.Graph)
+
+        # Convert to NetworkX if needed
+        if is_graph_input:
+            nx_graph = graph
+            original_crs = nx_graph.graph.get("crs")
+        else:
+            nx_graph = self.converter.gdf_to_nx(edges=graph)
+            original_crs = graph.crs if hasattr(graph, "crs") else None
+
+        # Extract node positions
+        pos_dict = self._extract_node_positions(nx_graph)
+        if not pos_dict:
+            return self._create_empty_result(is_graph_input, original_crs)
+
+        # Create nodes GeoDataFrame for distance calculations
+        node_id_name = node_id_col or "node_id"
+        nodes_gdf = self._create_nodes_gdf(pos_dict, node_id_name, original_crs)
+
+        # Normalize center points
+        center_points = self._normalize_center_points(center_point)
+
+        # Compute nodes within distance
+        nodes_within_distance = self._compute_nodes_within_distance(
+            nx_graph, center_points, nodes_gdf, distance, edge_attr, node_id_name,
+        )
+
+        if not nodes_within_distance:
+            return self._create_empty_result(is_graph_input, original_crs)
+
+        # Create subgraph
+        subgraph = nx_graph.subgraph(nodes_within_distance)
+
+        if is_graph_input:
+            return subgraph
+
+        # Convert back to GeoDataFrame
+        return self.converter.nx_to_gdf(subgraph, nodes=False, edges=True)
+
+    def create_isochrone(
+        self,
+        graph: gpd.GeoDataFrame | nx.Graph,
+        center_point: Point | gpd.GeoSeries | gpd.GeoDataFrame,
+        distance: float,
+        edge_attr: str = "length",
+    ) -> gpd.GeoDataFrame:
+        """Generate isochrone polygon(s) as convex hull of reachable areas within distance."""
+        reachable = self.filter_graph_by_distance(graph, center_point, distance, edge_attr)
+
+        # Convert to GeoDataFrame if NetworkX
+        if isinstance(reachable, nx.Graph):
+            reachable = self.converter.nx_to_gdf(reachable, nodes=False, edges=True)
+
+        if reachable.empty:
+            return gpd.GeoDataFrame(geometry=[], crs=getattr(reachable, "crs", None))
+
+        # Create convex hull
+        union_geom = reachable.unary_union
+        hull = union_geom.convex_hull
+        return gpd.GeoDataFrame(geometry=[hull], crs=reachable.crs)
+
+    def _extract_node_positions(self, graph: nx.Graph) -> dict:
+        """Extract node positions from a NetworkX graph."""
+        pos_dict = nx.get_node_attributes(graph, "pos")
+
+        if pos_dict:
+            return pos_dict
+
+        # Handle coordinate tuple nodes
+        nodes_list = list(graph.nodes())
+        if not nodes_list:
+            return {}
+
+        first_node = nodes_list[0]
+        if isinstance(first_node, tuple) and len(first_node) == 2:
+            return {node: node for node in nodes_list}
+
+        # Check for x,y attributes
+        node_attrs = dict(graph.nodes(data=True))
+        if node_attrs and all("x" in attrs and "y" in attrs for attrs in node_attrs.values()):
+            return {node: (attrs["x"], attrs["y"]) for node, attrs in node_attrs.items()}
+
+        return {}
+
+    def _create_nodes_gdf(
+        self,
+        pos_dict: dict,
+        node_id_col: str,
+        crs: str | int | None,
+    ) -> gpd.GeoDataFrame:
+        """Create a GeoDataFrame from node positions."""
+        if not pos_dict:
+            return gpd.GeoDataFrame(columns=[node_id_col, "geometry"], crs=crs)
+
+        node_ids, coordinates = zip(*pos_dict.items(), strict=False)
+        geometries = [Point(coord) for coord in coordinates]
+
+        return gpd.GeoDataFrame(
+            {node_id_col: node_ids, "geometry": geometries}, crs=crs,
+        )
+
+    def _normalize_center_points(
+        self, center_point: Point | gpd.GeoSeries | gpd.GeoDataFrame,
+    ) -> list[Point] | gpd.GeoSeries:
+        """Normalize center point input to a consistent format."""
+        if isinstance(center_point, gpd.GeoDataFrame):
+            return center_point.geometry
+        if isinstance(center_point, gpd.GeoSeries):
+            return center_point
+        return [center_point]
+
+    def _compute_nodes_within_distance(
+        self,
+        graph: nx.Graph,
+        center_points: list[Point] | gpd.GeoSeries,
+        nodes_gdf: gpd.GeoDataFrame,
+        distance: float,
+        edge_attr: str,
+        node_id_name: str,
+    ) -> set:
+        """Compute all nodes within distance from any center point."""
+        center_points_list = (
+            center_points.tolist() if hasattr(center_points, "tolist") else list(center_points)
+        )
+
+        # Get nearest nodes for all center points
+        source_nodes = []
+        for point in center_points_list:
+            nearest_node = self._get_nearest_node(point, nodes_gdf, node_id_name)
+            source_nodes.append(nearest_node)
+
+        if not source_nodes:
+            return set()
+
+        try:
+            # Compute single-source shortest paths from all sources
+            all_reachable = set()
+            for source in source_nodes:
+                lengths = nx.single_source_dijkstra_path_length(
+                    graph, source, cutoff=distance, weight=edge_attr,
+                )
+                all_reachable.update(lengths.keys())
+            return all_reachable
+
+        except (nx.NetworkXNoPath, nx.NodeNotFound):
+            logger.warning("Could not compute distances from center points")
+            return set()
+
+    def _get_nearest_node(
+        self, point: Point | gpd.GeoSeries, nodes_gdf: gpd.GeoDataFrame, node_id: str,
+    ) -> str | int:
+        """Find the nearest node in a GeoDataFrame."""
+        if isinstance(point, gpd.GeoSeries):
+            point = point.iloc[0]
+        nearest_idx = nodes_gdf.distance(point).idxmin()
+        return nodes_gdf.loc[nearest_idx, node_id]
+
+    def _create_empty_result(
+        self,
+        is_graph_input: bool,
+        original_crs: str | int | None,
+    ) -> gpd.GeoDataFrame | nx.Graph:
+        """Create an empty result in the appropriate format."""
+        if is_graph_input:
+            return nx.Graph()
+        return gpd.GeoDataFrame(geometry=[], crs=original_crs)
 
 # ============================================================================
 # DUAL GRAPH FUNCTIONS
 # ============================================================================
 
-def dual_graph(gdf: gpd.GeoDataFrame,
-               keep_original_geom: bool = False) -> tuple[gpd.GeoDataFrame, gpd.GeoDataFrame]:
-    """
-    Convert a GeoDataFrame of LineStrings to a graph representation with nodes and edges.
+def dual_graph(
+    gdf: tuple[gpd.GeoDataFrame, gpd.GeoDataFrame],
+    edge_id_col: str | None = None,
+    keep_original_geom: bool = False,
+) -> tuple[gpd.GeoDataFrame, gpd.GeoDataFrame]:
+    """Convert a primal graph represented by nodes and edges GeoDataFrames to its dual graph.
 
-    Based on momepy's dual graph approach. Nodes represent original LineStrings (with Point
-    geometry at centroids), and edges represent connectivity from momepy.
-
-    The process is:
-    1. Keep the original index of `gdf` in a dedicated column.
-    2. Create a dual graph (NetworkX graph) using momepy.gdf_to_nx.
-    3. Convert the NetworkX graph back to GeoDataFrames (nodes_gdf, edges_gdf)
-       using city2graph.nx_to_gdf.
-    4. Establish a mapping from temporary momepy-generated node IDs to the original IDs.
-    5. Set the index of the final nodes_gdf to be the original IDs.
-    6. Convert the MultiIndex of the final edges_gdf to use original IDs.
-    7. If `keep_original_geom` is True, add the original geometry of `gdf` to `nodes_gdf`
-       as a new column named "original_geometry".
+    In the dual graph, original edges become nodes and original nodes become edges connecting
+    adjacent original edges.
 
     Parameters
     ----------
-    gdf : geopandas.GeoDataFrame
-        GeoDataFrame containing LineString geometries. Must have a CRS.
-    keep_original_geom : bool, default=False
-        If True, the original geometry of `gdf` is preserved in the output `nodes_gdf`
-        as a GeoSeries column named "original_geometry".
+    gdf : tuple[gpd.GeoDataFrame, gpd.GeoDataFrame]
+        A tuple containing nodes and edges GeoDataFrames of the primal graph.
+    edge_id_col : str, optional
+        The name of the column in the edges GeoDataFrame to be used as unique identifiers
+        for dual graph nodes. If None, the index of the edges GeoDataFrame is used.
+        Default is None.
+    keep_original_geom : bool, default False
+        If True, preserve the original geometry of the edges in a new column named
+        'original_geometry' in the dual nodes GeoDataFrame.
 
     Returns
     -------
-    tuple[geopandas.GeoDataFrame, geopandas.GeoDataFrame]
-        - nodes_gdf: Nodes with original identifiers as index and Point geometry.
-                     Other attributes from the input `gdf` are preserved.
-        - edges_gdf: Edges with MultiIndex of original identifiers and LineString geometry
-                     representing connections from momepy's dual graph.
+    tuple[gpd.GeoDataFrame, gpd.GeoDataFrame]
+        A tuple containing the nodes and edges of the dual graph as GeoDataFrames.
+        - Dual nodes GeoDataFrame: Nodes represent original edges. The geometry is the
+          centroid of the original edge's geometry. The index is derived from `edge_id_col`
+          or the original edge index.
+        - Dual edges GeoDataFrame: Edges represent adjacency between original edges (i.e.,
+          they shared a node in the primal graph). The geometry is a LineString connecting
+          the centroids of the two dual nodes. The index is a MultiIndex of the connected
+          dual node IDs.
+
+    Examples
+    --------
+    >>> import geopandas as gpd
+    >>> import pandas as pd
+    >>> from shapely.geometry import Point, LineString
+    >>> # Primal graph nodes
+    >>> nodes = gpd.GeoDataFrame(
+    ...     {"node_id": [0, 1, 2]},
+    ...     geometry=[Point(0, 0), Point(1, 1), Point(1, 0)],
+    ...     crs="EPSG:32633"
+    ... ).set_index("node_id")
+    >>> # Primal graph edges
+    >>> edges = gpd.GeoDataFrame(
+    ...     {"edge_id": ["a", "b"]},
+    ...     geometry=[LineString([(0, 0), (1, 1)]), LineString([(1, 1), (1, 0)])],
+    ...     crs="EPSG:32633"
+    ... ).set_index(pd.MultiIndex.from_tuples([(0, 1), (1, 2)]))
+    >>> # Convert to dual graph
+    >>> dual_nodes, dual_edges = dual_graph(
+    ...     (nodes, edges), edge_id_col="edge_id", keep_original_geom=True
+    ... )
+    >>> print(dual_nodes)
+    >>> print(dual_edges)
+                        geometry      original_geometry    mm_len
+    edge_id
+    a        LINESTRING (0 0, 1 1)  LINESTRING (0 0, 1 1)  1.414214
+    b        LINESTRING (1 1, 1 0)  LINESTRING (1 1, 1 0)  1.000000
+
+                             angle  geometry
+    from_edge_id to_edge_id
+    a            b           135.0  LINESTRING (0.5 0.5, 1 0.5)
     """
-    # Validate input GeoDataFrame
-    if not isinstance(gdf, gpd.GeoDataFrame):
-        msg = "Input `gdf` must be a GeoDataFrame."
+    processor = GeoDataProcessor()
+
+    # Validate input
+    if not (isinstance(gdf, tuple) and len(gdf) == 2):
+        msg = "Input `gdf` must be a tuple of (nodes_gdf, edges_gdf)."
         raise TypeError(msg)
 
-    # Optionally preserve original geometry
+    nodes_gdf, edges_gdf = gdf
+
+    if edges_gdf.crs is None:
+        msg = "Input edges `gdf` must have a CRS."
+        raise ValueError(msg)
+
+    # Validate geometries
+    edges_clean = processor.validate_gdf(edges_gdf, ["LineString", "MultiLineString"])
+
     if keep_original_geom:
-        gdf["original_geometry"] = gdf.geometry.copy()
-
-    # Determine a unique column name for original IDs
-    original_id_col_name = _get_original_id_col_name(gdf)
-    # Define schema for node and edge GeoDataFrames
-    node_schema_cols = [col for col in gdf.columns if col != gdf.geometry.name] + ["geometry"]
-    edge_schema_cols = ["geometry"]
-
-    # Create empty GeoDataFrames for nodes and edges
-    empty_nodes_gdf, empty_edges_gdf = _create_empty_dual_graph_gdfs(
-        gdf.crs, original_id_col_name, node_schema_cols, edge_schema_cols,
-    )
-
-    # Return empty GDFs if input is empty
-    if gdf.empty:
-        return empty_nodes_gdf, empty_edges_gdf
-
-    # Ensure input GDF has a CRS
-    if gdf.crs is None:
-        msg = "Input `gdf` must have a CRS."
-        raise ValueError(msg)
-
-    # Ensure all geometries are LineStrings
-    if not all(isinstance(geom, shapely.geometry.LineString) for geom in gdf.geometry if geom is not None):
-        msg = "All valid geometries in input `gdf` must be LineString for dual graph."
-        raise ValueError(msg)
-
-    # Prepare GDF for momepy: store original index and reset current index
-    processed_gdf = gdf.copy()
-    processed_gdf[original_id_col_name] = gdf.index
-    gdf_for_momepy = processed_gdf.reset_index(drop=True)
-
-    # Perform graph conversion using momepy and nx_to_gdf
-    _, nodes_intermediate_gdf, edges_intermediate_gdf = _perform_graph_conversion(
-        gdf_for_momepy, empty_nodes_gdf, empty_edges_gdf,
-    )
-    # If conversion failed, return empty GDFs
-    if nodes_intermediate_gdf is empty_nodes_gdf or edges_intermediate_gdf is empty_edges_gdf :
-         return empty_nodes_gdf, empty_edges_gdf # Return the specific empty ones passed
-
-    # Check if original ID column is present in intermediate nodes GDF
-    if original_id_col_name not in nodes_intermediate_gdf.columns:
-        logger.error(
-            "Column '%s' not found in intermediate nodes GDF after nx_to_gdf.", original_id_col_name,
+        edges_clean["original_geometry"] = gpd.GeoSeries(
+            edges_clean.geometry.copy(), crs=edges_clean.crs,
         )
-        return empty_nodes_gdf, empty_edges_gdf
 
-    # Create a mapping from momepy's node IDs to original IDs
-    id_map_series = nodes_intermediate_gdf[original_id_col_name]
-    # Set the index of the final nodes GDF to original IDs
-    final_nodes_gdf = nodes_intermediate_gdf.set_index(original_id_col_name, drop=True)
-    final_nodes_gdf.index.name = original_id_col_name
+    # If no edge_id_col, we'll use the index. Let's add it as a column
+    # so it's carried over as a node attribute in the dual graph.
+    preserve_index = edge_id_col is None
+    # momepy uses the index of the input GDF as node IDs in the dual graph
+    graph_nx = momepy.gdf_to_nx(edges_clean, approach="dual", multigraph=False, preserve_index=preserve_index)
 
-    # Finalize edges GDF by mapping indices and ensuring schema
-    final_edges_gdf = _finalize_edges(
-        edges_intermediate_gdf, id_map_series, original_id_col_name, gdf.crs, edge_schema_cols,
-    )
+    # Add edge attributes of geometry as "geometry" of linestrings between centroids of nodes
+    for u, v in graph_nx.edges():
+        u_geom = graph_nx.nodes[u]["geometry"]
+        v_geom = graph_nx.nodes[v]["geometry"]
+        line = LineString([u_geom.centroid, v_geom.centroid])
+        graph_nx.edges[u, v]["geometry"] = line
 
-    # Ensure consistent CRS for final GDFs
-    authoritative_crs = final_nodes_gdf.crs if final_nodes_gdf.crs is not None else gdf.crs
+    # nx_to_gdf will create dual_nodes and dual_edges.
+    # dual_nodes will have index from graph_nx.nodes, which are original edge IDs.
+    # dual_edges will have multiindex from graph_nx.edges, which are pairs of original edge IDs.
+    converter = GraphConverter()
+    dual_nodes, dual_edges = converter.nx_to_gdf(graph_nx, nodes=True, edges=True)
 
-    if final_nodes_gdf.crs is None and authoritative_crs is not None:
-        final_nodes_gdf.set_crs(authoritative_crs, inplace=True, allow_override=True)
-    if final_edges_gdf.crs is None and authoritative_crs is not None:
-        final_edges_gdf.set_crs(authoritative_crs, inplace=True, allow_override=True)
+    new_index_name = None
+    if edge_id_col:
+        if edge_id_col not in dual_nodes.columns:
+            msg = f"Column '{edge_id_col}' not found in dual nodes attributes."
+            raise ValueError(msg)
 
-    # Ensure geometry column is named "geometry"
-    if "geometry" not in final_nodes_gdf.columns and final_nodes_gdf.geometry.name is not None:
-        final_nodes_gdf = final_nodes_gdf.rename_geometry("geometry")
-    if "geometry" not in final_edges_gdf.columns and final_edges_gdf.geometry.name is not None:
-        final_edges_gdf = final_edges_gdf.rename_geometry("geometry")
+        # Create a mapping from the old index (used by momepy) to the new index values
+        id_map = dual_nodes[edge_id_col]
 
-    return final_nodes_gdf, final_edges_gdf
+        # Set the new index for the dual nodes
+        dual_nodes = dual_nodes.set_index(edge_id_col)
+        new_index_name = edge_id_col
+
+        # Remap the dual edges' MultiIndex to use the new node IDs
+        if not dual_edges.empty:
+            level_0 = dual_edges.index.get_level_values(0).map(id_map)
+            level_1 = dual_edges.index.get_level_values(1).map(id_map)
+            dual_edges.index = pd.MultiIndex.from_arrays([level_0, level_1])
+    else:
+        new_index_name = "index_position"
+        id_map = dual_nodes[new_index_name]
+        dual_nodes = dual_nodes.set_index(new_index_name)
+
+        # Remap the dual edges' MultiIndex to use the new node IDs
+        if not dual_edges.empty:
+            level_0 = dual_edges.index.get_level_values(0).map(id_map)
+            level_1 = dual_edges.index.get_level_values(1).map(id_map)
+            dual_edges.index = pd.MultiIndex.from_arrays([level_0, level_1])
+
+    # Align edge index names with the new node index name
+    if new_index_name and not dual_edges.empty:
+        dual_edges.index.names = [f"from_{new_index_name}", f"to_{new_index_name}"]
+
+    return dual_nodes, dual_edges
 
 
-def _get_original_id_col_name(gdf: gpd.GeoDataFrame) -> str:
-    """Determine a unique column name for storing original GDF index."""
-    # Use existing index name if available, otherwise default to "original_id"
-    original_id_col_name = gdf.index.name
-    if original_id_col_name is None:
-        original_id_col_name = "original_id"
+# ============================================================================
+# SEGMENTS TO GRAPH CONVERSION
+# ============================================================================
 
-    # Ensure uniqueness if the chosen name collides with an existing column
-    i = 0
-    base_name = original_id_col_name
-    while original_id_col_name in gdf.columns:
-        original_id_col_name = f"{base_name}_{i}"
-        i += 1
-    return original_id_col_name
-
-
-def _create_empty_dual_graph_gdfs(
-    crs: str | int | None,
-    original_id_col_name: str,  # Name of the ID column from the original GDF
-    node_schema_cols: list[str],  # Full schema for node GDF columns
-    edge_schema_cols: list[str],  # Schema for edge GDF columns (typically just ["geometry"])
+def segments_to_graph(
+    segments_gdf: gpd.GeoDataFrame,
 ) -> tuple[gpd.GeoDataFrame, gpd.GeoDataFrame]:
-    """Helper to create empty nodes and edges GDFs for dual_graph, compatible with its calling signature."""
-    # Prepare columns for empty_nodes_gdf
-    # Ensure "geometry" is present for the geometry column.
-    final_node_cols = list(node_schema_cols)  # Start with a copy
-    if "geometry" not in final_node_cols:
-        final_node_cols.append("geometry")
-    # Ensure uniqueness, keeping "geometry" (usually added last if not present)
-    # If node_schema_cols was empty, final_node_cols is now ["geometry"]
-    final_node_cols = list(dict.fromkeys(final_node_cols))
+    r"""Convert a GeoDataFrame of LineString segments into a graph structure.
 
-    empty_nodes_gdf = gpd.GeoDataFrame(
-        columns=final_node_cols,
-        geometry="geometry",  # The column named "geometry" will be the geometry column
-        crs=crs,
-    )
+    This function takes a GeoDataFrame of LineStrings and processes it into a
+    topologically explicit graph representation, consisting of a GeoDataFrame of
+    unique nodes (the endpoints of the lines) and a GeoDataFrame of edges.
 
-    # Prepare columns for empty_edges_gdf
-    from_col = f"from_{original_id_col_name}"
-    to_col = f"to_{original_id_col_name}"
-
-    # Start with from/to columns, then add others from edge_schema_cols
-    final_edge_cols = [from_col, to_col]
-    for col in edge_schema_cols:
-        if col not in final_edge_cols:  # Avoid duplicating from/to if they were in edge_schema_cols
-            final_edge_cols.append(col)
-
-    # Ensure "geometry" is present for the geometry column.
-    if "geometry" not in final_edge_cols:
-        final_edge_cols.append("geometry")
-    # Ensure uniqueness
-    # If edge_schema_cols was ["geometry"], final_edge_cols is [from, to, "geometry"]
-    final_edge_cols = list(dict.fromkeys(final_edge_cols))
-
-    empty_edges_gdf = gpd.GeoDataFrame(
-        columns=final_edge_cols,
-        geometry="geometry",  # The column named "geometry" will be the geometry column
-        crs=crs,
-    )
-    return empty_nodes_gdf, empty_edges_gdf
-
-
-def _perform_graph_conversion(
-    gdf_for_momepy: gpd.GeoDataFrame,
-    empty_nodes_gdf: gpd.GeoDataFrame, # For returning on error
-    empty_edges_gdf: gpd.GeoDataFrame, # For returning on error
-) -> tuple[nx.Graph | None, gpd.GeoDataFrame | None, gpd.GeoDataFrame | None]:
-    """Call momepy.gdf_to_nx and city2graph.nx_to_gdf, handling primary errors."""
-    try:
-        # Convert GeoDataFrame to NetworkX graph using momepy's dual approach
-        graph_nx = momepy.gdf_to_nx(gdf_for_momepy, approach="dual", preserve_index=True)
-    except Exception: # Broad exception due to external library
-        logger.exception("Error during momepy.gdf_to_nx")
-        # Return None for graph and the provided empty GDFs on error
-        return None, empty_nodes_gdf, empty_edges_gdf
-
-    # Check if momepy produced an empty graph from non-empty input
-    if graph_nx.number_of_nodes() == 0 and not gdf_for_momepy.empty:
-        logger.warning("momepy.gdf_to_nx resulted in an empty graph from non-empty input.")
-        # Return None for graph and the provided empty GDFs
-        return None, empty_nodes_gdf, empty_edges_gdf
-
-    # Convert NetworkX graph back to GeoDataFrames for nodes and edges
-    nodes_intermediate_gdf, edges_intermediate_gdf = nx_to_gdf(graph_nx, nodes=True, edges=True)
-
-    # Check if nx_to_gdf resulted in empty nodes GDF from a non-empty graph
-    if nodes_intermediate_gdf.empty and graph_nx.number_of_nodes() > 0:
-        logger.warning("nx_to_gdf resulted in empty nodes_gdf from a non-empty graph.")
-        # Return the graph (for potential partial use) and the provided empty GDFs
-        return graph_nx, empty_nodes_gdf, empty_edges_gdf
-
-    return graph_nx, nodes_intermediate_gdf, edges_intermediate_gdf
-
-
-def _finalize_edges(
-    edges_intermediate_gdf: gpd.GeoDataFrame,
-    id_map_series: pd.Series,
-    original_id_col_name: str,
-    fallback_crs: Any,
-    edge_schema_cols: list[str],
-) -> gpd.GeoDataFrame:
-    """Map edge indices to original IDs and finalize the edges GeoDataFrame."""
-    # Process if intermediate edges GDF is not empty
-    if not edges_intermediate_gdf.empty:
-        # Map 'u' and 'v' components of the edge index using the id_map_series
-        u_original = edges_intermediate_gdf.index.get_level_values(0).map(id_map_series)
-        v_original = edges_intermediate_gdf.index.get_level_values(1).map(id_map_series)
-
-        # Create a mask for valid edges (where both u and v were successfully mapped)
-        valid_edges_mask = ~u_original.isna() & ~v_original.isna()
-        # If some edges are invalid, log a warning and filter them out
-        if not valid_edges_mask.all():
-            num_invalid = len(valid_edges_mask) - valid_edges_mask.sum()
-            logger.warning(
-                "Removing %s edges due to ID mapping issues. "
-                "This can happen if graph nodes were removed or altered unexpectedly.",
-                num_invalid,
-            )
-            u_original = u_original[valid_edges_mask]
-            v_original = v_original[valid_edges_mask]
-            edges_intermediate_gdf = edges_intermediate_gdf[valid_edges_mask]
-
-        # Create a copy of the (potentially filtered) intermediate edges GDF
-        final_edges_gdf = edges_intermediate_gdf.copy()
-        # If there are any valid edges left
-        if not final_edges_gdf.empty:
-            # Set the MultiIndex of the final edges GDF using the mapped original IDs
-            final_edges_gdf.index = pd.MultiIndex.from_arrays(
-                [u_original, v_original],
-                names=(f"{original_id_col_name}_u", f"{original_id_col_name}_v"),
-            )
-            return final_edges_gdf
-        # If all edges became invalid, return an empty edges GDF with correct schema
-        return _create_empty_dual_graph_gdfs(
-            fallback_crs, original_id_col_name, [], edge_schema_cols,
-        )[1]
-    # If intermediate edges GDF was already empty, return an empty edges GDF
-    return _create_empty_dual_graph_gdfs(
-        fallback_crs, original_id_col_name, [], edge_schema_cols,
-    )[1]
-
-
-# ============================================================================
-# GRAPH FILTERING FUNCTIONS
-# ============================================================================
-
-
-def filter_graph_by_distance(graph: gpd.GeoDataFrame | nx.Graph,
-                             center_point: Point | gpd.GeoSeries | gpd.GeoDataFrame,
-                             distance: float,
-                             edge_attr: str = "length",
-                             node_id_col: str | None = None) -> gpd.GeoDataFrame | nx.Graph:
-    """
-    Extract a filtered graph containing only elements within a given shortest-path distance.
-
-    Filters graph elements based on distance from specified center point(s).
+    The resulting nodes GeoDataFrame contains unique points representing the start
+    and end points of the input line segments. The edges GeoDataFrame is a copy
+    of the input, but with a new MultiIndex (`from_node_id`, `to_node_id`) that
+    references the IDs in the new nodes GeoDataFrame.
 
     Parameters
     ----------
-    graph : Union[gpd.GeoDataFrame, nx.Graph]
-        Input graph data as either a GeoDataFrame of edges or a NetworkX graph.
-    center_point : Union[Point, gpd.GeoSeries, gpd.GeoDataFrame]
-        Center point(s) for distance calculation.
-        Can be a single Point, GeoSeries of points, or GeoDataFrame with point geometries.
-    distance : float
-        Maximum shortest-path distance from any center node.
-    edge_attr : str, default="length"
-        Edge attribute to use as weight for distance calculation.
-    node_id_col : Optional[str], default=None
-        Column name in nodes GeoDataFrame to use as node identifier.
-        If None, will use auto-generated node IDs.
+    segments_gdf : gpd.GeoDataFrame
+        A GeoDataFrame where each row represents a line segment, and the
+        'geometry' column contains LineString objects.
 
     Returns
     -------
-    Union[gpd.GeoDataFrame, nx.Graph]
-        Filtered graph containing only elements within distance of any center point.
-        Returns the same type as the input (either GeoDataFrame or NetworkX graph).
+    tuple[gpd.GeoDataFrame, gpd.GeoDataFrame]
+        A tuple containing two GeoDataFrames:
+        - nodes_gdf: A GeoDataFrame of unique nodes (Points), indexed by `node_id`.
+        - edges_gdf: A GeoDataFrame of edges (LineStrings), with a MultiIndex
+          mapping to the `node_id` in `nodes_gdf`.
+
+    Examples
+    --------
+    >>> import geopandas as gpd
+    >>> from shapely.geometry import LineString
+    >>> # Create a GeoDataFrame of line segments
+    >>> segments = gpd.GeoDataFrame(
+    ...     {"road_name": ["A", "B"]},
+    ...     geometry=[LineString([(0, 0), (1, 1)]), LineString([(1, 1), (1, 0)])],
+    ...     crs="EPSG:32633"
+    ... )
+    >>> # Convert to graph representation
+    >>> nodes_gdf, edges_gdf = segments_to_graph(segments)
+    >>> print(nodes_gdf)
+    >>> print(edges_gdf)
+    node_id  geometry
+    0        POINT (0 0)
+    1        POINT (1 1)
+    2        POINT (1 0)
+                                    road_name   geometry
+    from_node_id to_node_id
+    0            1                  A           LINESTRING (0 0, 1 1)
+    1            2                  B           LINESTRING (1 1, 1 0)
     """
-    is_graph_input = isinstance(graph, nx.Graph)
+    processor = GeoDataProcessor()
 
-    # Convert input to graph and preserve CRS - validation is done internally
-    if is_graph_input:
-        graph = _validate_nx(graph)
-        original_crs = graph.graph.get("crs")
-    else:
-        # Convert segments to graph representation, which creates nodes and a MultiIndex on edges
-        nodes, edges = segments_to_graph(graph)
-        graph = gdf_to_nx(nodes=nodes, edges=edges)
-        original_crs = graph.graph["crs"]
+    # Validate input
+    segments_clean = processor.validate_gdf(segments_gdf, ["LineString"])
 
-    # Extract node positions or return empty result if not available
-    pos_dict = _extract_node_positions(graph)
-    if not pos_dict:
-        return _create_empty_result(is_graph_input, original_crs)
+    if segments_clean.empty:
+        empty_nodes = gpd.GeoDataFrame(columns=["geometry"], crs=segments_gdf.crs)
+        empty_edges = gpd.GeoDataFrame(columns=["geometry"], crs=segments_gdf.crs)
+        return empty_nodes, empty_edges
+
+    # Extract coordinates
+    start_coords = processor.extract_coordinates(segments_clean, start=True)
+    end_coords = processor.extract_coordinates(segments_clean, start=False)
+
+    # Create unique nodes
+    all_coords = pd.concat([start_coords, end_coords]).drop_duplicates()
+    coord_to_id = {coord: i for i, coord in enumerate(all_coords)}
 
     # Create nodes GeoDataFrame
-    node_id_name = node_id_col or "node_id"
-    nodes_gdf = _create_nodes_gdf(pos_dict, node_id_name, original_crs)
+    nodes_gdf = gpd.GeoDataFrame(
+        {
+            "node_id": range(len(all_coords)),
+            "geometry": [Point(coord) for coord in all_coords],
+        },
+        crs=segments_clean.crs,
+    ).set_index("node_id", drop=True)
 
-    # Normalize center points
-    center_points = _normalize_center_points(center_point)
+    # Create edges with MultiIndex
+    from_ids = start_coords.map(coord_to_id)
+    to_ids = end_coords.map(coord_to_id)
 
-    # Compute nodes within distance
-    nodes_within_distance = _compute_nodes_within_distance(
-        graph, center_points, nodes_gdf, distance, edge_attr, node_id_name,
+    edges_gdf = segments_clean.copy()
+    edges_gdf.index = pd.MultiIndex.from_arrays(
+        [from_ids, to_ids], names=["from_node_id", "to_node_id"],
     )
 
-    # Return subgraph or empty result
-    if not nodes_within_distance:
-        return _create_empty_result(is_graph_input, original_crs)
+    return nodes_gdf, edges_gdf
 
-    subgraph = graph.subgraph(nodes_within_distance)
+# ============================================================================
+# PUBLIC API FUNCTIONS
+# ============================================================================
 
-    if is_graph_input:
-        return subgraph
+def gdf_to_nx(
+    nodes: gpd.GeoDataFrame | dict[str, gpd.GeoDataFrame] | None = None,
+    edges: gpd.GeoDataFrame | dict[tuple[str, str, str], gpd.GeoDataFrame] | None = None,
+    node_id_col: str | dict[str, str] | None = None,
+    edge_id_col: str | dict[tuple[str, str, str], str] | None = None,
+    keep_geom: bool = True,
+) -> nx.Graph:
+    """Convert GeoDataFrames of nodes and edges to a NetworkX graph.
 
-    # Convert back to GeoDataFrame
-    filtered_gdf = nx_to_gdf(subgraph, nodes=False, edges=True)
-    if not isinstance(filtered_gdf.geometry, gpd.GeoSeries):
-        filtered_gdf = gpd.GeoDataFrame(
-            filtered_gdf, geometry="geometry", crs=original_crs,
-        )
+    This function provides a high-level interface to convert geospatial data,
+    represented as GeoDataFrames, into a NetworkX graph. It supports both
+    homogeneous and heterogeneous graphs.
 
-    return filtered_gdf
+    For homogeneous graphs, provide a single GeoDataFrame for nodes and edges.
+    For heterogeneous graphs, provide dictionaries mapping type names to
+    GeoDataFrames.
 
+    Parameters
+    ----------
+    nodes : gpd.GeoDataFrame or dict[str, gpd.GeoDataFrame], optional
+        Node data. For homogeneous graphs, a single GeoDataFrame. For
+        heterogeneous graphs, a dictionary mapping node type names to
+        GeoDataFrames. Node IDs are taken from the GeoDataFrame index.
+    edges : gpd.GeoDataFrame or dict, optional
+        Edge data. For homogeneous graphs, a single GeoDataFrame. For
+        heterogeneous graphs, a dictionary mapping edge type tuples
+        (source_type, relation_type, target_type) to GeoDataFrames.
+        Edge relationships are defined by a MultiIndex on the edge
+        GeoDataFrame (source ID, target ID).
+    node_id_col : str or dict, optional
+        The name of the column to be used as the node identifier. This is
+        currently not used as the index is preferred. Kept for API consistency.
+    edge_id_col : str or dict, optional
+        The name of the column to be used as the edge identifier. This is
+        currently not used. Kept for API consistency.
+    keep_geom : bool, default True
+        If True, the geometry of the nodes and edges GeoDataFrames will be
+        preserved as attributes in the NetworkX graph.
+
+    Returns
+    -------
+    nx.Graph
+        A NetworkX graph object representing the spatial network. Graph-level
+        metadata, such as CRS and heterogeneity information, is stored in
+        `graph.graph`.
+
+    Examples
+    --------
+    >>> # Homogeneous graph
+    >>> import geopandas as gpd
+    >>> import pandas as pd
+    >>> from shapely.geometry import Point, LineString
+    >>> nodes_gdf = gpd.GeoDataFrame(
+    ...     geometry=[Point(0, 0), Point(1, 1)],
+    ...     index=pd.Index([10, 20], name="node_id")
+    ... )
+    >>> edges_gdf = gpd.GeoDataFrame(
+    ...     {"length": [1.414]},
+    ...     geometry=[LineString([(0, 0), (1, 1)])],
+    ...     index=pd.MultiIndex.from_tuples([(10, 20)], names=["u", "v"])
+    ... )
+    >>> G = gdf_to_nx(nodes=nodes_gdf, edges=edges_gdf)
+    >>> print(G.nodes(data=True))
+    >>> [(0, {'geometry': <POINT (0 0)>,
+    ...       '_original_index': 10,
+    ...       'pos': (0.0, 0.0)}),
+    ...  (1, {'geometry': <POINT (1 1)>,
+    ...       '_original_index': 20,
+    ...       'pos': (1.0, 1.0)})]
+    >>> print(G.edges(data=True))
+    >>> [(0, 1, {'length': 1.414, 
+    ...          'geometry': <LINESTRING (0 0, 1 1)>,
+    ...          '_original_edge_index': (10, 20)})]
+
+    >>> # Heterogeneous graph
+    >>> buildings_gdf = gpd.GeoDataFrame(geometry=[Point(0, 0)], index=pd.Index(['b1'], name="b_id"))
+    >>> streets_gdf = gpd.GeoDataFrame(geometry=[Point(1, 1)], index=pd.Index(['s1'], name="s_id"))
+    >>> connections_gdf = gpd.GeoDataFrame(
+    ...     geometry=[LineString([(0,0), (1,1)])],
+    ...     index=pd.MultiIndex.from_tuples([('b1', 's1')])
+    ... )
+    >>> nodes_dict = {"building": buildings_gdf, "street": streets_gdf}
+    >>> edges_dict = {("building", "connects_to", "street"): connections_gdf}
+    >>> H = gdf_to_nx(nodes=nodes_dict, edges=edges_dict)
+    >>> print(H.nodes(data=True))
+    >>> [(0, {'geometry': <POINT (0 0)>,
+    ...       'node_type': 'building',
+    ...       '_original_index': 'b1',
+    ...       'pos': (0.0, 0.0)}),
+    ...  (1, {'geometry': <POINT (1 1)>,
+    ...       'node_type': 'street',
+    ...       '_original_index': 's1',
+    ...       'pos': (1.0, 1.0)})]
+    """
+    converter = GraphConverter(keep_geom=keep_geom)
+    return converter.gdf_to_nx(nodes, edges, node_id_col, edge_id_col)
+
+def nx_to_gdf(
+    G: nx.Graph, nodes: bool = True, edges: bool = True,
+) -> (gpd.GeoDataFrame | tuple[gpd.GeoDataFrame, gpd.GeoDataFrame] |
+      tuple[dict[str, gpd.GeoDataFrame], dict[tuple[str, str, str], gpd.GeoDataFrame]]):
+    r"""Convert a NetworkX graph to GeoDataFrames for nodes and/or edges.
+
+    This function reconstructs GeoDataFrames from a NetworkX graph that was
+    created by `gdf_to_nx` or follows a similar structure. It can handle both
+    homogeneous and heterogeneous graphs, extracting node and edge attributes
+    and reconstructing geometries from position data.
+
+    Parameters
+    ----------
+    G : nx.Graph
+        The NetworkX graph to convert. It is expected to have metadata stored
+        in `G.graph` to guide the conversion, including CRS and heterogeneity
+        information. Node positions are expected in a 'pos' attribute.
+    nodes : bool, default True
+        If True, a GeoDataFrame for nodes will be created and returned.
+    edges : bool, default True
+        If True, a GeoDataFrame for edges will be created and returned.
+
+    Returns
+    -------
+    gpd.GeoDataFrame or tuple
+        The returned type depends on the graph type and input parameters:
+        - Homogeneous graph:
+            - `(nodes_gdf, edges_gdf)` if `nodes` and `edges` are True.
+            - `nodes_gdf` if only `nodes` is True.
+            - `edges_gdf` if only `edges` is True.
+        - Heterogeneous graph:
+            - `(nodes_dict, edges_dict)` where dicts map types to GeoDataFrames.
+
+    Raises
+    ------
+    ValueError
+        If both `nodes` and `edges` are False.
+
+    Examples
+    --------
+    >>> import networkx as nx
+    >>> # Create a simple graph with spatial attributes
+    >>> G = nx.Graph(is_hetero=False, crs="EPSG:4326")
+    >>> G.add_node(0, pos=(0, 0), population=100, geometry=Point(0,0))
+    >>> G.add_node(1, pos=(1, 1), population=200, geometry=Point(1,1))
+    >>> G.add_edge(0, 1, weight=1.5, geometry=LineString([(0, 0), (1, 1)]))
+    >>> # Convert back to GeoDataFrames
+    >>> nodes_gdf, edges_gdf = nx_to_gdf(G)
+    >>> print(nodes_gdf)
+    >>> print(edges_gdf)
+    >>>           population     geometry
+    ... 0         100           POINT (0 0)
+    ... 1         200           POINT (1 1)
+    ...           weight        geometry
+    ... 0 1       1.5           LINESTRING (0 0, 1 1)
+    """
+    converter = GraphConverter()
+    return converter.nx_to_gdf(G, nodes, edges)
+
+def filter_graph_by_distance(
+    graph: gpd.GeoDataFrame | nx.Graph,
+    center_point: Point | gpd.GeoSeries | gpd.GeoDataFrame,
+    distance: float,
+    edge_attr: str = "length",
+    node_id_col: str | None = None,
+) -> gpd.GeoDataFrame | nx.Graph:
+    """Filter a graph to include only elements within a specified distance from a center point.
+
+    This function calculates the shortest path from a center point to all nodes
+    in the graph and returns a subgraph containing only the nodes (and their
+    induced edges) that are within the given distance. The input can be a
+    NetworkX graph or an edges GeoDataFrame.
+
+    Parameters
+    ----------
+    graph : gpd.GeoDataFrame or nx.Graph
+        The graph to filter. If a GeoDataFrame, it represents the edges of the
+        graph and will be converted to a NetworkX graph internally.
+    center_point : Point or gpd.GeoSeries or gpd.GeoDataFrame
+        The origin point(s) for the distance calculation. If multiple points
+        are provided, the filter will include nodes reachable from any of them.
+    distance : float
+        The maximum shortest-path distance for a node to be included in the
+        filtered graph.
+    edge_attr : str, default "length"
+        The name of the edge attribute to use as weight for shortest path
+        calculations (e.g., 'length', 'travel_time').
+    node_id_col : str, optional
+        The name of the node identifier column if the input graph is a
+        GeoDataFrame. Defaults to the index.
+
+    Returns
+    -------
+    gpd.GeoDataFrame or nx.Graph
+        The filtered subgraph. The return type matches the input `graph` type.
+        If the input was a GeoDataFrame, the output is a GeoDataFrame of the
+        filtered edges.
+
+    Examples
+    --------
+    >>> import networkx as nx
+    >>> from shapely.geometry import Point
+    >>> # Create a graph
+    >>> G = nx.Graph()
+    >>> G.add_node(0, pos=(0, 0))
+    >>> G.add_node(1, pos=(10, 0))
+    >>> G.add_node(2, pos=(20, 0))
+    >>> G.add_edge(0, 1, length=10)
+    >>> G.add_edge(1, 2, length=10)
+    >>> # Filter the graph
+    >>> center = Point(1, 0)
+    >>> filtered_graph = filter_graph_by_distance(G, center, distance=12)
+    >>> print(list(filtered_graph.nodes))
+    >>> [0, 1]
+    """
+    analyzer = GraphAnalyzer()
+    return analyzer.filter_graph_by_distance(graph, center_point, distance, edge_attr, node_id_col)
 
 def create_isochrone(
     graph: gpd.GeoDataFrame | nx.Graph,
@@ -482,1213 +1461,138 @@ def create_isochrone(
     distance: float,
     edge_attr: str = "length",
 ) -> gpd.GeoDataFrame:
-    """
-    Generate isochrone polygon(s) as convex hull of reachable areas within distance.
+    """Generate an isochrone polygon from a graph.
+
+    An isochrone represents the area reachable from a center point within a
+    given travel distance or time. This function computes the set of reachable
+    edges and nodes in a network and generates a polygon (the convex hull)
+    that encloses this reachable area.
 
     Parameters
     ----------
-    graph : Union[gpd.GeoDataFrame, nx.Graph]
-        Input graph edges or NetworkX graph.
-    center_point : Union[Point, GeoSeries, GeoDataFrame]
-        Center point(s) for distance calculation.
+    graph : gpd.GeoDataFrame or nx.Graph
+        The network graph. If a GeoDataFrame, it represents the edges of the
+        graph.
+    center_point : Point or gpd.GeoSeries or gpd.GeoDataFrame
+        The origin point(s) for the isochrone calculation.
     distance : float
-        Maximum shortest-path distance from center.
-    edge_attr : str, default="length"
-        Edge weight attribute for path length.
+        The maximum travel distance (or time) that defines the boundary of the
+        isochrone.
+    edge_attr : str, default "length"
+        The edge attribute to use as the cost of travel (e.g., 'length',
+        'travel_time').
 
     Returns
     -------
-    geopandas.GeoDataFrame
-        GeoDataFrame containing a single isochrone Polygon or MultiPolygon.
+    gpd.GeoDataFrame
+        A GeoDataFrame containing a single Polygon geometry that represents the
+        isochrone.
+
+    Examples
+    --------
+    >>> import networkx as nx
+    >>> from shapely.geometry import Point
+    >>> # Create a graph
+    >>> G = nx.Graph(crs="EPSG:32633")
+    >>> G.add_node(0, pos=(0, 0))
+    >>> G.add_node(1, pos=(10, 0))
+    >>> G.add_node(2, pos=(0, 10))
+    >>> G.add_edge(0, 1, length=10)
+    >>> G.add_edge(0, 2, length=10)
+    >>> # Create an isochrone
+    >>> center = Point(0, 0)
+    >>> isochrone = create_isochrone(G, center, distance=12)
+    >>> print(isochrone.geometry.iloc[0].wkt)
+    POLYGON ((0 0, 10 0, 0 10, 0 0))
     """
-    # Filter graph by distance
-    reachable = filter_graph_by_distance(graph, center_point, distance, edge_attr)
-    # Convert to GeoDataFrame if NetworkX graph returned
-    if isinstance(reachable, nx.Graph):
-        reachable = nx_to_gdf(reachable, nodes=False, edges=True)
-    # Empty result
-    if reachable.empty:
-        return gpd.GeoDataFrame(geometry=[], crs=getattr(reachable, "crs", None))
-    # Create convex hull of reachable area
-    union_geom = reachable.unary_union
-    hull = union_geom.convex_hull
-    return gpd.GeoDataFrame(geometry=[hull], crs=reachable.crs)
-
-
-def _get_nearest_node(point: Point | gpd.GeoSeries,
-                      nodes_gdf: gpd.GeoDataFrame,
-                      node_id: str = "node_id") -> str | int:
-    """Find the nearest node in a GeoDataFrame."""
-    if isinstance(point, gpd.GeoSeries):
-        point = point.iloc[0]
-    nearest_idx = nodes_gdf.distance(point).idxmin()
-    return nodes_gdf.loc[nearest_idx, node_id]
-
-
-def _extract_node_positions(graph: nx.Graph) -> dict[str | int, tuple[float, float]]:
-    """Extract node positions from a NetworkX graph."""
-    pos_dict = nx.get_node_attributes(graph, "pos")
-
-    if pos_dict:
-        return pos_dict
-
-    # Handle case where graph has no pos attributes
-    nodes_list = list(graph.nodes())
-    if not nodes_list:
-        return {}
-
-    # Check if nodes are coordinate tuples (common when using momepy.gdf_to_nx)
-    first_node = nodes_list[0]
-    if isinstance(first_node, tuple) and len(first_node) == 2:
-        return {node_id: node_id for node_id in graph.nodes()}
-
-    # Check if nodes have x,y attributes
-    node_attrs = dict(graph.nodes(data=True))
-    if node_attrs and all("x" in attrs and "y" in attrs for attrs in node_attrs.values()):
-        return {node_id: (attrs["x"], attrs["y"]) for node_id, attrs in node_attrs.items()}
-
-    return {}
-
-
-def _create_nodes_gdf(pos_dict: dict[str | int, tuple[float, float]],
-                      node_id_col: str,
-                      crs: str | int | None) -> gpd.GeoDataFrame:
-    """Create a GeoDataFrame from node positions."""
-    if not pos_dict:
-        return gpd.GeoDataFrame({node_id_col: [], "geometry": []}, crs=crs)
-
-    node_ids, coordinates = zip(*pos_dict.items(), strict=False)
-    geometries = [Point(coord) for coord in coordinates]
-
-    return gpd.GeoDataFrame(
-        {node_id_col: node_ids, "geometry": geometries},
-        crs=crs,
-    )
-
-
-def _compute_nodes_within_distance(graph: nx.Graph,
-                                   center_points: list[Point] | gpd.GeoSeries,
-                                   nodes_gdf: gpd.GeoDataFrame,
-                                   distance: float,
-                                   edge_attr: str,
-                                   node_id_name: str) -> set[str | int]:
-    """Compute all nodes within distance from any center point."""
-    # Convert center points to list for consistent processing
-    center_points_list = (center_points.tolist()
-                         if hasattr(center_points, "tolist")
-                         else list(center_points))
-
-    # Get nearest nodes for all center points
-    source_nodes = []
-    for point in center_points_list:
-        try:
-            source_nodes.append(_get_nearest_node(point, nodes_gdf, node_id=node_id_name))
-        except ValueError:  # idxmin on empty sequence
-            logger.warning("Could not find nearest node; nodes_gdf may be empty.")
-            continue  # Skip this point if no nearest node can be found
-
-    if not source_nodes:
-        return set()
-
-    try:
-        # Use multi-source Dijkstra to find shortest path lengths from all source nodes at once
-        distance_dict = nx.multi_source_dijkstra_path_length(graph, set(source_nodes), weight=edge_attr)
-
-        # Extract nodes within distance using a set comprehension for efficiency
-        return {node_id for node_id, dist in distance_dict.items() if dist < distance}
-
-    except (nx.NetworkXNoPath, nx.NodeNotFound) as e:
-        # This can happen if source_nodes contains nodes not in the graph,
-        # though _get_nearest_node should prevent this.
-        logger.warning("Could not compute paths from center points: %s", e, stacklevel=2)
-        return set()
-
-
-def _normalize_center_points(center_point: Point | gpd.GeoSeries | gpd.GeoDataFrame,
-                             ) -> list[Point] | gpd.GeoSeries:
-    """Normalize center point input to a consistent format."""
-    if isinstance(center_point, gpd.GeoDataFrame):
-        return center_point.geometry
-    if isinstance(center_point, gpd.GeoSeries):
-        return center_point
-    return [center_point]
-
-
-def _create_empty_result(is_graph_input: bool, original_crs: str | int | None) -> gpd.GeoDataFrame | nx.Graph:
-    """Create an empty result in the appropriate format."""
-    if is_graph_input:
-        return nx.Graph()
-    return gpd.GeoDataFrame(geometry=[], crs=original_crs)
-
+    analyzer = GraphAnalyzer()
+    return analyzer.create_isochrone(graph, center_point, distance, edge_attr)
 
 # ============================================================================
-# GEODATAFRAME TO NETWORKX CONVERSION FUNCTIONS
+# VALIDATION FUNCTIONS FOR BACKWARD COMPATIBILITY
 # ============================================================================
 
+def _validate_gdf(
+    nodes_gdf: gpd.GeoDataFrame | None = None,
+    edges_gdf: gpd.GeoDataFrame | None = None,
+) -> None:
+    """Validate node and edge GeoDataFrames (for backward compatibility).
 
-def gdf_to_nx(nodes: gpd.GeoDataFrame | dict[str, gpd.GeoDataFrame] | None = None,
-              edges: gpd.GeoDataFrame | dict[tuple[str, str, str], gpd.GeoDataFrame] | None = None,
-              node_id_col: str | dict[str, str] | None = None,
-              edge_id_col: str | dict[tuple[str, str, str], str] | None = None,
-              keep_geom: bool = True) -> nx.Graph:
-    """
-    Convert GeoDataFrames of nodes and edges to a NetworkX graph.
+    This function is a backward-compatible wrapper around the validation logic
+    in `GeoDataProcessor`. It checks if inputs are GeoDataFrames, removes
+    invalid geometries, and ensures edge geometries are LineStrings.
 
     Parameters
     ----------
-    nodes : GeoDataFrame or dict[str, GeoDataFrame], optional
-        Point or Polygon geometries for graph nodes; node attributes preserved.
-        For heterogeneous graphs, provide a dict mapping node types to GeoDataFrames.
-    edges : GeoDataFrame or dict[tuple[str, str, str], gpd.GeoDataFrame], optional
-        LineString geometries for graph edges; edge attributes preserved.
-        For heterogeneous graphs, provide a dict mapping edge types to GeoDataFrames.
-    node_id_col : str or dict[str, str], optional
-        Column name to use for node identifiers; if None, uses index.
-        For heterogeneous graphs, provide a dict mapping node types to column names.
-    edge_id_col : str or dict[tuple[str, str, str], str], optional
-        Column name to use for edge identifiers; if None, uses index.
-        For heterogeneous graphs, provide a dict mapping edge types to column names.
-    keep_geom : bool, default=True
-        If True, include original geometry columns on edges.
-
-    Returns
-    -------
-    networkx.Graph
-        Graph with 'crs', 'node_geom_cols', 'edge_geom_cols', node 'pos', and attributes.
-        For heterogeneous graphs, includes type information and metadata.
-    """
-    # Handle heterogeneous graphs (dictionaries of GeoDataFrames)
-    if isinstance(nodes, dict) or isinstance(edges, dict):
-        return _gdf_to_nx_heterogeneous(nodes, edges, keep_geom)
-
-    # Handle homogeneous graphs (single GeoDataFrames) - validation done internally
-    return _gdf_to_nx_homogeneous(nodes, edges, node_id_col, edge_id_col, keep_geom)
-
-
-def nx_to_gdf(
-    G: nx.Graph,
-    nodes: bool = True,
-    edges: bool = True,
-) -> (gpd.GeoDataFrame | tuple[gpd.GeoDataFrame, gpd.GeoDataFrame] |
-      tuple[dict[str, gpd.GeoDataFrame], dict[tuple[str, str, str], gpd.GeoDataFrame]]):
-    """
-    Convert a NetworkX graph to a GeoDataFrame for nodes or edges.
-
-    Parameters
-    ----------
-    G : networkx.Graph
-        Graph with 'crs', 'node_geom_cols', and 'edge_geom_cols' in G.graph.
-    nodes : bool, default=True
-        If True, return node GeoDataFrame.
-    edges : bool, default=True
-        If True, return edge GeoDataFrame.
-
-    Returns
-    -------
-    geopandas.GeoDataFrame or tuple
-        If both nodes and edges requested: tuple of (nodes_gdf, edges_gdf)
-        If only nodes requested: nodes GeoDataFrame
-        If only edges requested: edges GeoDataFrame
-        For heterogeneous graphs: tuple of (nodes_dict, edges_dict)
-
-    Raises
-    ------
-    ValueError
-        If required 'pos' or geometry attributes are missing, or if neither flag is set.
-    """
-    # Check if this is a heterogeneous graph
-    is_hetero = G.graph.get("is_hetero", False)
-
-    if is_hetero:
-        # Handle heterogeneous graph reconstruction
-        return _reconstruct_heterogeneous_gdfs(G, nodes=nodes, edges=edges)
-
-    # Both requested: return node and edge frames via separate calls
-    if nodes and edges:
-        nodes_gdf = nx_to_gdf(G, nodes=True, edges=False)
-        edges_gdf = nx_to_gdf(G, nodes=False, edges=True)
-        return nodes_gdf, edges_gdf
-
-    # Require at least one of nodes or edges
-    if not nodes and not edges:
-        msg = "At least one of 'nodes' or 'edges' must be True"
-        raise ValueError(msg)
-
-    # Fallback for nodes-only graphs: treat node IDs as coords
-    if nodes and not nx.get_node_attributes(G, "pos"):
-        node_list = list(G.nodes())
-        # Check if node IDs are coordinate tuples
-        if node_list and isinstance(node_list[0], tuple) and len(node_list[0]) == 2:
-            try:
-                # Convert coordinate tuple node IDs to Point geometries
-                coords = {node: node for node in node_list}
-                nx.set_node_attributes(G, coords, "pos")
-            except (ValueError, TypeError):
-                msg = "Graph nodes don't have 'pos' attributes and can't be interpreted as coordinates"
-                raise ValueError(msg) from None
-
-    # Validate the graph structure
-    G = _validate_nx(G, nodes=nodes)
-
-    # Create and return appropriate GeoDataFrame
-    if nodes:
-        return _create_nodes_gdf_from_graph(G)
-    return _create_edges_gdf_from_graph(G)
-
-
-# ============================================================================
-# SEGMENTS TO GRAPH CONVERSION FUNCTIONS
-# ============================================================================
-
-def segments_to_graph(segments_gdf: gpd.GeoDataFrame,
-                      as_nx: bool = False) -> tuple[gpd.GeoDataFrame, gpd.GeoDataFrame]:
-    """
-    Convert LineString edges to node-edge representation with unique nodes and MultiIndex edges.
-
-    Parameters
-    ----------
-    segments_gdf : geopandas.GeoDataFrame
-        GeoDataFrame containing segments with LineString geometries
-
-    Returns
-    -------
-    tuple of geopandas.GeoDataFrame
-        (nodes_gdf, edges_with_multiindex_gdf)
-        - nodes_gdf: GeoDataFrame containing unique nodes with Point geometries
-        - edges_with_multiindex_gdf: Original edge GeoDataFrame with MultiIndex (from_node_id, to_node_id)
-    """
-    # Extract start and end coordinates from the geometry
-    start_points = segments_gdf.geometry.interpolate(0, normalized=True)
-    end_points = segments_gdf.geometry.interpolate(1, normalized=True)
-
-    start_coords = pd.Series(zip(start_points.x, start_points.y, strict=False), index=segments_gdf.index)
-    end_coords = pd.Series(zip(end_points.x, end_points.y, strict=False), index=segments_gdf.index)
-
-    # Combine all coordinates and remove duplicates
-    all_coords = pd.concat([start_coords, end_coords]).drop_duplicates()
-
-    # Create Point geometries from coordinates
-    node_geometries = [Point(x, y) for x, y in all_coords]
-
-    # Create GeoDataFrame with nodes
-    nodes = gpd.GeoDataFrame(
-        {"node_id": range(len(node_geometries))},
-        geometry=node_geometries,
-        crs=segments_gdf.crs,
-    ).set_index("node_id")
-
-    # Create coordinate to node_id mapping
-    coord_to_id = {coord: idx for idx, coord in enumerate(all_coords)}
-
-    # Map start and end coordinates to node IDs
-    from_node_ids = start_coords.map(coord_to_id)
-    to_node_ids = end_coords.map(coord_to_id)
-
-    # Create edges with MultiIndex
-    edges = segments_gdf.copy()
-    edges.index = pd.MultiIndex.from_arrays(
-        [from_node_ids, to_node_ids],
-        names=["from_node_id", "to_node_id"],
-    )
-
-    # Convert to NetworkX graph if requested
-    if as_nx:
-        return gdf_to_nx(nodes, edges)
-
-    return nodes, edges
-
-
-# ============================================================================
-# GRAPH VALIDATION HELPER FUNCTIONS
-# ============================================================================
-
-
-def _validate_gdf(nodes: gpd.GeoDataFrame | None,
-                  edges: gpd.GeoDataFrame | None,
-                  strict: bool = True,
-                  allow_empty: bool = True,
-                  check_crs: bool = True) -> tuple[gpd.GeoDataFrame | None, gpd.GeoDataFrame | None]:
-    """
-    Comprehensive validation and cleaning of node and edge GeoDataFrames.
-
-    This function centralizes all data quality checks including:
-    - Geometry type validation
-    - CRS consistency checks
-    - Empty/null geometry handling
-    - Geographic CRS restrictions
-    - Data completeness validation
-
-    Parameters
-    ----------
-    nodes : gpd.GeoDataFrame, optional
-        Node GeoDataFrame to validate
-    edges : gpd.GeoDataFrame, optional
-        Edge GeoDataFrame to validate
-    strict : bool, default=True
-        If True, raises errors for invalid data. If False, logs warnings and cleans data.
-    allow_empty : bool, default=True
-        If True, allows empty GeoDataFrames. If False, raises error for empty data.
-    check_crs : bool, default=True
-        If True, validates CRS consistency between nodes and edges.
-
-    Returns
-    -------
-    tuple[gpd.GeoDataFrame | None, gpd.GeoDataFrame | None]
-        Validated and cleaned nodes and edges GeoDataFrames
+    nodes_gdf : gpd.GeoDataFrame, optional
+        The GeoDataFrame containing node data to validate.
+    edges_gdf : gpd.GeoDataFrame, optional
+        The GeoDataFrame containing edge data to validate.
 
     Raises
     ------
     TypeError
-        If inputs are not GeoDataFrames when provided
+        If an input is not a GeoDataFrame.
     ValueError
-        If data fails validation checks and strict=True
+        If the edges GeoDataFrame is empty.
+
+    Examples
+    --------
+    >>> import geopandas as gpd
+    >>> from shapely.geometry import Point, LineString
+    >>> nodes = gpd.GeoDataFrame(geometry=[Point(0, 0)])
+    >>> edges = gpd.GeoDataFrame(geometry=[LineString([(0, 0), (1, 1)])])
+    >>> try:
+    ...     _validate_gdf(nodes, edges)
+    ...     print("Validation successful.")
+    ... except (TypeError, ValueError) as e:
+    ...     print(f"Validation failed: {e}")
+    Validation successful.
     """
-    # If both are None, nothing to validate
-    if nodes is None and edges is None:
-        return nodes, edges
+    processor = GeoDataProcessor()
 
-    # Type validation
-    if nodes is not None and not isinstance(nodes, gpd.GeoDataFrame):
-        msg = "Nodes input must be a GeoDataFrame"
-        raise TypeError(msg)
-    if edges is not None and not isinstance(edges, gpd.GeoDataFrame):
-        msg = "Edges input must be a GeoDataFrame"
-        raise TypeError(msg)
+    if nodes_gdf is not None:
+        processor.validate_gdf(nodes_gdf, allow_empty=True)
 
-    # Validate and clean nodes GeoDataFrame
-    if nodes is not None:
-        if not isinstance(nodes.index, pd.Index) or isinstance(nodes.index, pd.MultiIndex):
-            msg = "Nodes GeoDataFrame must have a simple pandas.Index, not a MultiIndex."
-            if strict:
-                raise ValueError(msg)
-            logger.warning("Validation: %s", msg)
-        nodes = _validate_nodes_gdf(nodes, strict=strict, allow_empty=allow_empty)
+    if edges_gdf is not None:
+        processor.validate_gdf(edges_gdf, ["LineString", "MultiLineString"], allow_empty=False)
 
+def _validate_nx(graph: nx.Graph) -> None:
+    """Validate a NetworkX graph (for backward compatibility).
 
-    # Validate and clean edges GeoDataFrame
-    if edges is not None:
-        if not isinstance(edges.index, pd.MultiIndex):
-            msg = "Edges GeoDataFrame must have a pandas.MultiIndex."
-            if strict:
-                raise ValueError(msg)
-            logger.warning("Validation: %s", msg)
-        edges = _validate_edges_gdf(edges, strict=strict, allow_empty=allow_empty)
-
-    # CRS validation
-    if check_crs and nodes is not None and edges is not None:
-        _validate_gdf_crs(nodes, edges, strict)
-
-    return nodes, edges
-
-
-def _validate_nodes_gdf(nodes: gpd.GeoDataFrame,
-                        strict: bool = True,
-                        allow_empty: bool = True) -> gpd.GeoDataFrame:
-    """Validate and clean nodes GeoDataFrame for geometry quality."""
-    if nodes.empty:
-        if not allow_empty:
-            msg = "Nodes GeoDataFrame is empty"
-            if strict:
-                raise ValueError(msg)
-        logger.warning("Validation: Nodes GeoDataFrame is empty")
-        return nodes
-
-    original_count = len(nodes)
-
-    # Create composite mask for all invalid conditions
-    null_mask = nodes.geometry.isna()
-    invalid_mask = ~nodes.geometry.is_valid
-    empty_mask = nodes.geometry.is_empty
-
-    # Check for centroid computation issues vectorized
-    try:
-        centroids = nodes.geometry.centroid
-        centroid_mask = centroids.isna()
-    except (AttributeError, ValueError, TypeError):
-        # Fallback: assume all centroids are valid initially
-        centroid_mask = pd.Series(data=False, index=nodes.index)
-
-    # Combine all masks - keep only valid geometries
-    valid_mask = ~(null_mask | invalid_mask | empty_mask | centroid_mask)
-    nodes_clean = nodes[valid_mask]
-
-    # Log removal statistics
-    if null_mask.any():
-        logger.warning("Validation: Removing %d nodes with null geometries", null_mask.sum())
-    if invalid_mask.any():
-        logger.warning("Validation: Removing %d nodes with invalid geometries", invalid_mask.sum())
-    if empty_mask.any():
-        logger.warning("Validation: Removing %d nodes with empty geometries", empty_mask.sum())
-    if centroid_mask.any():
-        logger.warning("Validation: Removing %d nodes with invalid centroids", centroid_mask.sum())
-
-    removed_count = original_count - len(nodes_clean)
-    if removed_count > 0:
-        logger.warning("Validation: Removed %d invalid nodes out of %d total", removed_count, original_count)
-
-    return nodes_clean
-
-
-def _validate_edges_gdf(edges: gpd.GeoDataFrame,
-                        strict: bool = True,
-                        allow_empty: bool = True) -> gpd.GeoDataFrame:
-    """Validate and clean edges GeoDataFrame for geometry quality."""
-    if edges.empty:
-        if not allow_empty:
-            msg = "Edges GeoDataFrame is empty"
-            if strict:
-                raise ValueError(msg)
-        logger.warning("Validation: Edges GeoDataFrame is empty")
-        return edges
-
-    original_count = len(edges)
-
-    # Create composite mask for all invalid conditions
-    null_mask = edges.geometry.isna()
-    invalid_mask = ~edges.geometry.is_valid
-    empty_mask = edges.geometry.is_empty
-
-    # Check for valid geometry types vectorized
-    valid_geom_types = edges.geometry.geom_type.isin(["LineString", "MultiLineString"])
-
-    # Combine all masks - keep only valid geometries
-    valid_mask = ~(null_mask | invalid_mask | empty_mask) & valid_geom_types
-    edges_clean = edges[valid_mask]
-
-    # Log removal statistics
-    if null_mask.any():
-        logger.warning("Validation: Removing %d edges with null geometries", null_mask.sum())
-    if invalid_mask.any():
-        logger.warning("Validation: Removing %d edges with invalid geometries", invalid_mask.sum())
-    if empty_mask.any():
-        logger.warning("Validation: Removing %d edges with empty geometries", empty_mask.sum())
-    if not valid_geom_types.all():
-        logger.warning(
-            "Validation: Removing %d edges with invalid geometry types "
-            "(not LineString or MultiLineString)",
-            (~valid_geom_types[~null_mask]).sum(),
-        )
-
-    removed_count = original_count - len(edges_clean)
-    if removed_count > 0:
-        logger.warning("Validation: Removed %d invalid edges out of %d total", removed_count, original_count)
-
-    return edges_clean
-
-
-def _validate_gdf_crs(
-    nodes: gpd.GeoDataFrame, edges: gpd.GeoDataFrame, strict: bool
-) -> None:
-    """Validate CRS consistency between nodes and edges."""
-    if not nodes.empty and not edges.empty:
-        if nodes.crs != edges.crs:
-            msg = f"CRS mismatch: nodes CRS ({nodes.crs}) != edges CRS ({edges.crs})"
-            if strict:
-                raise ValueError(msg)
-            logger.warning("Validation: %s", msg)
-
-        # Check for missing CRS only if both have data
-        if nodes.crs is None or edges.crs is None:
-            msg = "Both nodes and edges must have a defined CRS"
-            if strict:
-                raise ValueError(msg)
-            logger.warning("Validation: %s", msg)
-
-
-def _validate_nx(graph: nx.Graph,
-                 nodes: bool = False,
-                 strict: bool = True,
-                 require_crs: bool = True,
-                 require_positions: bool = False) -> nx.Graph:
-    """
-    Comprehensive validation and cleaning of NetworkX graphs.
-
-    Centralizes all NetworkX graph quality checks including:
-    - Graph structure validation
-    - Node position validation
-    - Edge connectivity validation
-    - Metadata completeness checks
-    - CRS validation
+    Checks if the input is a NetworkX graph and ensures it is not empty
+    (i.e., it has both nodes and edges).
 
     Parameters
     ----------
     graph : nx.Graph
-        NetworkX graph to validate
-    nodes : bool, default=False
-        If True, validates for node-focused operations
-    strict : bool, default=True
-        If True, raises errors for invalid data. If False, logs warnings and cleans data.
-    require_crs : bool, default=True
-        If True, requires CRS metadata in graph attributes
-    require_positions : bool, default=False
-        If True, requires node position attributes
-
-    Returns
-    -------
-    nx.Graph
-        Validated and cleaned NetworkX graph
+        The NetworkX graph to validate.
 
     Raises
     ------
+    TypeError
+        If the input is not a NetworkX graph.
     ValueError
-        If graph fails validation checks and strict=True
+        If the graph has no nodes or no edges.
+
+    Examples
+    --------
+    >>> import networkx as nx
+    >>> G = nx.Graph()
+    >>> G.add_edge(0, 1)
+    >>> try:
+    ...     _validate_nx(G)
+    ...     print("Validation successful.")
+    ... except (TypeError, ValueError) as e:
+    ...     print(f"Validation failed: {e}")
+    Validation successful.
     """
-    # Make a copy to avoid modifying the original graph
-    clean_graph = graph.copy()
-
-    # Check if graph is empty first
-    if clean_graph.number_of_nodes() == 0:
+    if not isinstance(graph, nx.Graph):
+        msg = "Input must be a NetworkX graph"
+        raise TypeError(msg)
+    if graph.number_of_nodes() == 0:
         msg = "Graph has no nodes"
-        if strict and not nodes:
-            raise ValueError(msg)
-        logger.warning("Validation: %s", msg)
-        return clean_graph
-
-    # Validate graph metadata
-    if require_crs:
-        crs = clean_graph.graph.get("crs")
-        if crs is None:
-            msg = "Missing CRS in graph attributes. Set 'crs' in graph.graph."
-            if strict:
-                raise ValueError(msg)
-            logger.warning("Validation: %s", msg)
-
-    # Validate and clean node positions
-    clean_graph = _validate_node_positions(clean_graph, nodes, strict, require_positions)
-
-    # Validate edges if needed
-    if not nodes:
-        clean_graph = _validate_graph_edges(clean_graph, strict)
-
-    return clean_graph
-
-
-def _validate_node_positions(graph: nx.Graph,
-                             nodes: bool,
-                             strict: bool = True,
-                             require_positions: bool = False) -> nx.Graph:
-    """Validate and clean node positions in the graph."""
-    pos = nx.get_node_attributes(graph, "pos")
-
-    if not pos:
-        if nodes or require_positions:
-            msg = "Missing 'pos' attribute for nodes"
-            if strict:
-                raise ValueError(msg)
-            logger.warning("Validation: %s", msg)
-        return graph
-
-    # Vectorized position validation
-    invalid_nodes = [node_id for node_id, position in pos.items()
-                    if not _is_valid_position(position)]
-
-    # Remove invalid nodes in batch
-    if invalid_nodes:
-        graph.remove_nodes_from(invalid_nodes)
-        logger.warning("Validation: Removed %d nodes with invalid positions", len(invalid_nodes))
-
-    return graph
-
-
-def _is_valid_position(position: tuple | list) -> bool:
-    """Check if a position is valid."""
-    if not isinstance(position, (tuple, list)) or len(position) < 2:
-        return False
-    return all(isinstance(coord, (int, float)) for coord in position[:2])
-
-
-def _validate_graph_edges(graph: nx.Graph, strict: bool = True) -> nx.Graph:
-    """Validate edges in the graph."""
-    if graph.number_of_edges() == 0:
-        logger.warning("Validation: Graph has no edges")
-        return graph
-
-    # Check for geometry or position availability
-    has_geometry = any(attrs.get("geometry") is not None
-                      for _, _, attrs in graph.edges(data=True))
-    pos = nx.get_node_attributes(graph, "pos")
-
-    if not has_geometry and not pos:
-        msg = "Missing edge geometry and node positions"
-        if strict:
-            raise ValueError(msg)
-        logger.warning("Validation: %s", msg)
-
-    # Find edges that reference non-existent nodes
-    invalid_edges = [(u, v) for u, v in graph.edges()
-                     if not graph.has_node(u) or not graph.has_node(v)]
-
-    # Remove invalid edges in batch
-    if invalid_edges:
-        graph.remove_edges_from(invalid_edges)
-        logger.warning("Validation: Removed %d edges referencing non-existent nodes", len(invalid_edges))
-
-    return graph
-
-
-# ============================================================================
-# GRAPH CONVERSION HELPER FUNCTIONS
-# ============================================================================
-
-
-def _gdf_to_nx_homogeneous(
-    nodes: gpd.GeoDataFrame | None,
-    edges: gpd.GeoDataFrame | None,
-    node_id_col: str | None,
-    edge_id_col: str | None,
-    keep_geom: bool,
-) -> nx.Graph:
-    """Convert homogeneous GeoDataFrames to NetworkX graph (original implementation)."""
-    # Validate GeoDataFrames first
-    nodes, edges = _validate_gdf(nodes, edges)
-
-    if edges is None:
-        msg = "Must provide edges GeoDataFrame"
         raise ValueError(msg)
-
-    # Initialize graph with metadata
-    graph = nx.Graph()
-
-    # Set metadata for homogeneous graph
-    _set_graph_metadata(graph,
-                        nodes,
-                        edges,
-                        is_hetero=False,
-                        node_id_col=node_id_col,
-                        edge_id_col=edge_id_col)
-
-    # Add nodes with original index information
-    if nodes is not None:
-        # Vectorized node processing
-        centroids = nodes.geometry.centroid
-        node_data = nodes.drop(columns="geometry")
-
-        # Create node attributes dictionary efficiently
-        node_attrs_list = []
-        for idx, orig_idx in enumerate(nodes.index):
-            attrs = node_data.iloc[idx].to_dict()
-            attrs["_original_index"] = orig_idx
-            attrs["pos"] = (centroids.iloc[idx].x, centroids.iloc[idx].y)
-            node_attrs_list.append((idx, attrs))
-
-        # Add all nodes with attributes at once
-        graph.add_nodes_from(node_attrs_list)
-
-    # Process edges efficiently
-    _process_homogeneous_edges(graph, edges, nodes, keep_geom)
-
-    return graph
-
-
-def _gdf_to_nx_heterogeneous(
-    nodes_dict: dict[str, gpd.GeoDataFrame] | None,
-    edges_dict: dict[tuple[str, str, str], gpd.GeoDataFrame] | None,
-    keep_geom: bool,
-) -> nx.Graph:
-    """Convert heterogeneous GeoDataFrames to NetworkX graph."""
-    # Initialize graph with heterogeneous metadata
-    graph = nx.Graph()
-
-    # Set metadata for heterogeneous graph
-    _set_graph_metadata(graph, nodes_dict, edges_dict, is_hetero=True)
-
-    # Process nodes and edges
-    _process_hetero_nodes(graph, nodes_dict)
-    _process_hetero_edges(graph, edges_dict, keep_geom)
-
-    return graph
-
-
-def _create_nodes_gdf_from_graph(graph: nx.Graph) -> gpd.GeoDataFrame:
-    """Create nodes GeoDataFrame from NetworkX graph."""
-    pos = nx.get_node_attributes(graph, "pos")
-    crs = graph.graph.get("crs")
-    node_geom_cols = graph.graph.get("node_geom_cols", [])
-
-    if not graph.nodes():
-        return gpd.GeoDataFrame(columns=["geometry"], crs=crs)
-
-    # Extract nodes with original index information - vectorized approach
-    node_data = dict(graph.nodes(data=True))
-
-    # Extract original indices and records in vectorized manner
-    original_indices = [attrs.get("_original_index", nid) for nid, attrs in node_data.items()]
-
-    # Build records with a list comprehension
-    records = [
-        {
-            **{k: v for k, v in attrs.items() if k not in ["pos", "_original_index"]},
-            "geometry": Point(*(pos_val)) if isinstance(pos_val := pos.get(nid, (0, 0)), (tuple, list))
-            else Point(pos_val, 0),
-        }
-        for nid, attrs in node_data.items()
-    ]
-
-    gdf = gpd.GeoDataFrame(records, index=original_indices, crs=crs)
-
-    # Convert geometry columns to GeoSeries
-    for col in node_geom_cols:
-        if col in gdf.columns:
-            gdf[col] = gpd.GeoSeries(gdf[col], crs=crs)
-
-    # Restore original index names
-    node_index_names = graph.graph.get("node_index_names")
-    if node_index_names and isinstance(node_index_names, list) and len(node_index_names) == 1:
-        gdf.index.name = node_index_names[0]
-    elif node_index_names and isinstance(node_index_names, list) and isinstance(gdf.index, pd.MultiIndex):
-        gdf.index.names = node_index_names[:gdf.index.nlevels]
-
-    return gdf
-
-
-def _create_edges_gdf_from_graph(graph: nx.Graph) -> gpd.GeoDataFrame:
-    """Create edges GeoDataFrame from NetworkX graph."""
-    pos = nx.get_node_attributes(graph, "pos")
-    crs = graph.graph.get("crs")
-    edge_geom_cols = graph.graph.get("edge_geom_cols", [])
-
     if graph.number_of_edges() == 0:
-        return gpd.GeoDataFrame(columns=["geometry"], crs=crs)
-
-    # Extract all edge data at once
-    edge_data = list(graph.edges(data=True))
-
-    # Vectorized extraction of indices and records
-    original_edge_indices = [
-        attrs.get("_original_edge_index", (u, v))
-        for u, v, attrs in edge_data
-    ]
-
-    # Vectorized record creation
-    records = [
-        {
-            **{k: v for k, v in attrs.items() if k not in ["_original_edge_index"]},
-            "geometry": (
-                attrs.get("geometry")
-                if attrs.get("geometry") is not None
-                else LineString([pos[u], pos[v]])
-            ),
-        }
-        for u, v, attrs in edge_data
-    ]
-
-    # Create GeoDataFrame with original indices
-    if original_edge_indices:
-        # Check if we have tuple indices (MultiIndex case)
-        if original_edge_indices and isinstance(original_edge_indices[0], tuple):
-            edge_index = pd.MultiIndex.from_tuples(original_edge_indices)
-        else:
-            edge_index = original_edge_indices
-
-        gdf = gpd.GeoDataFrame(records, index=edge_index, crs=crs)
-    else:
-        gdf = gpd.GeoDataFrame(records, crs=crs)
-
-    # Convert geometry columns to GeoSeries
-    for col in edge_geom_cols:
-        if col in gdf.columns:
-            gdf[col] = gpd.GeoSeries(gdf[col], crs=crs)
-
-    # Restore original edge index names
-    edge_index_names = graph.graph.get("edge_index_names")
-    if edge_index_names and hasattr(gdf.index, "names"):
-        if isinstance(gdf.index, pd.MultiIndex):
-            # For MultiIndex, set all available names
-            gdf.index.names = edge_index_names[:gdf.index.nlevels]
-        elif len(edge_index_names) >= 1:
-            # For regular Index, set single name
-            gdf.index.name = edge_index_names[0]
-
-    return gdf
-
-
-
-
-
-def _set_graph_metadata(
-    graph: nx.Graph,
-    nodes: gpd.GeoDataFrame | dict[str, gpd.GeoDataFrame] | None,
-    edges: gpd.GeoDataFrame | dict[tuple[str, str, str], gpd.GeoDataFrame] | None,
-    is_hetero: bool = False,
-    node_id_col: str | None = None,
-    edge_id_col: str | None = None,
-) -> None:
-    """Set metadata for both homogeneous and heterogeneous graphs."""
-    graph.graph["is_hetero"] = is_hetero
-
-    if is_hetero:
-        # Heterogeneous graph metadata
-        node_index_names = {}
-        edge_index_names = {}
-        if isinstance(nodes, dict):
-            graph.graph["node_types"] = list(nodes.keys())
-            for node_type, gdf in nodes.items():
-                node_index_names[node_type] = gdf.index.name
-        if isinstance(edges, dict):
-            graph.graph["edge_types"] = list(edges.keys())
-            for edge_type, gdf in edges.items():
-                edge_index_names[edge_type] = gdf.index.names
-
-        graph.graph["node_index_names"] = node_index_names
-        graph.graph["edge_index_names"] = edge_index_names
-
-        # Get CRS from first available GeoDataFrame
-        crs = None
-        if isinstance(nodes, dict) and nodes:
-            crs = next(iter(nodes.values())).crs
-        elif isinstance(edges, dict) and edges:
-            crs = next(iter(edges.values())).crs
-        graph.graph["crs"] = crs
-    else:
-        # Homogeneous graph metadata
-        crs = nodes.crs if nodes is not None else edges.crs if edges is not None else None
-        graph.graph.update({
-            "crs": crs,
-            "node_index_col": node_id_col,
-            "edge_index_col": edge_id_col,
-        })
-
-        # Store original index information for reconstruction
-        if nodes is not None:
-            graph.graph["node_geom_cols"] = list(nodes.select_dtypes(include=["geometry"]).columns)
-            graph.graph["node_index_names"] = nodes.index.names if hasattr(nodes.index, "names") else None
-
-        if edges is not None:
-            graph.graph["edge_geom_cols"] = list(edges.select_dtypes(include=["geometry"]).columns)
-            graph.graph["edge_index_names"] = edges.index.names if hasattr(edges.index, "names") else None
-
-
-def _process_homogeneous_edges(
-    graph: nx.Graph,
-    edges: gpd.GeoDataFrame,
-    nodes: gpd.GeoDataFrame | None,
-    keep_geom: bool,
-) -> None:
-    """Process edges for homogeneous graph efficiently."""
-    if nodes is not None:
-        # Create coordinate to node ID mapping for fast lookup
-        coord_to_node = {node_data["pos"]: node_id
-                        for node_id, node_data in graph.nodes(data=True)}
-
-        # Vectorized edge coordinate extraction
-        start_coords = edges.geometry.apply(lambda g: g.coords[0])
-        end_coords = edges.geometry.apply(lambda g: g.coords[-1])
-
-        # Map coordinates to node IDs vectorized
-        u_nodes = start_coords.map(coord_to_node)
-        v_nodes = end_coords.map(coord_to_node)
-
-        # Filter out edges where nodes weren't found
-        valid_mask = u_nodes.notna() & v_nodes.notna()
-        valid_edges = edges[valid_mask]
-        valid_u = u_nodes[valid_mask]
-        valid_v = v_nodes[valid_mask]
-
-        # Prepare edge attributes
-        edge_attrs_df = valid_edges if keep_geom else valid_edges.drop(columns=["geometry"])
-        edge_attrs_records = edge_attrs_df.to_dict("records")
-
-        # Create edges to add using a generator expression for efficiency
-        edges_to_add = (
-            (u, v, {**attrs, "_original_edge_index": idx})
-            for u, v, attrs, idx in zip(valid_u, valid_v, edge_attrs_records, valid_edges.index, strict=True)
-        )
-        graph.add_edges_from(edges_to_add)
-    else:
-        # Use coordinate tuples as node IDs - vectorized approach
-        start_coords = edges.geometry.apply(lambda g: g.coords[0])
-        end_coords = edges.geometry.apply(lambda g: g.coords[-1])
-
-        # Get unique nodes
-        all_coords = pd.concat([start_coords, end_coords]).unique()
-        nodes_to_add = [(coord, {"pos": coord}) for coord in all_coords]
-
-        # Prepare edge attributes vectorized
-        edge_attrs_df = edges.copy() if keep_geom else edges.drop(columns=["geometry"])
-
-        # Add original edge indices and length calculation
-        edge_attrs_df["_original_edge_index"] = edges.index
-        if "length" not in edge_attrs_df.columns:
-            edge_attrs_df["length"] = edges.geometry.length
-
-        edge_attrs_records = edge_attrs_df.to_dict("records")
-
-        # Create edges to add
-        edges_to_add = zip(start_coords, end_coords, edge_attrs_records, strict=True)
-
-        # Add all nodes and edges at once
-        graph.add_nodes_from(nodes_to_add)
-        graph.add_edges_from(edges_to_add)
-
-
-
-# ============================================================================
-# HETEROGENEOUS GRAPH HELPER FUNCTIONS
-# ============================================================================
-
-
-def _process_hetero_nodes(
-    graph: nx.Graph,
-    nodes_dict: dict[str, gpd.GeoDataFrame] | None,
-) -> dict[str, int]:
-    """Process nodes for heterogeneous graph and return offset mapping."""
-    node_offset = {}
-    current_offset = 0
-
-    if not nodes_dict:
-        return node_offset
-
-    for node_type, node_gdf_orig in nodes_dict.items():
-        # Validate and clean this node type
-        node_gdf_validated, _ = _validate_gdf(node_gdf_orig, None)
-        if node_gdf_validated is None or node_gdf_validated.empty:
-            continue
-
-        # Store offset for this node type
-        node_offset[node_type] = current_offset
-
-        # Add nodes with type information
-        _add_hetero_nodes_to_graph(graph, node_gdf_validated, node_type, current_offset)
-        current_offset += len(node_gdf_validated)
-
-    return node_offset
-
-
-def _add_hetero_nodes_to_graph(
-    graph: nx.Graph, node_gdf: gpd.GeoDataFrame, node_type: str, offset: int,
-) -> None:
-    """Add heterogeneous nodes to graph."""
-    # Vectorized approach to avoid iterrows()
-    centroids = node_gdf.geometry.centroid
-    node_data = node_gdf.drop(columns="geometry").to_dict("records")
-
-    # Batch process all nodes with a list comprehension
-    nodes_to_add = [
-        (
-            offset + idx,
-            {
-                **attrs,
-                "node_type": node_type,
-                "_original_index": orig_idx,
-                "pos": (centroid.x, centroid.y),
-            },
-        )
-        for idx, (attrs, orig_idx, centroid) in enumerate(
-            zip(node_data, node_gdf.index, centroids, strict=True),
-        )
-    ]
-
-    # Add all nodes at once
-    graph.add_nodes_from(nodes_to_add)
-
-
-def _process_hetero_edges(
-    graph: nx.Graph,
-    edges_dict: dict[tuple[str, str, str], gpd.GeoDataFrame] | None,
-    keep_geom: bool,
-) -> None:
-    """Process edges for heterogeneous graph."""
-    if not edges_dict:
-        return
-
-    for edge_type, edge_gdf_orig in edges_dict.items():
-        # Validate and clean this edge type
-        _, edge_gdf_validated = _validate_gdf(None, edge_gdf_orig)
-        if edge_gdf_validated is None or edge_gdf_validated.empty:
-            continue
-
-        # Add edges with type information
-        _add_hetero_edges_to_graph(
-            graph,
-            edge_gdf_validated,
-            edge_type,
-            keep_geom,
-        )
-
-
-def _add_hetero_edges_to_graph(
-    graph: nx.Graph,
-    edge_gdf: gpd.GeoDataFrame,
-    edge_type: tuple[str, str, str],
-    keep_geom: bool,
-) -> None:
-    """Add heterogeneous edges to graph."""
-    src_type, rel_type, dst_type = edge_type
-
-    # Create reverse lookup for nodes by type and original index
-    node_lookup = {}
-    for node_id, node_data in graph.nodes(data=True):
-        node_type = node_data.get("node_type")
-        orig_idx = node_data.get("_original_index")
-        if node_type and orig_idx is not None:
-            if node_type not in node_lookup:
-                node_lookup[node_type] = {}
-            node_lookup[node_type][orig_idx] = node_id
-
-    if not isinstance(edge_gdf.index, pd.MultiIndex) or edge_gdf.index.nlevels < 2:
-        logger.warning("Skipping edges for %s: index is not a MultiIndex.", str(edge_type))
-        return
-
-    # Vectorized lookup of node IDs
-    src_orig_indices = edge_gdf.index.get_level_values(0)
-    dst_orig_indices = edge_gdf.index.get_level_values(1)
-
-    # Create Series for mapping, preserving the original edge_gdf index
-    u_nodes = pd.Series(src_orig_indices.values, index=edge_gdf.index).map(node_lookup.get(src_type, {}))
-    v_nodes = pd.Series(dst_orig_indices.values, index=edge_gdf.index).map(node_lookup.get(dst_type, {}))
-
-    valid_mask = u_nodes.notna() & v_nodes.notna()
-    if not valid_mask.all():
-        logger.warning("Could not find nodes for %d edges of type %s.",
-                     (~valid_mask).sum(), str(edge_type))
-
-    valid_edges_gdf = edge_gdf[valid_mask]
-    u_nodes = u_nodes[valid_mask]
-    v_nodes = v_nodes[valid_mask]
-
-    if valid_edges_gdf.empty:
-        return
-
-    # Prepare edge attributes
-    attrs_df = valid_edges_gdf if keep_geom else valid_edges_gdf.drop(columns="geometry")
-    edge_attrs_data = attrs_df.to_dict("records")
-
-    # Create edges with a list comprehension
-    edges_to_add = [
-        (u, v, {**attrs, "edge_type": rel_type, "_original_edge_index": orig_idx})
-        for u, v, orig_idx, attrs in zip(
-            u_nodes, v_nodes, valid_edges_gdf.index, edge_attrs_data, strict=True,
-        )
-    ]
-
-    # Add all edges at once
-    graph.add_edges_from(edges_to_add)
-
-
-def _reconstruct_heterogeneous_gdfs(
-    G: nx.Graph, nodes: bool = True, edges: bool = True,
-) -> tuple[dict[str, gpd.GeoDataFrame], dict[tuple[str, str, str], gpd.GeoDataFrame]]:
-    """Reconstruct heterogeneous GeoDataFrames from NetworkX graph."""
-    node_types = G.graph.get("node_types", [])
-    edge_types = G.graph.get("edge_types", [])
-    crs = G.graph.get("crs")
-
-    nodes_dict = {}
-    edges_dict = {}
-
-    if nodes:
-        nodes_dict = _reconstruct_hetero_nodes(G, node_types, crs)
-
-    if edges:
-        edges_dict = _reconstruct_hetero_edges(G, edge_types, crs)
-
-    return nodes_dict, edges_dict
-
-
-def _reconstruct_hetero_nodes(
-    G: nx.Graph, node_types: list[str], crs: str | None,
-) -> dict[str, gpd.GeoDataFrame]:
-    """Reconstruct heterogeneous nodes."""
-    nodes_dict = {}
-
-    for node_type in node_types:
-        # Get all nodes of this type
-        type_nodes = [(n, d) for n, d in G.nodes(data=True)
-                      if d.get("node_type") == node_type]
-
-        if not type_nodes:
-            nodes_dict[node_type] = gpd.GeoDataFrame(columns=["geometry"], crs=crs)
-            continue
-
-        # Vectorized processing
-        node_ids, attrs_list = zip(*type_nodes, strict=False)
-
-        # Extract original indices from node attributes
-        indices = [attrs.get("_original_index") for attrs in attrs_list]
-
-        # Create records array, excluding internal attributes
-        records = [
-            {
-                **{k: v for k, v in attrs.items() if k not in ["pos", "node_type", "_original_index"]},
-                "geometry": Point(attrs.get("pos")) if attrs.get("pos") else None,
-            }
-            for attrs in attrs_list
-        ]
-
-        # Create GeoDataFrame with original indices
-        gdf = gpd.GeoDataFrame(
-            records, geometry="geometry", index=indices, crs=crs,
-        )
-
-        # Restore index names from graph metadata
-        node_index_names = G.graph.get("node_index_names", {})
-        if node_type in node_index_names:
-            index_name = node_index_names[node_type]
-            if index_name:
-                gdf.index.name = index_name
-
-        nodes_dict[node_type] = gdf
-
-    return nodes_dict
-
-
-def _reconstruct_hetero_edges(
-    G: nx.Graph, edge_types: list[tuple[str, str, str]], crs: str | None,
-) -> dict[tuple[str, str, str], gpd.GeoDataFrame]:
-    """Reconstruct heterogeneous edges."""
-    edges_dict = {}
-
-    for edge_type in edge_types:
-        src_type, rel_type, dst_type = edge_type
-
-        # Get all edges of this type
-        type_edges = [(u, v, d) for u, v, d in G.edges(data=True)
-                      if d.get("edge_type") == rel_type]
-
-        if not type_edges:
-            edges_dict[edge_type] = gpd.GeoDataFrame(columns=["geometry"], crs=crs)
-            continue
-
-        # Vectorized processing
-        u_nodes, v_nodes, attrs_list = zip(*type_edges, strict=False)
-
-        # Extract original indices from edge attributes
-        original_indices = [attrs.get("_original_edge_index") for attrs in attrs_list]
-
-        # Create records array, excluding internal attributes
-        records = [
-            {
-                **{k: v for k, v in attrs.items() if k not in ["edge_type", "_original_edge_index"]},
-                "geometry": attrs.get("geometry") or (
-                    LineString([G.nodes[u].get("pos"), G.nodes[v].get("pos")])
-                    if G.nodes[u].get("pos") and G.nodes[v].get("pos")
-                    else None
-                ),
-            }
-            for u, v, attrs in type_edges
-        ]
-
-        # Create MultiIndex if original indices are available and are tuples
-        index = None
-        if original_indices and all(isinstance(i, tuple) for i in original_indices if i is not None):
-            index = pd.MultiIndex.from_tuples(original_indices)
-        else:
-            index = original_indices
-
-        gdf = gpd.GeoDataFrame(
-            records, geometry="geometry", index=index, crs=crs,
-        )
-
-        # Restore index names from graph metadata
-        edge_index_names = G.graph.get("edge_index_names", {})
-        if edge_type in edge_index_names:
-            index_names = edge_index_names[edge_type]
-            if index_names and hasattr(gdf.index, "names"):
-                gdf.index.names = index_names
-
-        edges_dict[edge_type] = gdf
-
-    return edges_dict
-
-
-
+        msg = "Graph has no edges"
+        raise ValueError(msg)

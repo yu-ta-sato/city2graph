@@ -785,7 +785,7 @@ def _rebuild_geometry(
         pivot_df.loc[seg_id, ("y_centroid", "end")],
     )
     coords = list(geom.coords)
-    return [start] + coords[1:-1] + [end] if len(coords) > 2 else [start, end]
+    return [start, *coords[1:-1], end] if len(coords) > 2 else [start, end]
 
 
 def _adjust_segment_connectors(

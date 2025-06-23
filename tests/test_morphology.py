@@ -1,3 +1,5 @@
+"""Tests for the morphology module."""
+
 import logging
 import math
 
@@ -33,7 +35,7 @@ from city2graph.morphology import public_to_public_graph
 )
 def test_private_to_private_graph(
     gdf_param, contiguity, group_col, expect_empty_edges, error_type, error_match, request,
-):
+) -> None:
     gdf = request.getfixturevalue(gdf_param)
     if error_type:
         with pytest.raises(error_type, match=error_match):
@@ -78,7 +80,7 @@ def test_private_to_private_graph(
 )
 def test_public_to_public_graph(
     gdf_param, expect_empty_edges, expected_crs_is_none, error_type, error_match, request,
-):
+) -> None:
     gdf = request.getfixturevalue(gdf_param)
 
     if error_type:
@@ -136,7 +138,7 @@ def test_public_to_public_graph(
 def test_private_to_public_graph(
     private_gdf_fixture, public_gdf_fixture, primary_barrier_col, expect_empty_edges,
     error_type, error_match, crs_mismatch, expected_warning_type, expected_warning_match, request,
-):
+) -> None:
     private_gdf = request.getfixturevalue(private_gdf_fixture)
     public_gdf = request.getfixturevalue(public_gdf_fixture)
 
@@ -192,7 +194,7 @@ def test_private_to_public_graph(
 )
 def test_morphological_graph_input_errors(
     request, contiguity_val, clipping_buffer_val, error_type, error_match_str, buildings_fixture_name, segments_fixture_name,
-):
+) -> None:
     buildings_gdf = request.getfixturevalue(buildings_fixture_name)
     segments_gdf = request.getfixturevalue(segments_fixture_name)
     with pytest.raises(error_type, match=error_match_str):
@@ -214,7 +216,7 @@ def test_morphological_graph_input_errors(
 def test_morphological_graph_empty_or_minimal_inputs(
     buildings_param, segments_param, expect_private_nodes_empty,
     expect_public_nodes_empty, expect_all_edges_empty, request,
-):
+) -> None:
     buildings = request.getfixturevalue(buildings_param)
     segments = request.getfixturevalue(segments_param)
 
@@ -270,7 +272,7 @@ def test_morphological_graph_options_and_structure(
     buildings_fixture_name, segments_fixture_name,
     contiguity, clipping_buffer, keep_buildings, primary_barrier_col_name_param,
     center_point_fixture, distance_val,
-):
+) -> None:
     buildings_gdf = request.getfixturevalue(buildings_fixture_name)
     segments_gdf = request.getfixturevalue(segments_fixture_name)
     center_point_val = request.getfixturevalue(center_point_fixture) if center_point_fixture else None
@@ -353,7 +355,7 @@ def test_morphological_graph_options_and_structure(
             assert edge_gdf.index.name is None or edge_gdf.index.names == [None] or isinstance(edge_gdf.index, pd.RangeIndex)
 
 
-def test_morphological_graph_input_type_errors(sample_buildings_gdf, sample_segments_gdf): # Use new fixtures
+def test_morphological_graph_input_type_errors(sample_buildings_gdf, sample_segments_gdf) -> None: # Use new fixtures
     with pytest.raises(TypeError, match="buildings_gdf must be a GeoDataFrame"):
         morphological_graph("not_a_gdf", sample_segments_gdf)
     with pytest.raises(TypeError, match="segments_gdf must be a GeoDataFrame"):
@@ -361,7 +363,7 @@ def test_morphological_graph_input_type_errors(sample_buildings_gdf, sample_segm
 
 def test_morphological_graph_no_private_public_warning(
     sample_buildings_gdf, segments_gdf_far_away, caplog, # Use new fixtures
-):
+) -> None:
     with caplog.at_level(logging.WARNING):
         nodes, edges = morphological_graph(sample_buildings_gdf, segments_gdf_far_away)
     assert "No private to public connections found" in caplog.text
@@ -381,7 +383,7 @@ def test_morphological_graph_filtering_scenarios(
     buildings_fixture, segments_fixture, request,
     filter_params, expect_public_nodes_reduced, expect_public_nodes_very_few_or_empty,
     expect_private_nodes_to_be_empty_due_to_input_or_filter,
-):
+) -> None:
     buildings = request.getfixturevalue(buildings_fixture)
     segments = request.getfixturevalue(segments_fixture)
     center_point = request.getfixturevalue(filter_params["center_point_fixture"]) if filter_params.get("center_point_fixture") else None
@@ -415,7 +417,7 @@ def test_morphological_graph_filtering_scenarios(
         assert edges[("private", "touched_to", "private")].empty
         assert edges[("private", "faced_to", "public")].empty
 
-def test_morphological_graph_default_run_specific_counts(sample_buildings_gdf, sample_segments_gdf, request):
+def test_morphological_graph_default_run_specific_counts(sample_buildings_gdf, sample_segments_gdf, request) -> None:
     # This test now uses the sample GeoJSON data.
     # Assertions need to be based on expected outcomes from this specific data.
     # Exact counts can be brittle if data changes. Focus on general expectations.
@@ -464,8 +466,8 @@ def test_morphological_graph_default_run_specific_counts(sample_buildings_gdf, s
 
 
 def test_morphological_graph_with_custom_center_point(
-    sample_buildings_gdf, sample_segments_gdf, custom_center_point
-):
+    sample_buildings_gdf, sample_segments_gdf, custom_center_point,
+) -> None:
     """Test morphological_graph with a custom center point for filtering."""
     nodes, edges = morphological_graph(
         buildings_gdf=sample_buildings_gdf,

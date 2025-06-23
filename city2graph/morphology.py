@@ -555,19 +555,19 @@ def public_to_public_graph(
     if public_gdf.empty or len(public_gdf) < 2:
         return _create_empty_edges_gdf(public_gdf.crs, "from_public_id", "to_public_id")
 
-    # Use 'public_id' as the index for dual_graph processing
-    public_gdf_indexed = public_gdf.set_index("public_id")
+    # Convert public_gdf to a graph
+    nodes, edges = segments_to_graph(public_gdf)
 
     # Create dual graph (nodes are segments, edges are connections)
-    _, edges_gdf_dual = dual_graph(
-        public_gdf_indexed, keep_original_geom=True,
+    _, dual_edges = dual_graph(
+        (nodes, edges), edge_id_col="public_id", keep_original_geom=True,
     )
 
     # Rename the MultiIndex levels for clarity and consistency
-    if isinstance(edges_gdf_dual.index, pd.MultiIndex):
-        edges_gdf_dual.index.names = ["from_public_id", "to_public_id"]
+    if isinstance(dual_edges.index, pd.MultiIndex):
+        dual_edges.index.names = ["from_public_id", "to_public_id"]
 
-    return edges_gdf_dual.reset_index()
+    return dual_edges.reset_index()
 
 
 # ============================================================================
