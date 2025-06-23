@@ -150,16 +150,18 @@ class GraphConverter:
         self,
         nodes: gpd.GeoDataFrame | dict[str, gpd.GeoDataFrame] | None = None,
         edges: gpd.GeoDataFrame | dict[tuple[str, str, str], gpd.GeoDataFrame] | None = None,
-        node_id_col: str | None = None,
-        edge_id_col: str | None = None,
     ) -> nx.Graph:
         """Convert GeoDataFrames to NetworkX graph."""
+        if nodes is None and edges is None:
+            msg = "Either nodes or edges must be provided."
+            raise ValueError(msg)
+
         # Determine graph type
         is_hetero = isinstance(nodes, dict) or isinstance(edges, dict)
 
         if is_hetero:
             return self._convert_heterogeneous(nodes, edges)
-        return self._convert_homogeneous(nodes, edges, node_id_col, edge_id_col)
+        return self._convert_homogeneous(nodes, edges)
 
     def nx_to_gdf(
         self,
@@ -181,8 +183,6 @@ class GraphConverter:
         self,
         nodes: gpd.GeoDataFrame | None,
         edges: gpd.GeoDataFrame | None,
-        _node_id_col: str | None,  # Unused but kept for interface consistency
-        _edge_id_col: str | None,  # Unused but kept for interface consistency
     ) -> nx.Graph:
         """Convert homogeneous GeoDataFrames to NetworkX."""
         # Validate inputs
@@ -828,19 +828,14 @@ class GraphAnalyzer:
         if not source_nodes:
             return set()
 
-        try:
-            # Compute single-source shortest paths from all sources
-            all_reachable = set()
-            for source in source_nodes:
-                lengths = nx.single_source_dijkstra_path_length(
-                    graph, source, cutoff=distance, weight=edge_attr,
-                )
-                all_reachable.update(lengths.keys())
-            return all_reachable
-
-        except (nx.NetworkXNoPath, nx.NodeNotFound):
-            logger.warning("Could not compute distances from center points")
-            return set()
+        # Compute single-source shortest paths from all sources
+        all_reachable = set()
+        for source in source_nodes:
+            lengths = nx.single_source_dijkstra_path_length(
+                graph, source, cutoff=distance, weight=edge_attr,
+            )
+            all_reachable.update(lengths.keys())
+        return all_reachable
 
     def _get_nearest_node(
         self, point: Point | gpd.GeoSeries, nodes_gdf: gpd.GeoDataFrame, node_id: str,
@@ -1097,8 +1092,6 @@ def segments_to_graph(
 def gdf_to_nx(
     nodes: gpd.GeoDataFrame | dict[str, gpd.GeoDataFrame] | None = None,
     edges: gpd.GeoDataFrame | dict[tuple[str, str, str], gpd.GeoDataFrame] | None = None,
-    node_id_col: str | dict[str, str] | None = None,
-    edge_id_col: str | dict[tuple[str, str, str], str] | None = None,
     keep_geom: bool = True,
 ) -> nx.Graph:
     """Convert GeoDataFrames of nodes and edges to a NetworkX graph.
@@ -1123,12 +1116,6 @@ def gdf_to_nx(
         (source_type, relation_type, target_type) to GeoDataFrames.
         Edge relationships are defined by a MultiIndex on the edge
         GeoDataFrame (source ID, target ID).
-    node_id_col : str or dict, optional
-        The name of the column to be used as the node identifier. This is
-        currently not used as the index is preferred. Kept for API consistency.
-    edge_id_col : str or dict, optional
-        The name of the column to be used as the edge identifier. This is
-        currently not used. Kept for API consistency.
     keep_geom : bool, default True
         If True, the geometry of the nodes and edges GeoDataFrames will be
         preserved as attributes in the NetworkX graph.
@@ -1189,7 +1176,7 @@ def gdf_to_nx(
     ...       'pos': (1.0, 1.0)})]
     """
     converter = GraphConverter(keep_geom=keep_geom)
-    return converter.gdf_to_nx(nodes, edges, node_id_col, edge_id_col)
+    return converter.gdf_to_nx(nodes, edges)
 
 def nx_to_gdf(
     G: nx.Graph, nodes: bool = True, edges: bool = True,

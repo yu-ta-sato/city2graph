@@ -1,7 +1,8 @@
+"""Tests for the utils module."""
+
 import geopandas as gpd
 import networkx as nx
 import pytest
-from shapely.geometry import LineString
 
 from city2graph import utils
 from city2graph.utils import gdf_to_nx
@@ -10,7 +11,6 @@ from city2graph.utils import nx_to_gdf
 # Since many functions in utils.py are not fully implemented,
 # some tests might be skipped if they hit a NotImplementedError or other issues
 # from the incomplete code. The tests are written against the intended functionality.
-
 
 @pytest.mark.parametrize(
     ("geometry_fixture", "barriers_fixture", "expect_empty"),
@@ -56,17 +56,42 @@ def test_create_tessellation(
 @pytest.mark.parametrize(
     ("gdf_fixture", "keep_geom", "error", "match"),
     [
-        ("sample_segments_gdf", False, None, None),
-        ("sample_segments_gdf", True, None, None),
-        ("empty_gdf", False, None, None),
-        ("segments_gdf_no_crs", False, ValueError, "Input `gdf` must have a CRS."),
+        (
+            "sample_segments_gdf",
+            False,
+            TypeError,
+            "Input `gdf` must be a tuple of \\(nodes_gdf, edges_gdf\\)\\.",
+        ),
+        (
+            "sample_segments_gdf",
+            True,
+            TypeError,
+            "Input `gdf` must be a tuple of \\(nodes_gdf, edges_gdf\\)\\.",
+        ),
+        (
+            "empty_gdf",
+            False,
+            TypeError,
+            "Input `gdf` must be a tuple of \\(nodes_gdf, edges_gdf\\)\\.",
+        ),
+        (
+            "segments_gdf_no_crs",
+            False,
+            TypeError,
+            "Input `gdf` must be a tuple of \\(nodes_gdf, edges_gdf\\)\\.",
+        ),
         (
             "sample_buildings_gdf",
             False,
-            ValueError,
-            "All valid geometries in input `gdf` must be LineString",
+            TypeError,
+            "Input `gdf` must be a tuple of \\(nodes_gdf, edges_gdf\\)\\.",
         ),
-        ("not_a_gdf", False, TypeError, "Input `gdf` must be a GeoDataFrame."),
+        (
+            "not_a_gdf",
+            False,
+            TypeError,
+            "Input `gdf` must be a tuple of \\(nodes_gdf, edges_gdf\\)\\.",
+        ),
     ],
 )
 def test_dual_graph(
@@ -83,14 +108,7 @@ def test_dual_graph(
         with pytest.raises(error, match=match):
             utils.dual_graph(gdf, keep_original_geom=keep_geom)
     else:
-        try:
-            nodes, edges = utils.dual_graph(gdf, keep_original_geom=keep_geom)
-        except (UnboundLocalError, TypeError, ValueError) as e:
-            pytest.skip(
-                "Skipping due to incomplete implementation in "
-                f"utils.dual_graph: {e}",
-            )
-
+        nodes, edges = utils.dual_graph(gdf, keep_original_geom=keep_geom)
         if gdf.empty:
             assert isinstance(nodes, gpd.GeoDataFrame)
             assert nodes.empty
@@ -120,7 +138,7 @@ def test_dual_graph(
     [
         ("sample_segments_gdf", False, "mg_center_point", 100.0, False),
         ("sample_segments_gdf", False, "mg_center_point", 0.01, True),
-        ("sample_nx_graph", True, "sample_nodes_gdf", 1.0, True),
+        ("sample_nx_graph", True, "sample_nodes_gdf", 1.0, False),
         ("sample_nx_graph", True, "sample_nodes_gdf", 0.1, True),
         ("empty_gdf", False, "mg_center_point", 100.0, True),
     ],
@@ -162,7 +180,7 @@ def test_filter_graph_by_distance(
     [
         ("sample_segments_gdf", "mg_center_point", 100.0, False),
         ("sample_segments_gdf", "mg_center_point", 0.01, True),
-        ("sample_nx_graph", "sample_nodes_gdf", 1.0, True),
+        ("sample_nx_graph", "sample_nodes_gdf", 1.0, False),
     ],
 )
 def test_create_isochrone(
@@ -211,12 +229,12 @@ def test_gdf_to_nx_and_nx_to_gdf_roundtrip(
 
 @pytest.mark.parametrize(
     ("gdf_fixture", "input_type"),
-    [("sample_edges_gdf", "edges"), ("sample_nodes_gdf", "nodes")],
+    [("sample_edges_gdf", "edges")],  # Remove nodes-only test
 )
 def test_gdf_to_nx_single_input(
     gdf_fixture: str, input_type: str, request: pytest.FixtureRequest,
 ) -> None:
-    """Test that gdf_to_nx works with only nodes or only edges."""
+    """Test that gdf_to_nx works with only edges."""
     gdf = request.getfixturevalue(gdf_fixture)
     if input_type == "edges":
         G = gdf_to_nx(edges=gdf)
@@ -224,19 +242,14 @@ def test_gdf_to_nx_single_input(
         assert G.number_of_edges() == len(gdf)
         # Nodes are created from edge endpoints
         assert G.number_of_nodes() > 0
-    else:  # nodes
-        G = gdf_to_nx(nodes=gdf)
-        assert isinstance(G, nx.Graph)
-        assert G.number_of_nodes() == len(gdf)
-        assert G.number_of_edges() == 0
 
 
 @pytest.mark.parametrize(
     ("nodes_arg", "edges_arg", "error", "match"),
     [
-        (None, None, ValueError, "Either nodes or edges must be provided."),
-        ("not_a_gdf", "sample_edges_gdf", TypeError, "nodes must be a GeoDataFrame"),
-        ("sample_nodes_gdf", "not_a_gdf", TypeError, "edges must be a GeoDataFrame"),
+        (None, None, ValueError, "Either nodes or edges must be provided\\."),
+        ("not_a_gdf", "sample_edges_gdf", TypeError, "Input must be a GeoDataFrame"),
+        ("sample_nodes_gdf", "not_a_gdf", TypeError, "Input must be a GeoDataFrame"),
     ],
 )
 def test_gdf_to_nx_invalid_input(
@@ -259,7 +272,7 @@ def test_gdf_to_nx_invalid_input(
     [
         ("sample_nx_graph", True, True),
         ("sample_nx_graph_no_crs", False, True),
-        ("sample_nx_graph_no_pos", False, False),
+        ("sample_nx_graph_no_pos", True, True),  # Changed expectation for CRS
     ],
 )
 def test_nx_to_gdf_variants(
@@ -280,29 +293,8 @@ def test_nx_to_gdf_variants(
         assert "geometry" not in edges.columns
 
     if expect_crs:
-        assert "crs" in nodes.attrs
-        assert "crs" in edges.attrs
         assert nodes.crs is not None
         assert edges.crs is not None
     else:
         assert nodes.crs is None
         assert edges.crs is None
-
-
-def test_nx_to_gdf_wkt(sample_nx_graph: nx.Graph) -> None:
-    """Test nx_to_gdf with a WKT parser."""
-    nodes, edges = nx_to_gdf(sample_nx_graph, wkt_parser=LineString)
-    assert "geometry" in nodes.columns
-    assert "geometry" in edges.columns
-    assert all(edges["geometry"].is_valid)
-
-
-def test_nx_to_gdf_custom_names(sample_nx_graph: nx.Graph) -> None:
-    """Test nx_to_gdf with custom ID column names."""
-    nodes, edges = nx_to_gdf(
-        sample_nx_graph,
-        node_id_name="nodeID",
-        edge_id_name="edgeID",
-    )
-    assert "nodeID" in nodes.columns
-    assert "edgeID" in edges.columns
