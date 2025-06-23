@@ -42,6 +42,7 @@ def sample_nodes_gdf(sample_crs: str) -> gpd.GeoDataFrame:
 def sample_edges_gdf() -> gpd.GeoDataFrame:
     """Fixture for a homogeneous edges GeoDataFrame."""
     data = {
+        "edge_id": ["e1", "e2", "e3", "e4"],
         "source_id": [1, 1, 2, 3],
         "target_id": [2, 3, 4, 4],
         "edge_feature1": [0.5, 0.8, 1.2, 2.5],

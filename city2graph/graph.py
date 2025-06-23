@@ -27,9 +27,9 @@ import numpy as np
 import pandas as pd
 from shapely.geometry import LineString
 
-from city2graph.utils import _validate_gdf
-from city2graph.utils import _validate_nx
 from city2graph.utils import nx_to_gdf
+from city2graph.utils import validate_gdf
+from city2graph.utils import validate_nx
 
 if TYPE_CHECKING:
     import torch
@@ -167,11 +167,11 @@ def gdf_to_pyg(
     # Validate input GeoDataFrames
     is_hetero = isinstance(nodes, dict)
     if is_hetero:
-        [_validate_gdf(nodes_gdf=node_gdf) for node_gdf in nodes.values()]
+        [validate_gdf(nodes_gdf=node_gdf) for node_gdf in nodes.values()]
         if edges:
-            [_validate_gdf(edges_gdf=edge_gdf) for edge_gdf in edges.values() if edge_gdf is not None]
+            [validate_gdf(edges_gdf=edge_gdf) for edge_gdf in edges.values() if edge_gdf is not None]
     else:
-        _validate_gdf(nodes_gdf=nodes, edges_gdf=edges)
+        validate_gdf(nodes_gdf=nodes, edges_gdf=edges)
 
     device = _get_device(device)
 
@@ -365,7 +365,7 @@ def nx_to_pyg(
         raise ImportError(TORCH_ERROR_MSG)
 
     # Validate NetworkX graph
-    _validate_nx(graph)
+    validate_nx(graph)
 
     # Get nodes and edges GeoDataFrames
     nodes_gdf, edges_gdf = nx_to_gdf(graph, nodes=True, edges=True)

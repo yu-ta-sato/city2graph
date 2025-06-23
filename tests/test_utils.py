@@ -55,77 +55,157 @@ def test_create_tessellation(
 
 
 @pytest.mark.parametrize(
-    ("gdf_fixture", "keep_geom", "error", "match"),
+    ("nodes_fixture", "edges_fixture", "keep_geom", "edge_id_col", "error", "match"),
     [
+        # Successful cases
+        ("sample_nodes_gdf", "sample_edges_gdf", False, None, None, None),
+        ("sample_nodes_gdf", "sample_edges_gdf", True, None, None, None),
+        ("sample_nodes_gdf", "sample_edges_gdf", False, "edge_id", None, None),
+        ("empty_gdf", "empty_gdf", False, None, None, None),
+        # Error cases
         (
             "sample_segments_gdf",
+            None,
             False,
+            None,
             TypeError,
             "Input `gdf` must be a tuple of \\(nodes_gdf, edges_gdf\\)\\.",
         ),
         (
-            "sample_segments_gdf",
-            True,
-            TypeError,
-            "Input `gdf` must be a tuple of \\(nodes_gdf, edges_gdf\\)\\.",
-        ),
-        (
-            "empty_gdf",
-            False,
-            TypeError,
-            "Input `gdf` must be a tuple of \\(nodes_gdf, edges_gdf\\)\\.",
-        ),
-        (
+            "sample_nodes_gdf",
             "segments_gdf_no_crs",
             False,
-            TypeError,
-            "Input `gdf` must be a tuple of \\(nodes_gdf, edges_gdf\\)\\.",
+            None,
+            ValueError,
+            "Input edges `gdf` must have a CRS\\.",
         ),
         (
-            "sample_buildings_gdf",
-            False,
-            TypeError,
-            "Input `gdf` must be a tuple of \\(nodes_gdf, edges_gdf\\)\\.",
-        ),
-        (
+            "sample_nodes_gdf",
             "not_a_gdf",
             False,
+            None,
             TypeError,
-            "Input `gdf` must be a tuple of \\(nodes_gdf, edges_gdf\\)\\.",
+            "Input must be a GeoDataFrame",
         ),
     ],
 )
 def test_dual_graph(
-    gdf_fixture: str,
+    nodes_fixture: str,
+    edges_fixture: str | None,
     keep_geom: bool,
+    edge_id_col: str | None,
     error: type[Exception] | None,
     match: str | None,
     request: pytest.FixtureRequest,
 ) -> None:
     """Test dual_graph with various inputs."""
-    gdf = request.getfixturevalue(gdf_fixture)
+    if edges_fixture is None:
+        # For testing non-tuple input
+        gdf = request.getfixturevalue(nodes_fixture)
+    else:
+        nodes = request.getfixturevalue(nodes_fixture)
+        edges = request.getfixturevalue(edges_fixture)
+        gdf = (nodes, edges)
 
     if error:
         with pytest.raises(error, match=match):
-            utils.dual_graph(gdf, keep_original_geom=keep_geom)
+            utils.dual_graph(
+                gdf, edge_id_col=edge_id_col, keep_original_geom=keep_geom
+            )
     else:
-        nodes, edges = utils.dual_graph(gdf, keep_original_geom=keep_geom)
-        if gdf.empty:
-            assert isinstance(nodes, gpd.GeoDataFrame)
-            assert nodes.empty
-            assert isinstance(edges, gpd.GeoDataFrame)
-            assert edges.empty
+        _primal_nodes, primal_edges = gdf
+        dual_nodes, dual_edges = utils.dual_graph(
+            gdf, edge_id_col=edge_id_col, keep_original_geom=keep_geom
+        )
+
+        if primal_edges.empty:
+            assert isinstance(dual_nodes, gpd.GeoDataFrame)
+            assert dual_nodes.empty
+            assert isinstance(dual_edges, gpd.GeoDataFrame)
+            assert dual_edges.empty
             return
 
-        assert isinstance(nodes, gpd.GeoDataFrame)
-        assert isinstance(edges, gpd.GeoDataFrame)
-        assert nodes.crs == gdf.crs
-        assert edges.crs == gdf.crs
+        assert isinstance(dual_nodes, gpd.GeoDataFrame)
+        assert not dual_nodes.empty
+        assert isinstance(dual_edges, gpd.GeoDataFrame)
+
+        # For sample data, we expect adjacent edges, so dual_edges is not empty.
+        if edges_fixture == "sample_edges_gdf":
+            assert not dual_edges.empty
+
+        assert dual_nodes.crs == primal_edges.crs
+        assert dual_edges.crs == primal_edges.crs
 
         if keep_geom:
-            assert "original_geometry" in nodes.columns
+            assert "original_geometry" in dual_nodes.columns
         else:
-            assert "original_geometry" not in nodes.columns
+            assert "original_geometry" not in dual_nodes.columns
+
+        if edge_id_col:
+            assert dual_nodes.index.name == edge_id_col
+            assert all(primal_edges[edge_id_col].isin(dual_nodes.index))
+
+
+@pytest.mark.parametrize(
+    ("segments_fixture", "expect_empty_output"),
+    [
+        ("sample_segments_gdf", False),
+        ("single_segment_gdf", False),
+        ("empty_gdf", True),
+        ("segments_invalid_geom_gdf", True),  # Invalid geoms are filtered, resulting in empty
+        ("segments_gdf_no_crs", False),
+    ],
+)
+def test_segments_to_graph(
+    segments_fixture: str,
+    expect_empty_output: bool,
+    request: pytest.FixtureRequest,
+) -> None:
+    """Test segments_to_graph with various inputs."""
+    segments_gdf = request.getfixturevalue(segments_fixture)
+
+    nodes_gdf, edges_gdf = utils.segments_to_graph(segments_gdf)
+
+    assert isinstance(nodes_gdf, gpd.GeoDataFrame)
+    assert isinstance(edges_gdf, gpd.GeoDataFrame)
+
+    if expect_empty_output:
+        assert nodes_gdf.empty
+        assert edges_gdf.empty
+        assert nodes_gdf.crs == segments_gdf.crs
+        assert edges_gdf.crs == segments_gdf.crs
+        return
+
+    assert not nodes_gdf.empty
+    assert not edges_gdf.empty
+
+    assert nodes_gdf.crs == segments_gdf.crs
+    assert edges_gdf.crs == segments_gdf.crs
+
+    assert nodes_gdf.index.name == "node_id"
+    assert nodes_gdf.geometry.geom_type.isin(["Point"]).all()
+
+    assert isinstance(edges_gdf.index, pd.MultiIndex)
+    assert edges_gdf.index.names == ["from_node_id", "to_node_id"]
+    assert edges_gdf.geometry.geom_type.isin(["LineString"]).all()
+
+    # Check that original attributes are preserved in edges
+    original_cols = set(segments_gdf.columns) - {"geometry"}
+    output_cols = set(edges_gdf.columns) - {"geometry"}
+    assert original_cols == output_cols
+
+    # Check consistency
+    if segments_fixture in ("sample_segments_gdf", "segments_gdf_no_crs"):
+        # These fixtures are known to contain one invalid geometry that gets removed.
+        assert len(edges_gdf) == len(segments_gdf) - 1
+    else:
+        # For other valid inputs, the number of edges should match the input segments.
+        assert len(edges_gdf) == len(segments_gdf)
+
+    from_ids = edges_gdf.index.get_level_values("from_node_id")
+    to_ids = edges_gdf.index.get_level_values("to_node_id")
+    assert all(from_ids.isin(nodes_gdf.index))
+    assert all(to_ids.isin(nodes_gdf.index))
 
 
 @pytest.mark.parametrize(
@@ -212,7 +292,7 @@ def test_create_isochrone(
         assert isochrone.geometry.iloc[0].geom_type in ["Polygon", "MultiPolygon"]
 
 
-def test_gdf_to_nx_and_nx_to_gdf_roundtrip(
+def test_gdf_to_nx_roundtrip(
     sample_nodes_gdf: gpd.GeoDataFrame,
     sample_edges_gdf: gpd.GeoDataFrame,
 ) -> None:
@@ -232,9 +312,43 @@ def test_gdf_to_nx_and_nx_to_gdf_roundtrip(
     pd.testing.assert_index_equal(sample_edges_gdf.index, edges_trip.index)
 
 
+def test_gdf_to_nx_roundtrip_hetero(
+    sample_hetero_nodes_dict: dict[str, gpd.GeoDataFrame],
+    sample_hetero_edges_dict: dict[tuple[str, str, str], gpd.GeoDataFrame],
+) -> None:
+    """Test round trip conversion for heterogeneous graphs."""
+    H = gdf_to_nx(nodes=sample_hetero_nodes_dict, edges=sample_hetero_edges_dict)
+    nodes_dict_trip, edges_dict_trip = nx_to_gdf(H)
+
+    assert isinstance(nodes_dict_trip, dict)
+    assert isinstance(edges_dict_trip, dict)
+
+    assert sample_hetero_nodes_dict.keys() == nodes_dict_trip.keys()
+    assert sample_hetero_edges_dict.keys() == edges_dict_trip.keys()
+
+    for node_type, nodes_gdf in sample_hetero_nodes_dict.items():
+        nodes_gdf_trip = nodes_dict_trip[node_type]
+        assert nodes_gdf.crs == nodes_gdf_trip.crs
+        assert "geometry" in nodes_gdf_trip.columns
+        assert all(nodes_gdf_trip["geometry"].is_valid)
+        assert len(nodes_gdf) == len(nodes_gdf_trip)
+        pd.testing.assert_index_equal(nodes_gdf.index, nodes_gdf_trip.index)
+
+    for edge_type, edges_gdf in sample_hetero_edges_dict.items():
+        edges_gdf_trip = edges_dict_trip[edge_type]
+        assert edges_gdf.crs == edges_gdf_trip.crs
+        assert "geometry" in edges_gdf_trip.columns
+        assert all(edges_gdf_trip["geometry"].is_valid)
+        assert len(edges_gdf) == len(edges_gdf_trip)
+        pd.testing.assert_index_equal(edges_gdf.index, edges_gdf_trip.index)
+
+
 @pytest.mark.parametrize(
     ("gdf_fixture", "input_type"),
-    [("sample_edges_gdf", "edges")],  # Remove nodes-only test
+    [
+        ("sample_edges_gdf", "edges"),
+        ("sample_hetero_edges_dict", "hetero_edges"),
+    ],
 )
 def test_gdf_to_nx_single_input(
     gdf_fixture: str, input_type: str, request: pytest.FixtureRequest,
@@ -247,6 +361,11 @@ def test_gdf_to_nx_single_input(
         assert G.number_of_edges() == len(gdf)
         # Nodes are created from edge endpoints
         assert G.number_of_nodes() > 0
+    elif input_type == "hetero_edges":
+        G = gdf_to_nx(edges=gdf)
+        assert isinstance(G, nx.Graph)
+        assert G.number_of_edges() == 0
+        assert G.number_of_nodes() == 0
 
 
 @pytest.mark.parametrize(
@@ -255,6 +374,18 @@ def test_gdf_to_nx_single_input(
         (None, None, ValueError, "Either nodes or edges must be provided\\."),
         ("not_a_gdf", "sample_edges_gdf", TypeError, "Input must be a GeoDataFrame"),
         ("sample_nodes_gdf", "not_a_gdf", TypeError, "Input must be a GeoDataFrame"),
+        (
+            "sample_hetero_nodes_dict",
+            "sample_edges_gdf",
+            TypeError,
+            "If nodes is a dict, edges must also be a dict or None.",
+        ),
+        (
+            "sample_nodes_gdf",
+            "sample_hetero_edges_dict",
+            TypeError,
+            "If edges is a dict, nodes must also be a dict or None.",
+        ),
     ],
 )
 def test_gdf_to_nx_invalid_input(
@@ -303,3 +434,80 @@ def test_nx_to_gdf_variants(
     else:
         assert nodes.crs is None
         assert edges.crs is None
+
+
+@pytest.mark.parametrize(
+    ("nodes_fixture", "edges_fixture", "error", "match"),
+    [
+        # Success cases
+        ("sample_nodes_gdf", "sample_edges_gdf", None, None),
+        ("sample_nodes_gdf", None, None, None),
+        (None, "sample_edges_gdf", None, None),
+        ("empty_gdf", "sample_edges_gdf", None, None),
+        # Error cases
+        ("not_a_gdf", "sample_edges_gdf", TypeError, "Input must be a GeoDataFrame"),
+        ("sample_nodes_gdf", "not_a_gdf", TypeError, "Input must be a GeoDataFrame"),
+        ("sample_nodes_gdf", "empty_gdf", ValueError, "GeoDataFrame cannot be empty"),
+        (
+            "sample_nodes_gdf",
+            "segments_invalid_geom_gdf",
+            ValueError,
+            "GeoDataFrame cannot be empty",
+        ),
+    ],
+)
+def test_validate_gdf(
+    nodes_fixture: str | None,
+    edges_fixture: str | None,
+    error: type[Exception] | None,
+    match: str | None,
+    request: pytest.FixtureRequest,
+) -> None:
+    """Test validate_gdf with various inputs."""
+    nodes_gdf = request.getfixturevalue(nodes_fixture) if nodes_fixture else None
+    edges_gdf = request.getfixturevalue(edges_fixture) if edges_fixture else None
+
+    if error:
+        with pytest.raises(error, match=match):
+            utils.validate_gdf(nodes_gdf=nodes_gdf, edges_gdf=edges_gdf)
+    else:
+        try:
+            utils.validate_gdf(nodes_gdf=nodes_gdf, edges_gdf=edges_gdf)
+        except Exception as e:
+            pytest.fail(f"validate_gdf raised an unexpected exception: {e}")
+
+
+@pytest.mark.parametrize(
+    ("graph_input", "error", "match"),
+    [
+        # Success case
+        ("sample_nx_graph", None, None),
+        # Error cases
+        ("not_a_gdf", TypeError, "Input must be a NetworkX graph"),
+        ("empty_graph", ValueError, "Graph has no nodes"),
+        ("graph_no_edges", ValueError, "Graph has no edges"),
+    ],
+)
+def test_validate_nx(
+    graph_input: str,
+    error: type[Exception] | None,
+    match: str | None,
+    request: pytest.FixtureRequest,
+) -> None:
+    """Test validate_nx with various graph inputs."""
+    if graph_input == "empty_graph":
+        graph = nx.Graph()
+    elif graph_input == "graph_no_edges":
+        graph = nx.Graph()
+        graph.add_node(1)
+    else:
+        graph = request.getfixturevalue(graph_input)
+
+    if error:
+        with pytest.raises(error, match=match):
+            utils.validate_nx(graph)
+    else:
+        try:
+            utils.validate_nx(graph)
+        except Exception as e:
+            pytest.fail(f"validate_nx raised an unexpected exception: {e}")

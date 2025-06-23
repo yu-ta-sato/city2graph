@@ -12,8 +12,6 @@ from shapely.geometry import Point
 
 # Define the public API for this module
 __all__ = [
-    "_validate_gdf",
-    "_validate_nx",
     "create_isochrone",
     "create_tessellation",
     "dual_graph",
@@ -21,6 +19,8 @@ __all__ = [
     "gdf_to_nx",
     "nx_to_gdf",
     "segments_to_graph",
+    "validate_gdf",
+    "validate_nx",
 ]
 
 logger = logging.getLogger(__name__)
@@ -106,7 +106,40 @@ class GeoDataProcessor:
             logger.warning("Removed %d invalid geometries", invalid_count)
             gdf = gdf[~invalid_mask]
 
+        if gdf.empty and not allow_empty:
+            msg = "GeoDataFrame cannot be empty"
+            raise ValueError(msg)
+
         return gdf
+
+    @staticmethod
+    def validate_nx(graph: nx.Graph) -> None:
+        """Validate a NetworkX graph.
+
+        Checks if the input is a NetworkX graph and ensures it is not empty
+        (i.e., it has both nodes and edges).
+
+        Parameters
+        ----------
+        graph : nx.Graph
+            The NetworkX graph to validate.
+
+        Raises
+        ------
+        TypeError
+            If the input is not a NetworkX graph.
+        ValueError
+            If the graph has no nodes or no edges.
+        """
+        if not isinstance(graph, nx.Graph):
+            msg = "Input must be a NetworkX graph"
+            raise TypeError(msg)
+        if graph.number_of_nodes() == 0:
+            msg = "Graph has no nodes"
+            raise ValueError(msg)
+        if graph.number_of_edges() == 0:
+            msg = "Graph has no edges"
+            raise ValueError(msg)
 
     @staticmethod
     def ensure_crs_consistency(*gdfs: gpd.GeoDataFrame | None) -> tuple[gpd.GeoDataFrame | None, ...]:
@@ -156,8 +189,18 @@ class GraphConverter:
             msg = "Either nodes or edges must be provided."
             raise ValueError(msg)
 
+        is_nodes_dict = isinstance(nodes, dict)
+        is_edges_dict = isinstance(edges, dict)
+
+        if is_nodes_dict and edges is not None and not is_edges_dict:
+            msg = "If nodes is a dict, edges must also be a dict or None."
+            raise TypeError(msg)
+        if is_edges_dict and nodes is not None and not is_nodes_dict:
+            msg = "If edges is a dict, nodes must also be a dict or None."
+            raise TypeError(msg)
+
         # Determine graph type
-        is_hetero = isinstance(nodes, dict) or isinstance(edges, dict)
+        is_hetero = is_nodes_dict or is_edges_dict
 
         if is_hetero:
             return self._convert_heterogeneous(nodes, edges)
@@ -223,12 +266,12 @@ class GraphConverter:
     ) -> nx.Graph:
         """Convert heterogeneous GeoDataFrames to NetworkX."""
         # Validate inputs
-        if nodes_dict:
+        if nodes_dict is not None:
             for node_type, node_gdf in nodes_dict.items():
                 nodes_dict[node_type] = self.processor.validate_gdf(node_gdf,
                                                                     allow_empty=True)
 
-        if edges_dict:
+        if edges_dict is not None:
             for edge_type, edge_gdf in edges_dict.items():
                 edges_dict[edge_type] = self.processor.validate_gdf(
                     edge_gdf, ["LineString", "MultiLineString"],
@@ -932,14 +975,25 @@ def dual_graph(
         msg = "Input `gdf` must be a tuple of (nodes_gdf, edges_gdf)."
         raise TypeError(msg)
 
-    nodes_gdf, edges_gdf = gdf
+    _, edges_gdf = gdf
 
-    if edges_gdf.crs is None:
+    # Validate edges_gdf is a GeoDataFrame and clean it.
+    # This will raise TypeError for non-GDF input, fixing one test failure.
+    edges_clean = processor.validate_gdf(
+        edges_gdf, ["LineString", "MultiLineString"], allow_empty=True
+    )
+
+    # Handle empty or cleaned-to-empty edges GeoDataFrame.
+    # This will fix the StopIteration test failure.
+    if edges_clean.empty:
+        crs = getattr(edges_gdf, "crs", None)
+        dual_nodes = gpd.GeoDataFrame(geometry=[], crs=crs)
+        dual_edges = gpd.GeoDataFrame(geometry=[], crs=crs)
+        return dual_nodes, dual_edges
+
+    if edges_clean.crs is None:
         msg = "Input edges `gdf` must have a CRS."
         raise ValueError(msg)
-
-    # Validate geometries
-    edges_clean = processor.validate_gdf(edges_gdf, ["LineString", "MultiLineString"])
 
     if keep_original_geom:
         edges_clean["original_geometry"] = gpd.GeoSeries(
@@ -951,6 +1005,17 @@ def dual_graph(
     preserve_index = edge_id_col is None
     # momepy uses the index of the input GDF as node IDs in the dual graph
     graph_nx = momepy.gdf_to_nx(edges_clean, approach="dual", multigraph=False, preserve_index=preserve_index)
+
+    # Ensure all edges from the primal graph are present as nodes in the dual graph, with their attributes.
+    if preserve_index:
+        node_attrs = edges_clean.to_dict("index")
+        for node_id, attrs in node_attrs.items():
+            if node_id not in graph_nx.nodes:
+                graph_nx.add_node(node_id, **attrs)
+    else:
+        records = edges_clean.to_dict("records")
+        nodes_to_add = [(i, attrs) for i, attrs in enumerate(records) if i not in graph_nx.nodes]
+        graph_nx.add_nodes_from(nodes_to_add)
 
     # Add edge attributes of geometry as "geometry" of linestrings between centroids of nodes
     for u, v in graph_nx.edges():
@@ -967,26 +1032,12 @@ def dual_graph(
 
     new_index_name = None
     if edge_id_col:
-        if edge_id_col not in dual_nodes.columns:
-            msg = f"Column '{edge_id_col}' not found in dual nodes attributes."
-            raise ValueError(msg)
-
         # Create a mapping from the old index (used by momepy) to the new index values
         id_map = dual_nodes[edge_id_col]
 
         # Set the new index for the dual nodes
         dual_nodes = dual_nodes.set_index(edge_id_col)
         new_index_name = edge_id_col
-
-        # Remap the dual edges' MultiIndex to use the new node IDs
-        if not dual_edges.empty:
-            level_0 = dual_edges.index.get_level_values(0).map(id_map)
-            level_1 = dual_edges.index.get_level_values(1).map(id_map)
-            dual_edges.index = pd.MultiIndex.from_arrays([level_0, level_1])
-    else:
-        new_index_name = "index_position"
-        id_map = dual_nodes[new_index_name]
-        dual_nodes = dual_nodes.set_index(new_index_name)
 
         # Remap the dual edges' MultiIndex to use the new node IDs
         if not dual_edges.empty:
@@ -1175,6 +1226,18 @@ def gdf_to_nx(
     ...       '_original_index': 's1',
     ...       'pos': (1.0, 1.0)})]
     """
+    is_hetero = isinstance(nodes, dict) or isinstance(edges, dict)
+    if is_hetero:
+        if isinstance(nodes, dict):
+            for node_gdf in nodes.values():
+                validate_gdf(nodes_gdf=node_gdf)
+        if isinstance(edges, dict):
+            for edge_gdf in edges.values():
+                if edge_gdf is not None:
+                    validate_gdf(edges_gdf=edge_gdf)
+    else:
+        validate_gdf(nodes_gdf=nodes, edges_gdf=edges)
+
     converter = GraphConverter(keep_geom=keep_geom)
     return converter.gdf_to_nx(nodes, edges)
 
@@ -1234,6 +1297,7 @@ def nx_to_gdf(
     ...           weight        geometry
     ... 0 1       1.5           LINESTRING (0 0, 1 1)
     """
+    validate_nx(G)
     converter = GraphConverter()
     return converter.nx_to_gdf(G, nodes, edges)
 
@@ -1434,22 +1498,15 @@ def create_tessellation(
             clip=False,
         )
 
-        try:
-            tessellation = momepy.enclosed_tessellation(
-                geometry=geometry,
-                enclosures=enclosures,
-                shrink=shrink,
-                segment=segment,
-                threshold=threshold,
-                n_jobs=n_jobs,
-                **kwargs,
-            )
-        except (ValueError, TypeError) as e:
-            if "No objects to concatenate" in str(e) or "incorrect geometry type" in str(e):
-                return gpd.GeoDataFrame(
-                    columns=["geometry"], geometry="geometry", crs=geometry.crs,
-                )
-            raise
+        tessellation = momepy.enclosed_tessellation(
+            geometry=geometry,
+            enclosures=enclosures,
+            shrink=shrink,
+            segment=segment,
+            threshold=threshold,
+            n_jobs=n_jobs,
+            **kwargs,
+        )
 
         tessellation["tess_id"] = [
             f"{i}_{j}"
@@ -1458,36 +1515,25 @@ def create_tessellation(
         tessellation = tessellation.reset_index(drop=True)
     else:
         # Morphological tessellation
-        if hasattr(geometry, "crs") and geometry.crs == "EPSG:4326":
-            msg = "Geometry is in a geographic CRS"
-            raise ValueError(msg)
-
-        try:
-            tessellation = momepy.morphological_tessellation(
-                geometry=geometry, clip="bounding_box", shrink=shrink, segment=segment,
-            )
-        except (ValueError, TypeError) as e:
-            if "No objects to concatenate" in str(e) or "incorrect geometry type" in str(e):
-                return gpd.GeoDataFrame(
-                    columns=["geometry"], geometry="geometry", crs=geometry.crs,
-                )
-            raise
+        tessellation = momepy.morphological_tessellation(
+            geometry=geometry, clip="bounding_box", shrink=shrink, segment=segment,
+        )
 
         tessellation["tess_id"] = tessellation.index
 
     return tessellation
 
 # ============================================================================
-# VALIDATION FUNCTIONS FOR BACKWARD COMPATIBILITY
+# VALIDATION FUNCTIONS
 # ============================================================================
 
-def _validate_gdf(
+def validate_gdf(
     nodes_gdf: gpd.GeoDataFrame | None = None,
     edges_gdf: gpd.GeoDataFrame | None = None,
 ) -> None:
-    """Validate node and edge GeoDataFrames (for backward compatibility).
+    """Validate node and edge GeoDataFrames.
 
-    This function is a backward-compatible wrapper around the validation logic
+    This function is a wrapper around the validation logic
     in `GeoDataProcessor`. It checks if inputs are GeoDataFrames, removes
     invalid geometries, and ensures edge geometries are LineStrings.
 
@@ -1512,7 +1558,7 @@ def _validate_gdf(
     >>> nodes = gpd.GeoDataFrame(geometry=[Point(0, 0)])
     >>> edges = gpd.GeoDataFrame(geometry=[LineString([(0, 0), (1, 1)])])
     >>> try:
-    ...     _validate_gdf(nodes, edges)
+    ...     validate_gdf(nodes, edges)
     ...     print("Validation successful.")
     ... except (TypeError, ValueError) as e:
     ...     print(f"Validation failed: {e}")
@@ -1526,8 +1572,8 @@ def _validate_gdf(
     if edges_gdf is not None:
         processor.validate_gdf(edges_gdf, ["LineString", "MultiLineString"], allow_empty=False)
 
-def _validate_nx(graph: nx.Graph) -> None:
-    """Validate a NetworkX graph (for backward compatibility).
+def validate_nx(graph: nx.Graph) -> None:
+    """Validate a NetworkX graph.
 
     Checks if the input is a NetworkX graph and ensures it is not empty
     (i.e., it has both nodes and edges).
@@ -1550,18 +1596,11 @@ def _validate_nx(graph: nx.Graph) -> None:
     >>> G = nx.Graph()
     >>> G.add_edge(0, 1)
     >>> try:
-    ...     _validate_nx(G)
+    ...     validate_nx(G)
     ...     print("Validation successful.")
     ... except (TypeError, ValueError) as e:
     ...     print(f"Validation failed: {e}")
     Validation successful.
     """
-    if not isinstance(graph, nx.Graph):
-        msg = "Input must be a NetworkX graph"
-        raise TypeError(msg)
-    if graph.number_of_nodes() == 0:
-        msg = "Graph has no nodes"
-        raise ValueError(msg)
-    if graph.number_of_edges() == 0:
-        msg = "Graph has no edges"
-        raise ValueError(msg)
+    processor = GeoDataProcessor()
+    processor.validate_nx(graph)
