@@ -678,142 +678,6 @@ class GraphConverter:
 
         return edges_dict
 
-# ============================================================================
-# TESSELLATION FUNCTIONS
-# ============================================================================
-
-def create_tessellation(
-    geometry: gpd.GeoDataFrame | gpd.GeoSeries,
-    primary_barriers: gpd.GeoDataFrame | gpd.GeoSeries | None = None,
-    shrink: float = 0.4,
-    segment: float = 0.5,
-    threshold: float = 0.05,
-    n_jobs: int = -1,
-    **kwargs: Any,  # noqa: ANN401  # Arguments passed to underlying tessellation functions
-) -> gpd.GeoDataFrame:
-    """Create tessellations from given geometries, with optional barriers.
-
-    This function generates either morphological or enclosed tessellations based on
-    the input geometries. If `primary_barriers` are provided, it creates an
-    enclosed tessellation; otherwise, it generates a morphological tessellation.
-
-    Parameters
-    ----------
-    geometry : gpd.GeoDataFrame or gpd.GeoSeries
-        The geometries (typically building footprints) to tessellate around.
-    primary_barriers : gpd.GeoDataFrame or gpd.GeoSeries, optional
-        Geometries (typically road network) to use as barriers for enclosed
-        tessellation. If provided, `momepy.enclosed_tessellation` is used.
-        Default is None.
-    shrink : float, default 0.4
-        The distance to shrink the geometry for the skeleton endpoint generation.
-        Passed to `momepy.morphological_tessellation` or `momepy.enclosed_tessellation`.
-    segment : float, default 0.5
-        The segment length for discretizing the geometry. Passed to
-        `momepy.morphological_tessellation` or `momepy.enclosed_tessellation`.
-    threshold : float, default 0.05
-        The threshold for snapping skeleton endpoints to the boundary. Only used
-        for enclosed tessellation.
-    n_jobs : int, default -1
-        The number of jobs to use for parallel processing. -1 means using all
-        available processors. Only used for enclosed tessellation.
-    **kwargs : Any
-        Additional keyword arguments passed to the underlying `momepy`
-        tessellation function.
-
-    Returns
-    -------
-    gpd.GeoDataFrame
-        A GeoDataFrame containing the tessellation cells as polygons. Each cell
-        has a unique `tess_id`.
-
-    Raises
-    ------
-    ValueError
-        If `primary_barriers` are not provided and the geometry is in a
-        geographic CRS (e.g., EPSG:4326), as morphological tessellation
-        requires a projected CRS.
-
-    Examples
-    --------
-    >>> import geopandas as gpd
-    >>> from shapely.geometry import Polygon
-    >>> # Create some building footprints
-    >>> buildings = gpd.GeoDataFrame(
-    ...     geometry=[Polygon([(0, 0), (1, 0), (1, 1), (0, 1)]),
-    ...               Polygon([(2, 2), (3, 2), (3, 3), (2, 3)])],
-    ...     crs="EPSG:32633"
-    ... )
-    >>> # Generate morphological tessellation
-    >>> tessellation = create_tessellation(buildings)
-    >>> print(tessellation.head())
-
-    >>> # Generate enclosed tessellation with roads as barriers
-    >>> from shapely.geometry import LineString
-    >>> roads = gpd.GeoDataFrame(
-    ...     geometry=[LineString([(0, -1), (3, -1)]), LineString([(1.5, -1), (1.5, 4)])],
-    ...     crs="EPSG:32633"
-    ... )
-    >>> enclosed_tess = create_tessellation(buildings, primary_barriers=roads)
-    >>> print(enclosed_tess.head())
-    """
-    if primary_barriers is not None:
-        # Enclosed tessellation
-        enclosures = momepy.enclosures(
-            primary_barriers=primary_barriers,
-            limit=None,
-            additional_barriers=None,
-            enclosure_id="eID",
-            clip=False,
-        )
-
-        try:
-            tessellation = momepy.enclosed_tessellation(
-                geometry=geometry,
-                enclosures=enclosures,
-                shrink=shrink,
-                segment=segment,
-                threshold=threshold,
-                n_jobs=n_jobs,
-                **kwargs,
-            )
-        except (ValueError, TypeError) as e:
-            if "No objects to concatenate" in str(e) or "incorrect geometry type" in str(e):
-                return gpd.GeoDataFrame(
-                    columns=["geometry"], geometry="geometry", crs=geometry.crs,
-                )
-            raise
-
-        tessellation["tess_id"] = [
-            f"{i}_{j}"
-            for i, j in zip(tessellation["enclosure_index"], tessellation.index, strict=False)
-        ]
-        tessellation = tessellation.reset_index(drop=True)
-    else:
-        # Morphological tessellation
-        if hasattr(geometry, "crs") and geometry.crs == "EPSG:4326":
-            msg = "Geometry is in a geographic CRS"
-            raise ValueError(msg)
-
-        try:
-            tessellation = momepy.morphological_tessellation(
-                geometry=geometry, clip="bounding_box", shrink=shrink, segment=segment,
-            )
-        except (ValueError, TypeError) as e:
-            if "No objects to concatenate" in str(e) or "incorrect geometry type" in str(e):
-                return gpd.GeoDataFrame(
-                    columns=["geometry"], geometry="geometry", crs=geometry.crs,
-                )
-            raise
-
-        tessellation["tess_id"] = tessellation.index
-
-    return tessellation
-
-# ============================================================================
-# GRAPH DISTANCE AND FILTERING FUNCTIONS
-# ============================================================================
-
 class GraphAnalyzer:
     """Unified graph analysis operations."""
 
@@ -998,7 +862,7 @@ class GraphAnalyzer:
         return gpd.GeoDataFrame(geometry=[], crs=original_crs)
 
 # ============================================================================
-# DUAL GRAPH FUNCTIONS
+# PUBLIC API FUNCTIONS
 # ============================================================================
 
 def dual_graph(
@@ -1058,14 +922,13 @@ def dual_graph(
     ... )
     >>> print(dual_nodes)
     >>> print(dual_edges)
-                        geometry      original_geometry    mm_len
-    edge_id
-    a        LINESTRING (0 0, 1 1)  LINESTRING (0 0, 1 1)  1.414214
-    b        LINESTRING (1 1, 1 0)  LINESTRING (1 1, 1 0)  1.000000
-
-                             angle  geometry
-    from_edge_id to_edge_id
-    a            b           135.0  LINESTRING (0.5 0.5, 1 0.5)
+    >>>                     geometry      original_geometry    mm_len
+    ... edge_id
+    ... a        LINESTRING (0 0, 1 1)  LINESTRING (0 0, 1 1)  1.414214
+    ... b        LINESTRING (1 1, 1 0)  LINESTRING (1 1, 1 0)  1.000000
+    ...                          angle  geometry
+    ... from_edge_id to_edge_id
+    ... a            b           135.0  LINESTRING (0.5 0.5, 1 0.5)
     """
     processor = GeoDataProcessor()
 
@@ -1141,11 +1004,6 @@ def dual_graph(
         dual_edges.index.names = [f"from_{new_index_name}", f"to_{new_index_name}"]
 
     return dual_nodes, dual_edges
-
-
-# ============================================================================
-# SEGMENTS TO GRAPH CONVERSION
-# ============================================================================
 
 def segments_to_graph(
     segments_gdf: gpd.GeoDataFrame,
@@ -1235,10 +1093,6 @@ def segments_to_graph(
     )
 
     return nodes_gdf, edges_gdf
-
-# ============================================================================
-# PUBLIC API FUNCTIONS
-# ============================================================================
 
 def gdf_to_nx(
     nodes: gpd.GeoDataFrame | dict[str, gpd.GeoDataFrame] | None = None,
@@ -1507,6 +1361,134 @@ def create_isochrone(
     """
     analyzer = GraphAnalyzer()
     return analyzer.create_isochrone(graph, center_point, distance, edge_attr)
+
+def create_tessellation(
+    geometry: gpd.GeoDataFrame | gpd.GeoSeries,
+    primary_barriers: gpd.GeoDataFrame | gpd.GeoSeries | None = None,
+    shrink: float = 0.4,
+    segment: float = 0.5,
+    threshold: float = 0.05,
+    n_jobs: int = -1,
+    **kwargs: Any,  # noqa: ANN401  # Arguments passed to underlying tessellation functions
+) -> gpd.GeoDataFrame:
+    """Create tessellations from given geometries, with optional barriers.
+
+    This function generates either morphological or enclosed tessellations based on
+    the input geometries. If `primary_barriers` are provided, it creates an
+    enclosed tessellation; otherwise, it generates a morphological tessellation.
+
+    Parameters
+    ----------
+    geometry : gpd.GeoDataFrame or gpd.GeoSeries
+        The geometries (typically building footprints) to tessellate around.
+    primary_barriers : gpd.GeoDataFrame or gpd.GeoSeries, optional
+        Geometries (typically road network) to use as barriers for enclosed
+        tessellation. If provided, `momepy.enclosed_tessellation` is used.
+        Default is None.
+    shrink : float, default 0.4
+        The distance to shrink the geometry for the skeleton endpoint generation.
+        Passed to `momepy.morphological_tessellation` or `momepy.enclosed_tessellation`.
+    segment : float, default 0.5
+        The segment length for discretizing the geometry. Passed to
+        `momepy.morphological_tessellation` or `momepy.enclosed_tessellation`.
+    threshold : float, default 0.05
+        The threshold for snapping skeleton endpoints to the boundary. Only used
+        for enclosed tessellation.
+    n_jobs : int, default -1
+        The number of jobs to use for parallel processing. -1 means using all
+        available processors. Only used for enclosed tessellation.
+    **kwargs : Any
+        Additional keyword arguments passed to the underlying `momepy`
+        tessellation function.
+
+    Returns
+    -------
+    gpd.GeoDataFrame
+        A GeoDataFrame containing the tessellation cells as polygons. Each cell
+        has a unique `tess_id`.
+
+    Raises
+    ------
+    ValueError
+        If `primary_barriers` are not provided and the geometry is in a
+        geographic CRS (e.g., EPSG:4326), as morphological tessellation
+        requires a projected CRS.
+
+    Examples
+    --------
+    >>> import geopandas as gpd
+    >>> from shapely.geometry import Polygon
+    >>> # Create some building footprints
+    >>> buildings = gpd.GeoDataFrame(
+    ...     geometry=[Polygon([(0, 0), (1, 0), (1, 1), (0, 1)]),
+    ...               Polygon([(2, 2), (3, 2), (3, 3), (2, 3)])],
+    ...     crs="EPSG:32633"
+    ... )
+    >>> # Generate morphological tessellation
+    >>> tessellation = create_tessellation(buildings)
+    >>> print(tessellation.head())
+
+    >>> # Generate enclosed tessellation with roads as barriers
+    >>> from shapely.geometry import LineString
+    >>> roads = gpd.GeoDataFrame(
+    ...     geometry=[LineString([(0, -1), (3, -1)]), LineString([(1.5, -1), (1.5, 4)])],
+    ...     crs="EPSG:32633"
+    ... )
+    >>> enclosed_tess = create_tessellation(buildings, primary_barriers=roads)
+    >>> print(enclosed_tess.head())
+    """
+    if primary_barriers is not None:
+        # Enclosed tessellation
+        enclosures = momepy.enclosures(
+            primary_barriers=primary_barriers,
+            limit=None,
+            additional_barriers=None,
+            enclosure_id="eID",
+            clip=False,
+        )
+
+        try:
+            tessellation = momepy.enclosed_tessellation(
+                geometry=geometry,
+                enclosures=enclosures,
+                shrink=shrink,
+                segment=segment,
+                threshold=threshold,
+                n_jobs=n_jobs,
+                **kwargs,
+            )
+        except (ValueError, TypeError) as e:
+            if "No objects to concatenate" in str(e) or "incorrect geometry type" in str(e):
+                return gpd.GeoDataFrame(
+                    columns=["geometry"], geometry="geometry", crs=geometry.crs,
+                )
+            raise
+
+        tessellation["tess_id"] = [
+            f"{i}_{j}"
+            for i, j in zip(tessellation["enclosure_index"], tessellation.index, strict=False)
+        ]
+        tessellation = tessellation.reset_index(drop=True)
+    else:
+        # Morphological tessellation
+        if hasattr(geometry, "crs") and geometry.crs == "EPSG:4326":
+            msg = "Geometry is in a geographic CRS"
+            raise ValueError(msg)
+
+        try:
+            tessellation = momepy.morphological_tessellation(
+                geometry=geometry, clip="bounding_box", shrink=shrink, segment=segment,
+            )
+        except (ValueError, TypeError) as e:
+            if "No objects to concatenate" in str(e) or "incorrect geometry type" in str(e):
+                return gpd.GeoDataFrame(
+                    columns=["geometry"], geometry="geometry", crs=geometry.crs,
+                )
+            raise
+
+        tessellation["tess_id"] = tessellation.index
+
+    return tessellation
 
 # ============================================================================
 # VALIDATION FUNCTIONS FOR BACKWARD COMPATIBILITY
