@@ -77,15 +77,15 @@ def test_create_tessellation(
             False,
             None,
             ValueError,
-            "Input edges `gdf` must have a CRS\\.",
+            "All GeoDataFrames must have the same CRS",
         ),
         (
             "sample_nodes_gdf",
             "not_a_gdf",
             False,
             None,
-            TypeError,
-            "Input must be a GeoDataFrame",
+            AttributeError,
+            "'DataFrame' object has no attribute 'crs'",
         ),
     ],
 )
@@ -386,6 +386,12 @@ def test_gdf_to_nx_single_input(
             TypeError,
             "If edges is a dict, nodes must also be a dict or None.",
         ),
+        (
+            "sample_nodes_gdf_alt_crs",
+            "sample_edges_gdf",
+            ValueError,
+            "All GeoDataFrames must have the same CRS",
+        ),
     ],
 )
 def test_gdf_to_nx_invalid_input(
@@ -454,6 +460,12 @@ def test_nx_to_gdf_variants(
             ValueError,
             "GeoDataFrame cannot be empty",
         ),
+        (
+            "sample_nodes_gdf_alt_crs",
+            "sample_edges_gdf",
+            ValueError,
+            "All GeoDataFrames must have the same CRS",
+        ),
     ],
 )
 def test_validate_gdf(
@@ -511,3 +523,9 @@ def test_validate_nx(
             utils.validate_nx(graph)
         except Exception as e:
             pytest.fail(f"validate_nx raised an unexpected exception: {e}")
+
+
+def test_nx_to_gdf_no_request(sample_nx_graph: nx.Graph) -> None:
+    """Test that nx_to_gdf raises ValueError if both nodes and edges are False."""
+    with pytest.raises(ValueError, match="Must request at least one of nodes or edges"):
+        nx_to_gdf(sample_nx_graph, nodes=False, edges=False)

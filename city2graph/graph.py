@@ -18,7 +18,6 @@ Key Features:
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING
 from typing import Any
 
 import geopandas as gpd
@@ -30,9 +29,6 @@ from shapely.geometry import LineString
 from city2graph.utils import nx_to_gdf
 from city2graph.utils import validate_gdf
 from city2graph.utils import validate_nx
-
-if TYPE_CHECKING:
-    import torch
 
 # Try to import the PyTorch Geometric packages. If unavailable, issue a gentle warning.
 try:
@@ -169,7 +165,8 @@ def gdf_to_pyg(
     if is_hetero:
         [validate_gdf(nodes_gdf=node_gdf) for node_gdf in nodes.values()]
         if edges:
-            [validate_gdf(edges_gdf=edge_gdf) for edge_gdf in edges.values() if edge_gdf is not None]
+            # Validate non-empty edge GeoDataFrames. Empty ones are handled downstream.
+            [validate_gdf(edges_gdf=edge_gdf) for edge_gdf in edges.values() if edge_gdf is not None and not edge_gdf.empty]
     else:
         validate_gdf(nodes_gdf=nodes, edges_gdf=edges)
 

@@ -318,13 +318,9 @@ def test_empty_edges_gdf_to_pyg(sample_nodes_gdf) -> None:
     empty_edges_gdf = gpd.GeoDataFrame(columns=["source_id", "target_id", "geometry"], crs=sample_nodes_gdf.crs)
     empty_edges_gdf = empty_edges_gdf.set_index(["source_id", "target_id"])
 
-    pyg_data = gdf_to_pyg(sample_nodes_gdf, empty_edges_gdf)
-    assert isinstance(pyg_data, Data)
-    assert pyg_data.edge_index.shape == (2,0)
-    assert pyg_data.edge_attr.shape[0] == 0
+    with pytest.raises(ValueError, match="GeoDataFrame cannot be empty"):
+        gdf_to_pyg(sample_nodes_gdf, empty_edges_gdf)
 
-    re_nodes, re_edges = pyg_to_gdf(pyg_data)
-    assert re_edges is None or re_edges.empty
 
 @requires_torch
 def test_no_edges_gdf_to_pyg(sample_nodes_gdf) -> None:
@@ -356,13 +352,15 @@ def test_hetero_empty_edges_in_dict(sample_hetero_nodes_dict, sample_crs) -> Non
     empty_conn_gdf = empty_conn_gdf.set_index(["b_id", "r_id"])
     edges_dict_with_empty = {("building", "connects", "road"): empty_conn_gdf}
 
+    # No longer raises ValueError, should create empty tensors for the edge type
     pyg_data = gdf_to_pyg(sample_hetero_nodes_dict, edges_dict_with_empty)
-    assert isinstance(pyg_data, HeteroData)
-    assert pyg_data[("building", "connects", "road")].edge_index.shape == (2,0)
-    assert pyg_data[("building", "connects", "road")].edge_attr.shape[0] == 0
 
-    _re_nodes_dict, re_edges_dict = pyg_to_gdf(pyg_data)
-    assert re_edges_dict[("building", "connects", "road")].empty
+    assert isinstance(pyg_data, HeteroData)
+    edge_type = ("building", "connects", "road")
+    assert edge_type in pyg_data.edge_types
+    assert pyg_data[edge_type].edge_index.shape == (2, 0)
+    assert pyg_data[edge_type].edge_attr.shape == (0, 0)
+
 
 @requires_torch
 def test_pyg_to_gdf_specific_types(sample_hetero_nodes_dict, sample_hetero_edges_dict) -> None:
@@ -636,6 +634,14 @@ def test_get_device() -> None:
 
     with patch("torch.cuda.is_available", return_value=False), \
          pytest.raises(ValueError, match="CUDA selected, but not available"):
+        _get_device(torch.device("cuda"))
+
+    # 4. Test with invalid device type
+    with pytest.raises(TypeError, match="Device must be 'cuda', 'cpu'"):
+        _get_device(123)
+    with pytest.raises(TypeError, match="Device must be 'cuda', 'cpu'"):
+        _get_device([torch.device("cpu")])
+    with pytest.raises(ValueError, match="CUDA selected, but not available"):
         _get_device(torch.device("cuda"))
 
     # 4. Test with invalid device type

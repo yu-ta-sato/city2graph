@@ -366,6 +366,14 @@ def nodes_gdf_no_crs(sample_nodes_gdf: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
 
 
 @pytest.fixture
+def sample_nodes_gdf_alt_crs(sample_nodes_gdf: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
+    """A nodes GeoDataFrame with an alternative CRS."""
+    gdf = sample_nodes_gdf.copy()
+    gdf.crs = "EPSG:4326"
+    return gdf
+
+
+@pytest.fixture
 def segments_gdf_alt_geom(sample_segments_gdf: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
     """Sample segments GDF with an alternative 'barrier_geometry' column."""
     gdf = sample_segments_gdf.copy()
