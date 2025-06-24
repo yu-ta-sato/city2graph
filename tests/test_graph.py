@@ -181,9 +181,9 @@ def test_gdf_to_pyg_heterogeneous_round_trip(sample_hetero_nodes_dict, sample_he
         if node_feature_cols and node_type in node_feature_cols and pyg_data[node_type].x.numel() > 0:
             assert pyg_data[node_type].x.shape[0] == len(original_gdf)
             if original_gdf.columns.intersection(node_feature_cols[node_type]).any():
-                 assert pyg_data[node_type].x.shape[1] == len(node_feature_cols[node_type])
+                assert pyg_data[node_type].x.shape[1] == len(node_feature_cols[node_type])
             else:
-                 assert pyg_data[node_type].x.shape[1] == 0 # No valid features
+                assert pyg_data[node_type].x.shape[1] == 0  # No valid features
         else:
             assert pyg_data[node_type].x.shape[1] == 0
         # Labels
@@ -192,9 +192,9 @@ def test_gdf_to_pyg_heterogeneous_round_trip(sample_hetero_nodes_dict, sample_he
             if original_gdf.columns.intersection(node_label_cols[node_type]).any():
                 assert pyg_data[node_type].y.shape[1] == len(node_label_cols[node_type])
             else:
-                assert pyg_data[node_type].y.shape[1] == 0 # No valid labels
-        elif not (hasattr(pyg_data[node_type], "y") and pyg_data[node_type].y is not None and pyg_data[node_type].y.numel() > 0) :
-             assert True # y can be None or empty tensor
+                assert pyg_data[node_type].y.shape[1] == 0  # No valid labels
+        elif not (hasattr(pyg_data[node_type], "y") and pyg_data[node_type].y is not None and pyg_data[node_type].y.numel() > 0):
+            assert True  # y can be None or empty tensor
 
     # Check edge features for each type
     for edge_type_tuple, original_edge_gdf in sample_hetero_edges_dict.items():
@@ -204,7 +204,7 @@ def test_gdf_to_pyg_heterogeneous_round_trip(sample_hetero_nodes_dict, sample_he
             if original_edge_gdf.columns.intersection(edge_feature_cols[relation_type]).any():
                 assert pyg_data[edge_type_tuple].edge_attr.shape[1] == len(edge_feature_cols[relation_type])
             else:
-                assert pyg_data[edge_type_tuple].edge_attr.shape[1] == 0 # No valid features
+                assert pyg_data[edge_type_tuple].edge_attr.shape[1] == 0  # No valid features
         else:
             assert pyg_data[edge_type_tuple].edge_attr.shape[1] == 0
 
@@ -248,8 +248,8 @@ def test_gdf_to_pyg_heterogeneous_round_trip(sample_hetero_nodes_dict, sample_he
             # Only consider columns that were actually requested for this relation_type
             # and are present in the original GDF.
             requested_and_valid = [col for col in edge_feature_cols[relation_type] if col in original_gdf_sorted.columns]
-            if requested_and_valid: # If any requested columns are valid
-                 # And these columns are also in the reconstructed GDF
+            if requested_and_valid:  # If any requested columns are valid
+                # And these columns are also in the reconstructed GDF
                 expected_edge_cols = [col for col in requested_and_valid if col in reconstructed_edge_cols]
 
 
@@ -259,16 +259,16 @@ def test_gdf_to_pyg_heterogeneous_round_trip(sample_hetero_nodes_dict, sample_he
                 original_gdf_sorted[expected_edge_cols],
                 check_dtype=False, atol=1e-5,
             )
-        elif reconstructed_edge_cols.empty: # If no features were reconstructed
-             pd.testing.assert_frame_equal(
+        elif reconstructed_edge_cols.empty:  # If no features were reconstructed
+            pd.testing.assert_frame_equal(
                 re_gdf[reconstructed_edge_cols],
-                original_gdf_sorted[reconstructed_edge_cols], # Empty comparison
+                original_gdf_sorted[reconstructed_edge_cols],  # Empty comparison
                 check_dtype=False, atol=1e-5,
             )
         # Add a general check for all reconstructed columns if no specific ones were expected
         # This handles cases where edge_feature_cols might be None but some features are still reconstructed
         elif not reconstructed_edge_cols.empty:
-             pd.testing.assert_frame_equal(
+            pd.testing.assert_frame_equal(
                 re_gdf[reconstructed_edge_cols],
                 original_gdf_sorted[reconstructed_edge_cols],
                 check_dtype=False, atol=1e-5,
@@ -310,7 +310,7 @@ def test_gdf_to_pyg_device_handling(sample_nodes_gdf, sample_edges_gdf) -> None:
                 raise # Re-raise if it's an unexpected RuntimeError
     else:
         with pytest.raises(ValueError, match="CUDA selected, but not available. Device must be 'cuda', 'cpu', a torch.device object, or None"):
-             gdf_to_pyg(sample_nodes_gdf, sample_edges_gdf, device="cuda") # Should raise error if cuda not available but specified
+            gdf_to_pyg(sample_nodes_gdf, sample_edges_gdf, device="cuda")  # Should raise error if cuda not available but specified
 
 @requires_torch
 def test_empty_edges_gdf_to_pyg(sample_nodes_gdf) -> None:
@@ -468,13 +468,13 @@ def test_nx_to_pyg_round_trip(sample_nx_graph, sample_crs, node_feature_cols, no
     # Modify pyg_data metadata if testing for generic attribute names
     if generic_test_type == "node_x_generic":
         if hasattr(pyg_data, "x") and pyg_data.x.shape[1] > 0:
-            pyg_data._node_feature_cols = []
+            pyg_data.graph_metadata.node_feature_cols = []
     elif generic_test_type == "node_y_generic":
         if hasattr(pyg_data, "y") and pyg_data.y is not None and pyg_data.y.shape[1] > 0:
-            pyg_data._node_label_cols = []
+            pyg_data.graph_metadata.node_label_cols = []
     elif generic_test_type == "edge_attr_generic":
         if hasattr(pyg_data, "edge_attr") and pyg_data.edge_attr.shape[1] > 0:
-            pyg_data._edge_feature_cols = []
+            pyg_data.graph_metadata.edge_feature_cols = []
 
 
     # Check node features tensor based on node_feature_cols
@@ -485,10 +485,10 @@ def test_nx_to_pyg_round_trip(sample_nx_graph, sample_crs, node_feature_cols, no
         # as some input features might not exist in the graph.
         # For sample_nx_graph, "feature1" exists.
         if "feature1" in node_feature_cols:
-             assert pyg_data.x.shape[1] >= 1 # Should be 1 if only "feature1"
+            assert pyg_data.x.shape[1] >= 1  # Should be 1 if only "feature1"
         else:
-             assert pyg_data.x.shape[1] == 0 # If node_feature_cols don't exist
-    else: # If node_feature_cols is None
+            assert pyg_data.x.shape[1] == 0  # If node_feature_cols don't exist
+    else:  # If node_feature_cols is None
         assert hasattr(pyg_data, "x")
         assert pyg_data.x.shape[1] == 0
 
@@ -500,9 +500,8 @@ def test_nx_to_pyg_round_trip(sample_nx_graph, sample_crs, node_feature_cols, no
             assert pyg_data.y.shape[1] >= 1
         else:
             assert pyg_data.y.shape[1] == 0
-    elif generic_test_type != "node_y_generic": # if not specifically testing generic y, and node_label_cols is None
+    elif generic_test_type != "node_y_generic":  # if not specifically testing generic y, and node_label_cols is None
         assert not hasattr(pyg_data, "y") or pyg_data.y is None
-
 
     # Check edge features tensor
     if edge_feature_cols:
@@ -512,7 +511,7 @@ def test_nx_to_pyg_round_trip(sample_nx_graph, sample_crs, node_feature_cols, no
             assert pyg_data.edge_attr.shape[1] >= 1
         else:
             assert pyg_data.edge_attr.shape[1] == 0
-    else: # If edge_feature_cols is None
+    else:  # If edge_feature_cols is None
         assert hasattr(pyg_data, "edge_attr")
         assert pyg_data.edge_attr.shape[1] == 0
 
@@ -525,8 +524,8 @@ def test_nx_to_pyg_round_trip(sample_nx_graph, sample_crs, node_feature_cols, no
     assert reconstructed_nx_graph.number_of_edges() == sample_nx_graph.number_of_edges()
 
     original_ids_map = {}
-    if hasattr(pyg_data, "_node_mappings") and "default" in pyg_data._node_mappings:
-        id_mapping_inv = {v: k for k, v in pyg_data._node_mappings["default"]["mapping"].items()}
+    if hasattr(pyg_data, "graph_metadata") and pyg_data.graph_metadata.node_mappings:
+        id_mapping_inv = {v: k for k, v in pyg_data.graph_metadata.node_mappings["default"]["mapping"].items()}
         for i in range(reconstructed_nx_graph.number_of_nodes()):
             original_ids_map[i] = id_mapping_inv.get(i)
     else:
@@ -546,12 +545,12 @@ def test_nx_to_pyg_round_trip(sample_nx_graph, sample_crs, node_feature_cols, no
         # Node features assertions
         if generic_test_type == "node_x_generic":
             # Expect "feat_0" if node_feature_cols was ["feature1"]
-            if "feature1" in original_attrs and pyg_data.x.shape[1] > 0: # Ensure original feature existed and was extracted
+            if "feature1" in original_attrs and pyg_data.x.shape[1] > 0:  # Ensure original feature existed and was extracted
                 assert "feat_0" in reconstructed_attrs, f"Generic attribute feat_0 missing in node {reconstructed_node_id}"
-                assert abs(original_attrs["feature1"] - reconstructed_attrs["feat_0"]) < 1e-5,                     f"Value mismatch for feat_0 in node {reconstructed_node_id}"
+                assert abs(original_attrs["feature1"] - reconstructed_attrs["feat_0"]) < 1e-5, f"Value mismatch for feat_0 in node {reconstructed_node_id}"
         elif node_feature_cols:
             for feat in node_feature_cols:
-                if feat in original_attrs: # Only assert if the feature was in the original graph
+                if feat in original_attrs:  # Only assert if the feature was in the original graph
                     assert feat in reconstructed_attrs, f"Feature {feat} missing in reconstructed node {reconstructed_node_id}"
                     assert abs(original_attrs.get(feat, 0) - reconstructed_attrs.get(feat, 0)) < 1e-5
 
@@ -560,7 +559,7 @@ def test_nx_to_pyg_round_trip(sample_nx_graph, sample_crs, node_feature_cols, no
             # Expect "label_0" if node_label_cols was ["label1"]
             if "label1" in original_attrs and pyg_data.y is not None and pyg_data.y.shape[1] > 0:
                 assert "label_0" in reconstructed_attrs, f"Generic attribute label_0 missing in node {reconstructed_node_id}"
-                assert abs(original_attrs["label1"] - reconstructed_attrs["label_0"]) < 1e-5,                     f"Value mismatch for label_0 in node {reconstructed_node_id}"
+                assert abs(original_attrs["label1"] - reconstructed_attrs["label_0"]) < 1e-5, f"Value mismatch for label_0 in node {reconstructed_node_id}"
         elif node_label_cols:
             for label in node_label_cols:
                 if label in original_attrs:
@@ -568,6 +567,8 @@ def test_nx_to_pyg_round_trip(sample_nx_graph, sample_crs, node_feature_cols, no
                     assert abs(original_attrs.get(label, 0) - reconstructed_attrs.get(label, 0)) < 1e-5
 
         if "geometry" in original_attrs:
+            # For PyG round trip, we expect 'pos' but geometry may or may not be preserved
+            # depending on the conversion implementation. Check for position instead.
             assert "pos" in reconstructed_attrs
             original_point = original_attrs["geometry"]
             reconstructed_point_coords = reconstructed_attrs["pos"]
@@ -643,10 +644,4 @@ def test_get_device() -> None:
         _get_device([torch.device("cpu")])
     with pytest.raises(ValueError, match="CUDA selected, but not available"):
         _get_device(torch.device("cuda"))
-
-    # 4. Test with invalid device type
-    with pytest.raises(TypeError, match="Device must be 'cuda', 'cpu'"):
-        _get_device(123)
-    with pytest.raises(TypeError, match="Device must be 'cuda', 'cpu'"):
-        _get_device([torch.device("cpu")])
 

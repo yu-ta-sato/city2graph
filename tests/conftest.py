@@ -137,6 +137,7 @@ def sample_nx_graph() -> nx.Graph:
     graph.add_edge(1, 2, edge_feature1=0.5, geometry=LineString([(0, 0), (1, 1)]))
     graph.add_edge(1, 3, edge_feature1=0.8, geometry=LineString([(0, 0), (0, 1)]))
     graph.graph["crs"] = "EPSG:27700"  # Add CRS to graph attributes
+    graph.graph["is_hetero"] = False  # Add is_hetero flag to graph attributes
     return graph
 
 
@@ -156,6 +157,7 @@ def sample_nx_graph_no_pos(sample_crs: str) -> nx.Graph:
     graph.add_node(2, feature1=20.0, label1=1)
     graph.add_edge(1, 2, edge_feature1=0.5)
     graph.graph["crs"] = sample_crs
+    graph.graph["is_hetero"] = False  # Add is_hetero flag to graph attributes
     return graph
 
 

@@ -26,6 +26,7 @@ import numpy as np
 import pandas as pd
 from shapely.geometry import LineString
 
+from city2graph.utils import GraphMetadata
 from city2graph.utils import nx_to_gdf
 from city2graph.utils import validate_gdf
 from city2graph.utils import validate_nx
@@ -175,8 +176,8 @@ def gdf_to_pyg(
     is_hetero = isinstance(nodes, dict)
     if is_hetero:
         data = _build_heterogeneous_graph(
-            nodes, edges or {}, node_feature_cols, node_label_cols,
-            edge_feature_cols or {}, device, dtype,
+            nodes, edges, node_feature_cols, node_label_cols,
+            edge_feature_cols, device, dtype,
         )
     else:
         nodes_gdf: gpd.GeoDataFrame = nodes
@@ -244,12 +245,12 @@ def pyg_to_gdf(
     """
     metadata = _validate_pyg(data)
 
-    if metadata["is_hetero"]:
+    if metadata.is_hetero:
         # ------------------------------------------------------------------
         # HeteroData → pandas
         # ------------------------------------------------------------------
-        node_types_to_process = node_types or metadata["node_types"]
-        edge_types_to_process = edge_types or metadata["edge_types"]
+        node_types_to_process = node_types or metadata.node_types
+        edge_types_to_process = edge_types or metadata.edge_types
 
         node_gdfs = {
             nt: _reconstruct_node_gdf(data, nt, metadata) for nt in node_types_to_process
@@ -306,9 +307,9 @@ def pyg_to_nx(data: Data | HeteroData) -> nx.Graph:
 
     metadata = _validate_pyg(data)
 
-    if metadata["is_hetero"]:
-        return _convert_hetero_pyg_to_nx(data)
-    return _convert_homo_pyg_to_nx(data)
+    if metadata.is_hetero:
+        return _convert_hetero_pyg_to_nx(data, metadata)
+    return _convert_homo_pyg_to_nx(data, metadata)
 
 
 def nx_to_pyg(
@@ -796,34 +797,41 @@ def _build_homogeneous_graph(
 
     data = Data(x=x, edge_index=edge_index, edge_attr=edge_attr, y=y, pos=pos)
 
-    # Store metadata - use unified _node_mappings structure
-    data._node_mappings = {
+    # Store metadata
+    metadata = GraphMetadata(is_hetero=False)
+    metadata.node_mappings = {
         "default": {
             "mapping": id_mapping,
             "id_col": id_col_name,
             "original_ids": original_ids,
         },
     }
-    data._node_feature_cols = node_feature_cols or []
-    data._node_label_cols = node_label_cols or []
-    data._edge_feature_cols = edge_feature_cols or []
+    metadata.node_feature_cols = node_feature_cols or []
+    metadata.node_label_cols = node_label_cols or []
+    metadata.edge_feature_cols = edge_feature_cols or []
 
     # Store index names and values for preservation
-    data._node_index_names = nodes_gdf.index.names if hasattr(nodes_gdf.index, "names") else None
+    metadata.node_index_names = (
+        nodes_gdf.index.names if hasattr(nodes_gdf.index, "names") else None
+    )
     if edges_gdf is not None and hasattr(edges_gdf.index, "names"):
-        data._edge_index_names = edges_gdf.index.names
+        metadata.edge_index_names = edges_gdf.index.names
 
         # Store original edge index values for reconstruction
-        data._edge_index_values = [edges_gdf.index.get_level_values(i).tolist()
-                                    for i in range(edges_gdf.index.nlevels)]
+        metadata.edge_index_values = [
+            edges_gdf.index.get_level_values(i).tolist()
+            for i in range(edges_gdf.index.nlevels)
+        ]
     else:
-        data._edge_index_names = None
-        data._edge_index_values = None
+        metadata.edge_index_names = None
+        metadata.edge_index_values = None
 
     # Set CRS
     if hasattr(nodes_gdf, "crs") and nodes_gdf.crs:
-        data.crs = nodes_gdf.crs
+        metadata.crs = nodes_gdf.crs
+        data.crs = metadata.crs
 
+    data.graph_metadata = metadata
     return data
 
 
@@ -943,104 +951,72 @@ def _store_hetero_metadata(
 ) -> None:
     """Store metadata for heterogeneous graph."""
     # Store mappings and column metadata
-    data._node_mappings = node_mappings
-    data._node_feature_cols = node_feature_cols or {}
-    data._node_label_cols = node_label_cols or {}
-    data._edge_feature_cols = edge_feature_cols or {}
+    metadata = GraphMetadata(is_hetero=True)
+    metadata.node_types = list(nodes_dict.keys())
+    metadata.edge_types = list(edges_dict.keys())
+    metadata.node_mappings = node_mappings
+    metadata.node_feature_cols = node_feature_cols or {}
+    metadata.node_label_cols = node_label_cols or {}
+    metadata.edge_feature_cols = edge_feature_cols or {}
 
     # Store index names for reconstruction
-    data._node_index_names = {}
+    metadata.node_index_names = {}
     for node_type, node_gdf in nodes_dict.items():
         if hasattr(node_gdf.index, "names"):
-            data._node_index_names[node_type] = node_gdf.index.names
+            metadata.node_index_names[node_type] = node_gdf.index.names
 
     # Store edge index names and values for reconstruction
-    data._edge_index_names = {}
-    data._edge_index_values = {}
+    metadata.edge_index_names = {}
+    metadata.edge_index_values = {}
     for edge_type, edge_gdf in edges_dict.items():
         if edge_gdf is not None and hasattr(edge_gdf.index, "names"):
             # Store edge index names
-            data._edge_index_names[edge_type] = edge_gdf.index.names
+            metadata.edge_index_names[edge_type] = edge_gdf.index.names
 
             # Store original edge index values for reconstruction
-            data._edge_index_values[edge_type] = [edge_gdf.index.get_level_values(i).tolist()
-                                                for i in range(edge_gdf.index.nlevels)]
+            metadata.edge_index_values[edge_type] = [
+                edge_gdf.index.get_level_values(i).tolist()
+                for i in range(edge_gdf.index.nlevels)
+            ]
 
     # Set CRS
     crs_values = [gdf.crs for gdf in nodes_dict.values() if hasattr(gdf, "crs") and gdf.crs]
     if crs_values and all(crs == crs_values[0] for crs in crs_values):
-        data.crs = crs_values[0]
+        metadata.crs = crs_values[0]
+        data.crs = metadata.crs
+
+    data.graph_metadata = metadata
 
 
 # ============================================================================
 # GRAPH VALIDATION FUNCTIONS
 # ============================================================================
 
-def _validate_pyg(data: Data | HeteroData) -> dict[str, Any]:
+def _validate_pyg(data: Data | HeteroData) -> GraphMetadata:
     """
     Validate PyTorch Geometric Data or HeteroData objects and return metadata.
 
-    This centralized validation function checks all necessary attributes and
-    returns comprehensive metadata to eliminate redundant hasattr() checks
-    throughout the codebase.
+    This centralized validation function checks for the `metadata` attribute
+    and returns it, ensuring the object was created by `city2graph`.
     """
     if not TORCH_AVAILABLE:
         msg = "PyTorch required. Install with: pip install city2graph[torch]"
         raise ImportError(msg)
 
+    if not hasattr(data, "graph_metadata") or not isinstance(data.graph_metadata, GraphMetadata):
+        msg = (
+            "PyG object is missing 'graph_metadata' or it is of incorrect type. "
+            "It may not have been created by city2graph."
+        )
+        raise ValueError(msg)
+
+    metadata = data.graph_metadata
     is_hetero = isinstance(data, HeteroData)
-    metadata = {
-        "is_hetero": is_hetero,
-        "has_node_mappings": hasattr(data, "_node_mappings"),
-        "has_node_feature_cols": hasattr(data, "_node_feature_cols"),
-        "has_node_label_cols": hasattr(data, "_node_label_cols"),
-        "has_edge_feature_cols": hasattr(data, "_edge_feature_cols"),
-        "has_node_index_names": hasattr(data, "_node_index_names"),
-        "has_edge_index_names": hasattr(data, "_edge_index_names"),
-        "has_edge_index_values": hasattr(data, "_edge_index_values"),
-        "has_crs": hasattr(data, "crs"),
-    }
 
-    if is_hetero:
-        node_types = list(data.node_types) if hasattr(data, "node_types") else []
-        edge_types = list(data.edge_types) if hasattr(data, "edge_types") else []
-        metadata.update({"node_types": node_types, "edge_types": edge_types})
-
-        # Check each node type
-        for node_type in node_types:
-            node_data = data[node_type]
-            has_x = hasattr(node_data, "x") and node_data.x is not None
-            has_pos = hasattr(node_data, "pos") and node_data.pos is not None
-            has_y = hasattr(node_data, "y") and node_data.y is not None
-            metadata.update({
-                f"{node_type}_has_x": has_x,
-                f"{node_type}_has_pos": has_pos,
-                f"{node_type}_has_y": has_y,
-            })
-
-        # Check each edge type
-        for edge_type in edge_types:
-            edge_data = data[edge_type]
-            has_edge_index = hasattr(edge_data, "edge_index") and edge_data.edge_index is not None
-            has_edge_attr = hasattr(edge_data, "edge_attr") and edge_data.edge_attr is not None
-            metadata.update({
-                f"{edge_type}_has_edge_index": has_edge_index,
-                f"{edge_type}_has_edge_attr": has_edge_attr,
-            })
-    else:
-        has_x = hasattr(data, "x") and data.x is not None
-        has_pos = hasattr(data, "pos") and data.pos is not None
-        has_y = hasattr(data, "y") and data.y is not None
-        has_edge_index = hasattr(data, "edge_index") and data.edge_index is not None
-        has_edge_attr = hasattr(data, "edge_attr") and data.edge_attr is not None
-
-        metadata.update({
-            "has_x": has_x,
-            "has_pos": has_pos,
-            "has_y": has_y,
-            "has_edge_index": has_edge_index,
-            "has_edge_attr": has_edge_attr,
-        })
+    if is_hetero and not metadata.is_hetero:
+        raise ValueError("Data is HeteroData but metadata.is_hetero is False.")
+    if not is_hetero and metadata.is_hetero:
+        raise ValueError("Data is Data but metadata.is_hetero is True.")
 
     return metadata
 
@@ -1063,19 +1039,19 @@ def _extract_tensor_data(
 
 
 def _get_node_data_info(
-    data: Data | HeteroData, node_type: str | None, metadata: dict[str, Any],
+    data: Data | HeteroData, node_type: str | None, metadata: GraphMetadata,
 ) -> tuple[Data, int]:
     """Get node data and number of nodes."""
-    node_data = data[node_type] if metadata["is_hetero"] and node_type else data
+    node_data = data[node_type] if metadata.is_hetero and node_type else data
     return node_data, int(node_data.num_nodes)
 
 
 def _get_mapping_info(
-    data: Data | HeteroData, node_type: str | None, metadata: dict[str, Any],
+    data: Data | HeteroData, node_type: str | None, metadata: GraphMetadata,
 ) -> dict | None:
     """Get mapping info for the given node type."""
-    mapping_key = "default" if not metadata["is_hetero"] or not node_type else node_type
-    return data._node_mappings.get(mapping_key)
+    mapping_key = "default" if not metadata.is_hetero or not node_type else node_type
+    return metadata.node_mappings.get(mapping_key)
 
 
 def _extract_index_values(mapping_info: dict, num_nodes: int) -> list | None:
@@ -1091,26 +1067,22 @@ def _create_geometry_from_positions(node_data: Data) -> gpd.array.GeometryArray 
 
 
 def _extract_node_features_and_labels(
-    data: Data | HeteroData, node_data: Data, node_type: str | None, metadata: dict[str, Any],
+    data: Data | HeteroData, node_data: Data, node_type: str | None, metadata: GraphMetadata,
 ) -> dict[str, np.ndarray]:
     """Extract features and labels from node data."""
     gdf_data = {}
-    is_hetero = metadata["is_hetero"]
+    is_hetero = metadata.is_hetero
 
     # Extract features
-    has_x_key = f"{node_type}_has_x" if is_hetero and node_type else "has_x"
-
-    if metadata.get(has_x_key, False) and metadata["has_node_feature_cols"]:
-        feature_cols = data._node_feature_cols
+    if hasattr(node_data, "x") and node_data.x is not None and metadata.node_feature_cols:
+        feature_cols = metadata.node_feature_cols
         cols = feature_cols.get(node_type) if is_hetero and node_type else feature_cols
         features_dict = _extract_tensor_data(node_data.x, cols)
         gdf_data.update(features_dict)
 
     # Extract labels
-    has_y_key = f"{node_type}_has_y" if is_hetero and node_type else "has_y"
-
-    if metadata.get(has_y_key, False) and metadata["has_node_label_cols"]:
-        label_cols = data._node_label_cols
+    if hasattr(node_data, "y") and node_data.y is not None and metadata.node_label_cols:
+        label_cols = metadata.node_label_cols
         cols = label_cols.get(node_type) if is_hetero and node_type else label_cols
         labels_dict = _extract_tensor_data(node_data.y, cols)
         gdf_data.update(labels_dict)
@@ -1119,17 +1091,17 @@ def _extract_node_features_and_labels(
 
 
 def _set_gdf_index_and_crs(
-    gdf: gpd.GeoDataFrame, data: Data | HeteroData, node_type: str | None, metadata: dict[str, Any],
+    gdf: gpd.GeoDataFrame, data: Data | HeteroData, node_type: str | None, metadata: GraphMetadata,
 ) -> None:
     """Set index names and CRS on GeoDataFrame."""
     # Set index names
-    if metadata["has_node_index_names"]:
+    if metadata.node_index_names:
         index_names = None
         # Get index names based on heterogeneity and node type
-        if metadata["is_hetero"] and node_type and node_type in data._node_index_names:
-            index_names = data._node_index_names[node_type]
-        elif not metadata["is_hetero"]:
-            index_names = data._node_index_names
+        if metadata.is_hetero and node_type and isinstance(metadata.node_index_names, dict):
+            index_names = metadata.node_index_names.get(node_type)
+        elif not metadata.is_hetero:
+            index_names = metadata.node_index_names
 
         # Set index name if available
         if (index_names and hasattr(gdf.index, "names") and
@@ -1137,12 +1109,12 @@ def _set_gdf_index_and_crs(
                 gdf.index.name = index_names[0]
 
     # Set CRS
-    if metadata["has_crs"]:
-        gdf.crs = data.crs
+    if metadata.crs:
+        gdf.crs = metadata.crs
 
 
 def _reconstruct_node_gdf(
-    data: Data | HeteroData, node_type: str | None = None, metadata: dict[str, Any] | None = None,
+    data: Data | HeteroData, node_type: str | None = None, metadata: GraphMetadata | None = None,
 ) -> gpd.GeoDataFrame:
     """Reconstruct node GeoDataFrame from PyTorch Geometric data."""
     node_data, num_nodes = _get_node_data_info(data, node_type, metadata)
@@ -1169,13 +1141,14 @@ def _reconstruct_edge_index(
     edge_type: str | tuple[str, str, str] | None,
     is_hetero: bool,
     edge_data_dict: dict[str, list | np.ndarray],
+    metadata: GraphMetadata,
 ) -> pd.Index | pd.MultiIndex | None:
     """Reconstruct edge index from stored values."""
     stored_values = None
-    if is_hetero and edge_type and edge_type in data._edge_index_values:
-        stored_values = data._edge_index_values[edge_type]
-    elif not is_hetero and data._edge_index_values:
-        stored_values = data._edge_index_values
+    if is_hetero and edge_type and isinstance(metadata.edge_index_values, dict):
+        stored_values = metadata.edge_index_values.get(edge_type)
+    elif not is_hetero and metadata.edge_index_values:
+        stored_values = metadata.edge_index_values
 
     if not stored_values:
         return None
@@ -1189,12 +1162,12 @@ def _reconstruct_edge_index(
 
 
 def _extract_edge_features(
-    edge_data: Data, edge_type: str | tuple | None, is_hetero: bool, data: Data | HeteroData,
+    edge_data: Data, edge_type: str | tuple | None, is_hetero: bool, metadata: GraphMetadata,
 ) -> dict[str, np.ndarray]:
     """Extract edge features from edge data."""
     edge_data_dict = {}
     if hasattr(edge_data, "edge_attr") and edge_data.edge_attr is not None:
-        feature_cols = getattr(data, "_edge_feature_cols", {})
+        feature_cols = metadata.edge_feature_cols
         if is_hetero and edge_type:
                 rel_type = edge_type[1]
                 cols = feature_cols.get(rel_type)
@@ -1233,47 +1206,48 @@ def _create_edge_geometries(
 
 
 def _set_edge_index_names(
-    gdf: gpd.GeoDataFrame, data: Data | HeteroData, edge_type: str | tuple | None, is_hetero: bool,
+    gdf: gpd.GeoDataFrame, data: Data | HeteroData, edge_type: str | tuple | None, is_hetero: bool, metadata: GraphMetadata,
 ) -> None:
     """Set index names on edge GeoDataFrame."""
     index_names = None
-    if is_hetero and edge_type and edge_type in data._edge_index_names:
-        index_names = data._edge_index_names[edge_type]
-    elif not is_hetero and data._edge_index_names:
-        index_names = data._edge_index_names
+    if is_hetero and edge_type and isinstance(metadata.edge_index_names, dict):
+        index_names = metadata.edge_index_names.get(edge_type)
+    elif not is_hetero and metadata.edge_index_names:
+        index_names = metadata.edge_index_names
 
     if (hasattr(gdf.index, "names") and isinstance(index_names, list) and
         len(index_names) > 1 and isinstance(gdf.index, pd.MultiIndex)):
         gdf.index.names = index_names
 
+
 def _reconstruct_edge_gdf(
     data: Data | HeteroData,
     edge_type: str | tuple[str, str, str] | None = None,
-    metadata: dict[str, Any] | None = None,
+    metadata: GraphMetadata | None = None,
 ) -> gpd.GeoDataFrame:
     """Reconstruct edge GeoDataFrame from PyTorch Geometric data."""
-    is_hetero = metadata["is_hetero"]
+    is_hetero = metadata.is_hetero
 
     edge_data = data[edge_type] if is_hetero and edge_type else data
 
     # Extract edge features
-    edge_data_dict = _extract_edge_features(edge_data, edge_type, is_hetero, data)
+    edge_data_dict = _extract_edge_features(edge_data, edge_type, is_hetero, metadata)
 
     # Create geometries from edge indices and node positions
     geometry = _create_edge_geometries(edge_data, edge_type, is_hetero, data)
 
     # Reconstruct index from stored values
-    index_values = _reconstruct_edge_index(data, edge_type, is_hetero, edge_data_dict)
+    index_values = _reconstruct_edge_index(data, edge_type, is_hetero, edge_data_dict, metadata)
 
     # Create GeoDataFrame
     gdf = gpd.GeoDataFrame(edge_data_dict, geometry=geometry, index=index_values)
 
     # Set index names if available
-    _set_edge_index_names(gdf, data, edge_type, is_hetero)
+    _set_edge_index_names(gdf, data, edge_type, is_hetero, metadata)
 
     # Set CRS
-    if hasattr(data, "crs") and data.crs:
-        gdf.crs = data.crs
+    if metadata.crs:
+        gdf.crs = metadata.crs
 
     return gdf
 
@@ -1351,19 +1325,25 @@ def _add_hetero_nodes_to_graph(graph: nx.Graph, data: HeteroData) -> dict[str, i
     """Add heterogeneous nodes to NetworkX graph and return node offsets."""
     node_offset = {}
     current_offset = 0
+    metadata = data.graph_metadata
 
-    for node_type in data.node_types:
+    for node_type in metadata.node_types:
         node_offset[node_type] = current_offset
         num_nodes = data[node_type].num_nodes
 
-        # Get feature and label column names for this node type
-        node_feature_cols = getattr(data, "_node_feature_cols", {}).get(node_type)
-        node_label_cols = getattr(data, "_node_label_cols", {}).get(node_type)
+        # Get original node IDs from metadata
+        node_mapping_info = metadata.node_mappings.get(node_type, {})
+        original_ids = node_mapping_info.get("original_ids", list(range(num_nodes)))
 
-        # Add nodes with type information
+        # Get feature and label column names for this node type
+        node_feature_cols = metadata.node_feature_cols.get(node_type)
+        node_label_cols = metadata.node_label_cols.get(node_type)
+
+        # Add nodes with type information and original IDs
         for i in range(num_nodes):
             node_id = current_offset + i
-            attrs = {"node_type": node_type}
+            original_id = original_ids[i] if i < len(original_ids) else i
+            attrs = {"node_type": node_type, "_original_index": original_id}
             _add_node_attributes(
                 data[node_type], i, attrs, node_feature_cols, node_label_cols,
             )
@@ -1376,14 +1356,15 @@ def _add_hetero_nodes_to_graph(graph: nx.Graph, data: HeteroData) -> dict[str, i
 
 def _add_hetero_edges_to_graph(graph: nx.Graph, data: HeteroData, node_offset: dict[str, int]) -> None:
     """Add heterogeneous edges to NetworkX graph."""
-    for edge_type in data.edge_types:
+    metadata = data.graph_metadata
+    for edge_type in metadata.edge_types:
         src_type, rel_type, dst_type = edge_type
 
         if hasattr(data[edge_type], "edge_index") and data[edge_type].edge_index is not None:
             edge_index = data[edge_type].edge_index.detach().cpu().numpy()
 
             # Get edge feature column names for this edge type
-            edge_feature_cols = getattr(data, "_edge_feature_cols", {}).get(rel_type)
+            edge_feature_cols = metadata.edge_feature_cols.get(rel_type)
 
             # Add edges using comprehension
             [graph.add_edge(
@@ -1398,22 +1379,30 @@ def _add_hetero_edges_to_graph(graph: nx.Graph, data: HeteroData, node_offset: d
 
 def _add_homo_nodes_to_graph(graph: nx.Graph, data: Data) -> None:
     """Add homogeneous nodes to NetworkX graph."""
-    node_feature_cols = getattr(data, "_node_feature_cols", None)
-    node_label_cols = getattr(data, "_node_label_cols", None)
+    metadata = data.graph_metadata
+    node_feature_cols = metadata.node_feature_cols
+    node_label_cols = metadata.node_label_cols
+
+    # Get original node IDs from metadata
+    node_mapping_info = metadata.node_mappings.get("default", {})
+    original_ids = node_mapping_info.get("original_ids", [])
 
     # Determine number of nodes
     num_nodes = data.x.size(0)
 
-    # Add nodes with preserved attribute names
+    # Add nodes with preserved original IDs
     for i in range(num_nodes):
-        attrs = {}
+        # Use original ID if available, otherwise use sequential index
+        original_id = original_ids[i] if i < len(original_ids) else i
+        attrs = {"_original_index": original_id}
         _add_node_attributes(data, i, attrs, node_feature_cols, node_label_cols)
         graph.add_node(i, **attrs)
 
 
 def _add_homo_edges_to_graph(graph: nx.Graph, data: Data) -> None:
     """Add homogeneous edges to NetworkX graph."""
-    edge_feature_cols = getattr(data, "_edge_feature_cols", None)
+    metadata = data.graph_metadata
+    edge_feature_cols = metadata.edge_feature_cols
 
     if hasattr(data, "edge_index") and data.edge_index is not None:
         edge_index = data.edge_index.detach().cpu().numpy()
@@ -1427,12 +1416,12 @@ def _add_homo_edges_to_graph(graph: nx.Graph, data: Data) -> None:
             graph.add_edge(src_idx, dst_idx, **attrs)
 
 
-def _convert_homo_pyg_to_nx(data: Data) -> nx.Graph:
+def _convert_homo_pyg_to_nx(data: Data, metadata: GraphMetadata) -> nx.Graph:
     """Convert homogeneous PyG data to NetworkX graph."""
     graph = nx.Graph()
 
     # Add metadata
-    graph.graph["crs"] = getattr(data, "crs", None)
+    graph.graph["crs"] = metadata.crs
     graph.graph["is_hetero"] = False
 
     # Add nodes and edges
@@ -1440,29 +1429,24 @@ def _convert_homo_pyg_to_nx(data: Data) -> nx.Graph:
     _add_homo_edges_to_graph(graph, data)
 
     # Store index information for reconstruction
-    if hasattr(data, "_node_index_names"):
-        graph.graph["node_index_names"] = data._node_index_names
-    if hasattr(data, "_edge_index_names"):
-        graph.graph["edge_index_names"] = data._edge_index_names
+    graph.graph["node_index_names"] = metadata.node_index_names
+    graph.graph["edge_index_names"] = metadata.edge_index_names
 
     return graph
 
 
-def _convert_hetero_pyg_to_nx(data: HeteroData) -> nx.Graph:
+def _convert_hetero_pyg_to_nx(data: HeteroData, metadata: GraphMetadata) -> nx.Graph:
     """Convert heterogeneous PyG data to NetworkX graph."""
     graph = nx.Graph()
 
     # Add metadata
-    graph.graph["crs"] = getattr(data, "crs", None)
+    graph.graph["crs"] = metadata.crs
     graph.graph["is_hetero"] = True
-    graph.graph["node_types"] = list(data.node_types)
-    graph.graph["edge_types"] = list(data.edge_types)
+    graph.graph["node_types"] = metadata.node_types
+    graph.graph["edge_types"] = metadata.edge_types
 
     # Store metadata for reconstruction
-    for attr_name in ["_node_mappings", "_node_feature_cols", "_node_label_cols",
-                      "_edge_feature_cols", "_node_index_names", "_edge_index_names", "_edge_index_values"]:
-        if hasattr(data, attr_name):
-            graph.graph[attr_name] = getattr(data, attr_name)
+    graph.graph["metadata"] = metadata
 
     # Add nodes and edges
     node_offset = _add_hetero_nodes_to_graph(graph, data)
