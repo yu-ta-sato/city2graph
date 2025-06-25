@@ -450,7 +450,7 @@ def nx_to_pyg(
     edge_feature_cols: list[str] | None = None,
     device: torch.device | str | None = None,
     dtype: torch.dtype | None = None,
-) -> Data:
+) -> Data | HeteroData:
     """Convert NetworkX graph to PyTorch Geometric Data object.
 
     Converts a NetworkX Graph to a PyTorch Geometric Data object by first
