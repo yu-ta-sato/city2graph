@@ -445,3 +445,234 @@ def not_a_gdf() -> pd.DataFrame:
 requires_torch = pytest.mark.skipif(
     not TORCH_AVAILABLE, reason="PyTorch or PyTorch Geometric is not available.",
 )
+
+# --- Fixtures for validate_nx testing ---
+
+@pytest.fixture
+def sample_nx_multigraph() -> nx.MultiGraph:
+    """Fixture for a NetworkX MultiGraph."""
+    graph = nx.MultiGraph()
+    graph.add_node(1, feature1=10.0, label1=0, pos=(0, 0), geometry=Point(0, 0))
+    graph.add_node(2, feature1=20.0, label1=1, pos=(1, 1), geometry=Point(1, 1))
+    graph.add_edge(1, 2, key=0, edge_feature1=0.5, geometry=LineString([(0, 0), (1, 1)]))
+    graph.add_edge(1, 2, key=1, edge_feature1=0.8, geometry=LineString([(0, 0), (1, 1)]))
+    graph.graph["crs"] = "EPSG:27700"
+    graph.graph["is_hetero"] = False
+    return graph
+
+
+@pytest.fixture
+def sample_nx_digraph() -> nx.DiGraph:
+    """Fixture for a NetworkX DiGraph."""
+    graph = nx.DiGraph()
+    graph.add_node(1, feature1=10.0, pos=(0, 0), geometry=Point(0, 0))
+    graph.add_node(2, feature1=20.0, pos=(1, 1), geometry=Point(1, 1))
+    graph.add_edge(1, 2, edge_feature1=0.5, geometry=LineString([(0, 0), (1, 1)]))
+    graph.graph["crs"] = "EPSG:27700"
+    graph.graph["is_hetero"] = False
+    return graph
+
+
+@pytest.fixture
+def sample_nx_multidigraph() -> nx.MultiDiGraph:
+    """Fixture for a NetworkX MultiDiGraph."""
+    graph = nx.MultiDiGraph()
+    graph.add_node(1, feature1=10.0, pos=(0, 0), geometry=Point(0, 0))
+    graph.add_node(2, feature1=20.0, pos=(1, 1), geometry=Point(1, 1))
+    graph.add_edge(1, 2, key=0, edge_feature1=0.5, geometry=LineString([(0, 0), (1, 1)]))
+    graph.add_edge(1, 2, key=1, edge_feature1=0.8, geometry=LineString([(0, 0), (1, 1)]))
+    graph.graph["crs"] = "EPSG:27700"
+    graph.graph["is_hetero"] = False
+    return graph
+
+
+@pytest.fixture
+def nx_graph_missing_graph_attr() -> nx.Graph:
+    """Fixture for a NetworkX graph missing the graph attribute dictionary."""
+    graph = nx.Graph()
+    graph.add_node(1, pos=(0, 0))
+    graph.add_node(2, pos=(1, 1))
+    graph.add_edge(1, 2)
+    # Remove the graph attribute entirely
+    delattr(graph, "graph")
+    return graph
+
+
+@pytest.fixture
+def nx_graph_non_dict_graph_attr() -> nx.Graph:
+    """Fixture for a NetworkX graph with non-dict graph attribute."""
+    graph = nx.Graph()
+    graph.add_node(1, pos=(0, 0))
+    graph.add_node(2, pos=(1, 1))
+    graph.add_edge(1, 2)
+    graph.graph = "not_a_dict"  # Invalid type
+    return graph
+
+
+@pytest.fixture
+def nx_graph_missing_is_hetero() -> nx.Graph:
+    """Fixture for a NetworkX graph missing is_hetero metadata."""
+    graph = nx.Graph()
+    graph.add_node(1, pos=(0, 0))
+    graph.add_node(2, pos=(1, 1))
+    graph.add_edge(1, 2)
+    graph.graph = {"crs": "EPSG:27700"}  # Missing is_hetero
+    return graph
+
+
+@pytest.fixture
+def nx_graph_missing_crs() -> nx.Graph:
+    """Fixture for a NetworkX graph missing crs metadata."""
+    graph = nx.Graph()
+    graph.add_node(1, pos=(0, 0))
+    graph.add_node(2, pos=(1, 1))
+    graph.add_edge(1, 2)
+    graph.graph = {"is_hetero": False}  # Missing crs
+    return graph
+
+
+@pytest.fixture
+def nx_graph_no_pos_no_geom() -> nx.Graph:
+    """Fixture for a NetworkX graph with nodes missing pos and geometry attributes."""
+    graph = nx.Graph()
+    graph.add_node(1, feature1=10.0)  # No pos or geometry
+    graph.add_node(2, feature1=20.0)  # No pos or geometry
+    graph.add_edge(1, 2)
+    graph.graph = {"is_hetero": False, "crs": "EPSG:27700"}
+    return graph
+
+
+@pytest.fixture
+def nx_graph_with_pos_only() -> nx.Graph:
+    """Fixture for a NetworkX graph with nodes having only pos attributes."""
+    graph = nx.Graph()
+    graph.add_node(1, pos=(0, 0), feature1=10.0)
+    graph.add_node(2, pos=(1, 1), feature1=20.0)
+    graph.add_edge(1, 2)
+    graph.graph = {"is_hetero": False, "crs": "EPSG:27700"}
+    return graph
+
+
+@pytest.fixture
+def nx_graph_with_geometry_only() -> nx.Graph:
+    """Fixture for a NetworkX graph with nodes having only geometry attributes."""
+    graph = nx.Graph()
+    graph.add_node(1, geometry=Point(0, 0), feature1=10.0)
+    graph.add_node(2, geometry=Point(1, 1), feature1=20.0)
+    graph.add_edge(1, 2)
+    graph.graph = {"is_hetero": False, "crs": "EPSG:27700"}
+    return graph
+
+
+@pytest.fixture
+def nx_hetero_graph_valid() -> nx.Graph:
+    """Fixture for a valid heterogeneous NetworkX graph."""
+    graph = nx.Graph()
+    graph.add_node(1, node_type="building", pos=(0, 0), geometry=Point(0, 0))
+    graph.add_node(2, node_type="road", pos=(1, 1), geometry=Point(1, 1))
+    graph.add_edge(1, 2, edge_type="connects_to")
+    graph.graph = {
+        "is_hetero": True,
+        "crs": "EPSG:27700",
+        "node_types": ["building", "road"],
+        "edge_types": [("building", "connects_to", "road")]
+    }
+    return graph
+
+
+@pytest.fixture
+def nx_hetero_graph_missing_node_types() -> nx.Graph:
+    """Fixture for a heterogeneous graph missing node_types metadata."""
+    graph = nx.Graph()
+    graph.add_node(1, node_type="building", pos=(0, 0))
+    graph.add_node(2, node_type="road", pos=(1, 1))
+    graph.add_edge(1, 2, edge_type="connects_to")
+    graph.graph = {
+        "is_hetero": True,
+        "crs": "EPSG:27700",
+        "edge_types": [("building", "connects_to", "road")]
+        # Missing node_types
+    }
+    return graph
+
+
+@pytest.fixture
+def nx_hetero_graph_empty_node_types() -> nx.Graph:
+    """Fixture for a heterogeneous graph with empty node_types."""
+    graph = nx.Graph()
+    graph.add_node(1, node_type="building", pos=(0, 0))
+    graph.add_node(2, node_type="road", pos=(1, 1))
+    graph.add_edge(1, 2, edge_type="connects_to")
+    graph.graph = {
+        "is_hetero": True,
+        "crs": "EPSG:27700",
+        "node_types": [],  # Empty list
+        "edge_types": [("building", "connects_to", "road")]
+    }
+    return graph
+
+
+@pytest.fixture
+def nx_hetero_graph_missing_edge_types() -> nx.Graph:
+    """Fixture for a heterogeneous graph missing edge_types metadata."""
+    graph = nx.Graph()
+    graph.add_node(1, node_type="building", pos=(0, 0))
+    graph.add_node(2, node_type="road", pos=(1, 1))
+    graph.add_edge(1, 2, edge_type="connects_to")
+    graph.graph = {
+        "is_hetero": True,
+        "crs": "EPSG:27700",
+        "node_types": ["building", "road"],
+        # Missing edge_types
+    }
+    return graph
+
+
+@pytest.fixture
+def nx_hetero_graph_missing_node_type_attr() -> nx.Graph:
+    """Fixture for a heterogeneous graph with nodes missing node_type attribute."""
+    graph = nx.Graph()
+    graph.add_node(1, pos=(0, 0))  # Missing node_type
+    graph.add_node(2, node_type="road", pos=(1, 1))
+    graph.add_edge(1, 2, edge_type="connects_to")
+    graph.graph = {
+        "is_hetero": True,
+        "crs": "EPSG:27700",
+        "node_types": ["building", "road"],
+        "edge_types": [("building", "connects_to", "road")]
+    }
+    return graph
+
+
+@pytest.fixture
+def nx_hetero_graph_missing_edge_type_attr() -> nx.Graph:
+    """Fixture for a heterogeneous graph with edges missing edge_type attribute."""
+    graph = nx.Graph()
+    graph.add_node(1, node_type="building", pos=(0, 0))
+    graph.add_node(2, node_type="road", pos=(1, 1))
+    graph.add_edge(1, 2)  # Missing edge_type
+    graph.graph = {
+        "is_hetero": True,
+        "crs": "EPSG:27700",
+        "node_types": ["building", "road"],
+        "edge_types": [("building", "connects_to", "road")]
+    }
+    return graph
+
+
+@pytest.fixture
+def invalid_input_string() -> str:
+    """Fixture for invalid input (string instead of graph)."""
+    return "not_a_graph"
+
+
+@pytest.fixture
+def invalid_input_dict() -> dict:
+    """Fixture for invalid input (dict instead of graph)."""
+    return {"not": "a_graph"}
+
+
+@pytest.fixture
+def invalid_input_list() -> list:
+    """Fixture for invalid input (list instead of graph)."""
+    return [1, 2, 3]

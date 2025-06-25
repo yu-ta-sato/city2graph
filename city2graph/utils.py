@@ -126,8 +126,8 @@ class GeoDataProcessor:
         ValueError
             If the graph has no nodes, no edges, or is missing essential metadata.
         """
-        if not isinstance(graph, nx.Graph):
-            msg = "Input must be a NetworkX graph"
+        if not isinstance(graph, (nx.Graph, nx.MultiGraph)):
+            msg = "Input must be a NetworkX Graph or MultiGraph"
             raise TypeError(msg)
         if graph.number_of_nodes() == 0:
             msg = "Graph has no nodes"
@@ -147,13 +147,10 @@ class GeoDataProcessor:
                 msg = f"Graph metadata is missing required key: '{key}'"
                 raise ValueError(msg)
 
-        # Check for node-level attributes
-        for _, node_data in graph.nodes(data=True):
-            if "pos" not in node_data and "geometry" not in node_data:
-                msg = "All nodes must have a 'pos' or 'geometry' attribute."
-                raise ValueError(msg)
+        # Check for node-level attributes in a single pass
+        is_hetero = graph.graph.get("is_hetero", False)
 
-        if graph.graph.get("is_hetero"):
+        if is_hetero:
             if "node_types" not in graph.graph or not graph.graph["node_types"]:
                 msg = "Heterogeneous graph metadata is missing 'node_types'."
                 raise ValueError(msg)
@@ -161,11 +158,20 @@ class GeoDataProcessor:
                 msg = "Heterogeneous graph metadata is missing 'edge_types'."
                 raise ValueError(msg)
 
-            for _, node_data in graph.nodes(data=True):
-                if "node_type" not in node_data:
-                    msg = "All nodes in a heterogeneous graph must have a 'node_type' attribute."
-                    raise ValueError(msg)
+        # Validate all node attributes in a single loop
+        for _, node_data in graph.nodes(data=True):
+            # Check for position/geometry attributes
+            if "pos" not in node_data and "geometry" not in node_data:
+                msg = "All nodes must have a 'pos' or 'geometry' attribute."
+                raise ValueError(msg)
 
+            # Check for node_type in heterogeneous graphs
+            if is_hetero and "node_type" not in node_data:
+                msg = "All nodes in a heterogeneous graph must have a 'node_type' attribute."
+                raise ValueError(msg)
+
+        # Validate edge attributes for heterogeneous graphs
+        if is_hetero:
             for _, _, edge_data in graph.edges(data=True):
                 if "edge_type" not in edge_data:
                     msg = "All edges in a heterogeneous graph must have an 'edge_type' attribute."
@@ -781,7 +787,7 @@ class GraphAnalyzer:
         node_id_col: str | None = None,
     ) -> gpd.GeoDataFrame | nx.Graph | nx.MultiGraph:
         """Extract a filtered graph containing only elements within a given shortest-path distance."""
-        is_graph_input = isinstance(graph, nx.Graph)
+        is_graph_input = isinstance(graph, (nx.Graph, nx.MultiGraph))
 
         # Convert to NetworkX if needed
         if is_graph_input:
@@ -829,7 +835,7 @@ class GraphAnalyzer:
         reachable = self.filter_graph_by_distance(graph, center_point, distance, edge_attr)
 
         # Convert to GeoDataFrame if NetworkX
-        if isinstance(reachable, nx.Graph):
+        if isinstance(reachable, (nx.Graph, nx.MultiGraph)):
             reachable = self.converter.nx_to_gdf(reachable, nodes=False, edges=True)
 
         if reachable.empty:
@@ -1073,6 +1079,7 @@ def dual_graph(
 
 def segments_to_graph(
     segments_gdf: gpd.GeoDataFrame,
+    multigraph: bool = False,
 ) -> tuple[gpd.GeoDataFrame, gpd.GeoDataFrame]:
     r"""Convert a GeoDataFrame of LineString segments into a graph structure.
 
@@ -1083,13 +1090,20 @@ def segments_to_graph(
     The resulting nodes GeoDataFrame contains unique points representing the start
     and end points of the input line segments. The edges GeoDataFrame is a copy
     of the input, but with a new MultiIndex (`from_node_id`, `to_node_id`) that
-    references the IDs in the new nodes GeoDataFrame.
+    references the IDs in the new nodes GeoDataFrame. If `multigraph` is True
+    and there are multiple edges between the same pair of nodes, an additional
+    index level (`edge_key`) is added to distinguish them.
 
     Parameters
     ----------
     segments_gdf : gpd.GeoDataFrame
         A GeoDataFrame where each row represents a line segment, and the
         'geometry' column contains LineString objects.
+    multigraph : bool, default False
+        If True, supports multiple edges between the same pair of nodes by
+        adding an `edge_key` level to the MultiIndex. This is useful when
+        the input contains duplicate node-to-node connections that should
+        be preserved as separate edges.
 
     Returns
     -------
@@ -1097,7 +1111,8 @@ def segments_to_graph(
         A tuple containing two GeoDataFrames:
         - nodes_gdf: A GeoDataFrame of unique nodes (Points), indexed by `node_id`.
         - edges_gdf: A GeoDataFrame of edges (LineStrings), with a MultiIndex
-          mapping to the `node_id` in `nodes_gdf`.
+          mapping to the `node_id` in `nodes_gdf`. If `multigraph` is True,
+          the index includes a third level (`edge_key`) for duplicate connections.
 
     Examples
     --------
@@ -1121,6 +1136,18 @@ def segments_to_graph(
     from_node_id to_node_id
     0            1                  A           LINESTRING (0 0, 1 1)
     1            2                  B           LINESTRING (1 1, 1 0)
+    
+    >>> # Example with duplicate connections (multigraph)
+    >>> segments_with_duplicates = gpd.GeoDataFrame(
+    ...     {"road_name": ["A", "B", "C"]},
+    ...     geometry=[LineString([(0, 0), (1, 1)]),
+    ...               LineString([(0, 0), (1, 1)]),
+    ...               LineString([(1, 1), (1, 0)])],
+    ...     crs="EPSG:32633"
+    ... )
+    >>> nodes_gdf, edges_gdf = segments_to_graph(segments_with_duplicates, multigraph=True)
+    >>> print(edges_gdf.index.names)
+    ['from_node_id', 'to_node_id', 'edge_key']
     """
     processor = GeoDataProcessor()
 
@@ -1140,11 +1167,15 @@ def segments_to_graph(
     all_coords = pd.concat([start_coords, end_coords]).drop_duplicates()
     coord_to_id = {coord: i for i, coord in enumerate(all_coords)}
 
-    # Create nodes GeoDataFrame
+    # Create nodes GeoDataFrame efficiently using gpd.points_from_xy
+    coords_array = all_coords.to_numpy()
+    x_coords = [coord[0] for coord in coords_array]
+    y_coords = [coord[1] for coord in coords_array]
+    
     nodes_gdf = gpd.GeoDataFrame(
         {
             "node_id": range(len(all_coords)),
-            "geometry": [Point(coord) for coord in all_coords],
+            "geometry": gpd.points_from_xy(x_coords, y_coords),
         },
         crs=segments_clean.crs,
     ).set_index("node_id", drop=True)
@@ -1154,9 +1185,20 @@ def segments_to_graph(
     to_ids = end_coords.map(coord_to_id)
 
     edges_gdf = segments_clean.copy()
-    edges_gdf.index = pd.MultiIndex.from_arrays(
-        [from_ids, to_ids], names=["from_node_id", "to_node_id"],
-    )
+
+    if multigraph:
+        # For multigraph, handle potential duplicate node pairs by adding edge keys
+        edge_pairs_df = pd.DataFrame({"from_id": from_ids, "to_id": to_ids})
+        edge_keys = edge_pairs_df.groupby(["from_id", "to_id"]).cumcount()
+
+        edges_gdf.index = pd.MultiIndex.from_arrays(
+            [from_ids, to_ids, edge_keys],
+            names=["from_node_id", "to_node_id", "edge_key"],
+        )
+    else:
+        edges_gdf.index = pd.MultiIndex.from_arrays(
+            [from_ids, to_ids], names=["from_node_id", "to_node_id"],
+        )
 
     return nodes_gdf, edges_gdf
 
@@ -1227,7 +1269,7 @@ def gdf_to_nx(
     ...       '_original_index': 20,
     ...       'pos': (1.0, 1.0)})]
     >>> print(G.edges(data=True))
-    >>> [(0, 1, {'length': 1.414, 
+    >>> [(0, 1, {'length': 1.414,
     ...          'geometry': <LINESTRING (0 0, 1 1)>,
     ...          '_original_edge_index': (10, 20)})]
 

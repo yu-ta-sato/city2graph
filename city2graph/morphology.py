@@ -47,6 +47,7 @@ def morphological_graph(
     primary_barrier_col: str | None = "barrier_geometry",
     contiguity: str = "queen",
     keep_buildings: bool = False,
+    tolerance: float = 1e-6,
     ) -> tuple[dict[str, gpd.GeoDataFrame], dict[tuple[str, str, str], gpd.GeoDataFrame]]:
     """
     Create a morphological graph from buildings and street segments.
@@ -97,6 +98,10 @@ def morphological_graph(
         Must be either "queen" or "rook".
     keep_buildings : bool, default=False
         If True, preserves building information in the tessellation output.
+    tolerance : float, default=1e-6
+        Buffer distance for public geometries when creating private-to-public connections.
+        This parameter controls how close private spaces need to be to public spaces
+        to establish a connection.
 
     Returns
     -------
@@ -257,6 +262,7 @@ def morphological_graph(
         tessellation,
         segs, # Use 'segs' (final graph segments)
         primary_barrier_col=primary_barrier_col, # Optional alternative geometry for public spaces
+        tolerance=tolerance, # Buffer distance for proximity detection
     )
 
     # Log warning if no private-public connections found
@@ -387,7 +393,7 @@ def private_to_public_graph(
     private_gdf: gpd.GeoDataFrame,
     public_gdf: gpd.GeoDataFrame,
     primary_barrier_col: str | None = None,
-    tolerance: float = 1.0,
+    tolerance: float = 1e-6,
 ) -> gpd.GeoDataFrame:
     """
     Create edges between private polygons and nearby public geometries.
@@ -407,7 +413,7 @@ def private_to_public_graph(
     primary_barrier_col : str, optional
         Column name for alternative public geometry. If specified and exists,
         this geometry will be used instead of the main geometry column.
-    tolerance : float, default=1.0
+    tolerance : float, default=1e-6
         Buffer distance for public geometries to detect proximity to private spaces.
 
     Returns
@@ -519,14 +525,12 @@ def public_to_public_graph(
     This function identifies topological connections between public space geometries
     (typically street segments) using the dual graph approach to find segments
     that share endpoints or connection points.
-    The input `public_gdf` must have a 'public_id' column that will be used to
-    identify segments.
+    The function automatically creates a unique identifier for each row if needed.
 
     Parameters
     ----------
     public_gdf : geopandas.GeoDataFrame
         GeoDataFrame containing public space geometries (typically LineString).
-        Must have a 'public_id' column.
 
     Returns
     -------
@@ -538,9 +542,6 @@ def public_to_public_graph(
     ------
     TypeError
         If public_gdf is not a GeoDataFrame.
-    ValueError
-        If 'public_id' column is missing from public_gdf.
-
 
     Notes
     -----
@@ -555,12 +556,35 @@ def public_to_public_graph(
     if public_gdf.empty or len(public_gdf) < 2:
         return _create_empty_edges_gdf(public_gdf.crs, "from_public_id", "to_public_id")
 
+    # Create a copy to avoid modifying the original
+    public_gdf_work = public_gdf.copy()
+
+    # Check if public_id column already exists (shared with other components)
+    if "public_id" in public_gdf_work.columns:
+        edge_id_col = "public_id"
+        # If the public_id column contains MultiIndex tuples, we need to ensure
+        # they can be used safely in dual_graph operations
+        has_multiindex = isinstance(public_gdf_work.index, pd.MultiIndex)
+        has_tuple_ids = any(isinstance(pid, tuple) for pid in public_gdf_work["public_id"])
+        if has_multiindex and has_tuple_ids:
+            # Convert MultiIndex tuples to strings for consistency if needed
+            public_gdf_work["public_id"] = [str(pid) for pid in public_gdf_work["public_id"]]
+    else:
+        # Create a unique identifier for each row that can handle any index type
+        if isinstance(public_gdf_work.index, pd.MultiIndex):
+            # For MultiIndex, create a string representation of the tuple
+            public_gdf_work["_edge_id"] = [str(idx) for idx in public_gdf_work.index]
+        else:
+            # For regular index, use the index values directly
+            public_gdf_work["_edge_id"] = public_gdf_work.index
+        edge_id_col = "_edge_id"
+
     # Convert public_gdf to a graph
-    nodes, edges = segments_to_graph(public_gdf)
+    nodes, edges = segments_to_graph(public_gdf_work)
 
     # Create dual graph (nodes are segments, edges are connections)
     _, dual_edges = dual_graph(
-        (nodes, edges), edge_id_col="public_id", keep_original_geom=True,
+        (nodes, edges), edge_id_col=edge_id_col, keep_original_geom=True,
     )
 
     # Rename the MultiIndex levels for clarity and consistency

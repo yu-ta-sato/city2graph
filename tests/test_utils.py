@@ -492,12 +492,76 @@ def test_validate_gdf(
 @pytest.mark.parametrize(
     ("graph_input", "error", "match"),
     [
-        # Success case
+        # Success cases - different graph types
         ("sample_nx_graph", None, None),
-        # Error cases
-        ("not_a_gdf", TypeError, "Input must be a NetworkX graph"),
+        ("sample_nx_multigraph", None, None),
+        ("sample_nx_digraph", None, None),
+        ("sample_nx_multidigraph", None, None),
+        ("nx_graph_with_pos_only", None, None),
+        ("nx_graph_with_geometry_only", None, None),
+        ("nx_hetero_graph_valid", None, None),
+
+        # Error cases - invalid input types
+        ("invalid_input_string", TypeError, "Input must be a NetworkX Graph or MultiGraph"),
+        ("invalid_input_dict", TypeError, "Input must be a NetworkX Graph or MultiGraph"),
+        ("invalid_input_list", TypeError, "Input must be a NetworkX Graph or MultiGraph"),
+        ("not_a_gdf", TypeError, "Input must be a NetworkX Graph or MultiGraph"),
+
+        # Error cases - empty graphs
         ("empty_graph", ValueError, "Graph has no nodes"),
         ("graph_no_edges", ValueError, "Graph has no edges"),
+
+        # Error cases - missing or invalid graph attributes
+        (
+            "nx_graph_missing_graph_attr",
+            ValueError,
+            "Graph is missing 'graph' attribute dictionary for metadata\\.",
+        ),
+        (
+            "nx_graph_non_dict_graph_attr",
+            ValueError,
+            "Graph is missing 'graph' attribute dictionary for metadata\\.",
+        ),
+        (
+            "nx_graph_missing_is_hetero",
+            ValueError,
+            "Graph metadata is missing required key: 'is_hetero'",
+        ),
+        (
+            "nx_graph_missing_crs",
+            ValueError,
+            "Graph metadata is missing required key: 'crs'",
+        ),
+
+        # Error cases - missing node attributes
+        ("nx_graph_no_pos_no_geom", ValueError, "All nodes must have a 'pos' or 'geometry' attribute\\."),
+
+        # Error cases - heterogeneous graph validation
+        (
+            "nx_hetero_graph_missing_node_types",
+            ValueError,
+            "Heterogeneous graph metadata is missing 'node_types'\\.",
+        ),
+        (
+            "nx_hetero_graph_empty_node_types",
+            ValueError,
+            "Heterogeneous graph metadata is missing 'node_types'\\.",
+        ),
+        (
+            "nx_hetero_graph_missing_edge_types",
+            ValueError,
+            "Heterogeneous graph metadata is missing 'edge_types'\\.",
+        ),
+        (
+            "nx_hetero_graph_missing_node_type_attr",
+            ValueError,
+            "All nodes in a heterogeneous graph must have a 'node_type' attribute\\.",
+        ),
+        (
+            "nx_hetero_graph_missing_edge_type_attr",
+            ValueError,
+            "All edges in a heterogeneous graph must have an 'edge_type' attribute\\.",
+        ),
     ],
 )
 def test_validate_nx(
@@ -506,12 +570,14 @@ def test_validate_nx(
     match: str | None,
     request: pytest.FixtureRequest,
 ) -> None:
-    """Test validate_nx with various graph inputs."""
+    """Test validate_nx comprehensively with various graph inputs and edge cases."""
+    # Handle special cases that need to be created dynamically
     if graph_input == "empty_graph":
         graph = nx.Graph()
     elif graph_input == "graph_no_edges":
         graph = nx.Graph()
         graph.add_node(1)
+        graph.graph = {"is_hetero": False, "crs": "EPSG:27700"}
     else:
         graph = request.getfixturevalue(graph_input)
 
@@ -521,7 +587,7 @@ def test_validate_nx(
     else:
         try:
             utils.validate_nx(graph)
-        except Exception as e:
+        except (TypeError, ValueError, AttributeError) as e:
             pytest.fail(f"validate_nx raised an unexpected exception: {e}")
 
 
