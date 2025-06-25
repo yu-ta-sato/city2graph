@@ -78,6 +78,7 @@ language = "en"
 autodoc_member_order = "bysource"        # Order members as they appear in source
 autodoc_typehints = "description"        # Include type hints in parameter descriptions
 autoclass_content = "both"               # Include both class and __init__ docstrings
+add_module_names = False                 # Don't show module names in function signatures
 
 # -- Options for autosummary ---------------------------------------------
 # Configure automatic summary table generation

@@ -116,7 +116,7 @@ class GeoDataProcessor:
 
         Parameters
         ----------
-        graph : nx.Graph or nx.MultiGraph
+        graph : networkx.Graph or networkx.MultiGraph
             The NetworkX graph to validate.
 
         Raises
@@ -940,7 +940,7 @@ def dual_graph(
 
     Parameters
     ----------
-    gdf : tuple[gpd.GeoDataFrame, gpd.GeoDataFrame]
+    gdf : tuple[geopandas.GeoDataFrame, geopandas.GeoDataFrame]
         A tuple containing nodes and edges GeoDataFrames of the primal graph.
     edge_id_col : str, optional
         The name of the column in the edges GeoDataFrame to be used as unique identifiers
@@ -952,7 +952,7 @@ def dual_graph(
 
     Returns
     -------
-    tuple[gpd.GeoDataFrame, gpd.GeoDataFrame]
+    tuple[geopandas.GeoDataFrame, geopandas.GeoDataFrame]
         A tuple containing the nodes and edges of the dual graph as GeoDataFrames.
         - Dual nodes GeoDataFrame: Nodes represent original edges. The geometry is the
           centroid of the original edge's geometry. The index is derived from `edge_id_col`
@@ -1096,7 +1096,7 @@ def segments_to_graph(
 
     Parameters
     ----------
-    segments_gdf : gpd.GeoDataFrame
+    segments_gdf : geopandas.GeoDataFrame
         A GeoDataFrame where each row represents a line segment, and the
         'geometry' column contains LineString objects.
     multigraph : bool, default False
@@ -1107,7 +1107,7 @@ def segments_to_graph(
 
     Returns
     -------
-    tuple[gpd.GeoDataFrame, gpd.GeoDataFrame]
+    tuple[geopandas.GeoDataFrame, geopandas.GeoDataFrame]
         A tuple containing two GeoDataFrames:
         - nodes_gdf: A GeoDataFrame of unique nodes (Points), indexed by `node_id`.
         - edges_gdf: A GeoDataFrame of edges (LineStrings), with a MultiIndex
@@ -1136,7 +1136,7 @@ def segments_to_graph(
     from_node_id to_node_id
     0            1                  A           LINESTRING (0 0, 1 1)
     1            2                  B           LINESTRING (1 1, 1 0)
-    
+
     >>> # Example with duplicate connections (multigraph)
     >>> segments_with_duplicates = gpd.GeoDataFrame(
     ...     {"road_name": ["A", "B", "C"]},
@@ -1171,7 +1171,7 @@ def segments_to_graph(
     coords_array = all_coords.to_numpy()
     x_coords = [coord[0] for coord in coords_array]
     y_coords = [coord[1] for coord in coords_array]
-    
+
     nodes_gdf = gpd.GeoDataFrame(
         {
             "node_id": range(len(all_coords)),
@@ -1220,11 +1220,11 @@ def gdf_to_nx(
 
     Parameters
     ----------
-    nodes : gpd.GeoDataFrame or dict[str, gpd.GeoDataFrame], optional
+    nodes : geopandas.GeoDataFrame or dict[str, geopandas.GeoDataFrame], optional
         Node data. For homogeneous graphs, a single GeoDataFrame. For
         heterogeneous graphs, a dictionary mapping node type names to
         GeoDataFrames. Node IDs are taken from the GeoDataFrame index.
-    edges : gpd.GeoDataFrame or dict, optional
+    edges : geopandas.GeoDataFrame or dict, optional
         Edge data. For homogeneous graphs, a single GeoDataFrame. For
         heterogeneous graphs, a dictionary mapping edge type tuples
         (source_type, relation_type, target_type) to GeoDataFrames.
@@ -1240,7 +1240,7 @@ def gdf_to_nx(
 
     Returns
     -------
-    nx.Graph
+    networkx.Graph
         A NetworkX graph object representing the spatial network. Graph-level
         metadata, such as CRS and heterogeneity information, is stored in
         `graph.graph`.
@@ -1321,7 +1321,7 @@ def nx_to_gdf(
 
     Parameters
     ----------
-    G : nx.Graph or nx.MultiGraph
+    G : networkx.Graph or networkx.MultiGraph
         The NetworkX graph to convert. It is expected to have metadata stored
         in `G.graph` to guide the conversion, including CRS and heterogeneity
         information. Node positions are expected in a 'pos' attribute.
@@ -1332,7 +1332,7 @@ def nx_to_gdf(
 
     Returns
     -------
-    gpd.GeoDataFrame or tuple
+    geopandas.GeoDataFrame or tuple
         The returned type depends on the graph type and input parameters:
         - Homogeneous graph:
             - `(nodes_gdf, edges_gdf)` if `nodes` and `edges` are True.
@@ -1383,10 +1383,10 @@ def filter_graph_by_distance(
 
     Parameters
     ----------
-    graph : gpd.GeoDataFrame or nx.Graph or nx.MultiGraph
+    graph : geopandas.GeoDataFrame or networkx.Graph or networkx.MultiGraph
         The graph to filter. If a GeoDataFrame, it represents the edges of the
         graph and will be converted to a NetworkX graph internally.
-    center_point : Point or gpd.GeoSeries
+    center_point : Point or geopandas.GeoSeries
         The origin point(s) for the distance calculation. If multiple points
         are provided, the filter will include nodes reachable from any of them.
     distance : float
@@ -1401,7 +1401,7 @@ def filter_graph_by_distance(
 
     Returns
     -------
-    gpd.GeoDataFrame or nx.Graph or nx.MultiGraph
+    geopandas.GeoDataFrame or networkx.Graph or networkx.MultiGraph
         The filtered subgraph. The return type matches the input `graph` type.
         If the input was a GeoDataFrame, the output is a GeoDataFrame of the
         filtered edges.
@@ -1441,10 +1441,10 @@ def create_isochrone(
 
     Parameters
     ----------
-    graph : gpd.GeoDataFrame or nx.Graph or nx.MultiGraph
+    graph : geopandas.GeoDataFrame or networkx.Graph or networkx.MultiGraph
         The network graph. If a GeoDataFrame, it represents the edges of the
         graph.
-    center_point : Point or gpd.GeoSeries or gpd.GeoDataFrame
+    center_point : Point or geopandas.GeoSeries or geopandas.GeoDataFrame
         The origin point(s) for the isochrone calculation.
     distance : float
         The maximum travel distance (or time) that defines the boundary of the
@@ -1455,7 +1455,7 @@ def create_isochrone(
 
     Returns
     -------
-    gpd.GeoDataFrame
+    geopandas.GeoDataFrame
         A GeoDataFrame containing a single Polygon geometry that represents the
         isochrone.
 
@@ -1496,9 +1496,9 @@ def create_tessellation(
 
     Parameters
     ----------
-    geometry : gpd.GeoDataFrame or gpd.GeoSeries
+    geometry : geopandas.GeoDataFrame or geopandas.GeoSeries
         The geometries (typically building footprints) to tessellate around.
-    primary_barriers : gpd.GeoDataFrame or gpd.GeoSeries, optional
+    primary_barriers : geopandas.GeoDataFrame or geopandas.GeoSeries, optional
         Geometries (typically road network) to use as barriers for enclosed
         tessellation. If provided, `momepy.enclosed_tessellation` is used.
         Default is None.
@@ -1520,7 +1520,7 @@ def create_tessellation(
 
     Returns
     -------
-    gpd.GeoDataFrame
+    geopandas.GeoDataFrame
         A GeoDataFrame containing the tessellation cells as polygons. Each cell
         has a unique `tess_id`.
 
@@ -1615,9 +1615,9 @@ def validate_gdf(
 
     Parameters
     ----------
-    nodes_gdf : gpd.GeoDataFrame, optional
+    nodes_gdf : geopandas.GeoDataFrame, optional
         The GeoDataFrame containing node data to validate.
-    edges_gdf : gpd.GeoDataFrame, optional
+    edges_gdf : geopandas.GeoDataFrame, optional
         The GeoDataFrame containing edge data to validate.
 
     Raises
@@ -1659,7 +1659,7 @@ def validate_nx(graph: nx.Graph | nx.MultiGraph) -> None:
 
     Parameters
     ----------
-    graph : nx.Graph or nx.MultiGraph
+    graph : networkx.Graph or networkx.MultiGraph
         The NetworkX graph to validate.
 
     Raises

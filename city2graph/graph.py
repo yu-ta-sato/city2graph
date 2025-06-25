@@ -315,14 +315,16 @@ def pyg_to_gdf(
 
     Returns
     -------
-    For HeteroData
-        tuple[dict[str, GeoDataFrame], dict[tuple[str, str, str], geopandas.GeoDataFrame]]
-            First element: dictionary mapping node type names to node GeoDataFrames.
-            Second element: dictionary mapping edge type tuples to edge GeoDataFrames.
-    For Data
-        tuple[geopandas.GeoDataFrame, geopandas.GeoDataFrame | None]
-            First element: nodes GeoDataFrame.
-            Second element: edges GeoDataFrame (None if no edges).
+    tuple
+        **For HeteroData input:** Returns a tuple containing:
+            - First element: dict[str, geopandas.GeoDataFrame] mapping node type names to
+              GeoDataFrames
+            - Second element: dict[tuple[str, str, str], geopandas.GeoDataFrame] mapping
+              edge types to GeoDataFrames
+
+        **For Data input:** Returns a tuple containing:
+            - First element: geopandas.GeoDataFrame containing nodes
+            - Second element: geopandas.GeoDataFrame containing edges (or None if no edges)
 
     See Also
     --------
@@ -451,9 +453,9 @@ def nx_to_pyg(
 ) -> Data:
     """Convert NetworkX graph to PyTorch Geometric Data object.
 
-    Converts a NetworkX Graph to a PyTorch Geometric Data object by first 
-    converting to GeoDataFrames then using the main conversion pipeline. This 
-    provides a bridge between NetworkX's rich graph analysis tools and PyTorch 
+    Converts a NetworkX Graph to a PyTorch Geometric Data object by first
+    converting to GeoDataFrames then using the main conversion pipeline. This
+    provides a bridge between NetworkX's rich graph analysis tools and PyTorch
     Geometric's deep learning capabilities.
 
     Parameters

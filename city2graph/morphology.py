@@ -1,4 +1,84 @@
-"""Module for creating morphological graphs from urban data."""
+"""
+Module for creating morphological graphs from urban data.
+
+This module provides comprehensive functionality for analyzing urban morphology
+through graph representations, focusing on the relationships between private
+spaces (buildings and their tessellations) and public spaces (street segments).
+It creates heterogeneous graphs that capture the complex spatial relationships
+inherent in urban environments.
+
+The module specializes in three types of spatial relationships:
+1. Private-to-private: Adjacency relationships between building tessellations
+2. Public-to-public: Topological connectivity between street segments
+3. Private-to-public: Interface relationships between private and public spaces
+
+Key Features
+------------
+- Morphological tessellation generation from building footprints
+- Multi-scale spatial filtering with distance-based network analysis
+- Heterogeneous graph construction with typed nodes and edges
+- Support for various spatial contiguity measures (Queen/Rook)
+- Flexible geometric barrier handling for tessellation refinement
+- NetworkX integration for graph analysis and manipulation
+
+Main Functions
+--------------
+morphological_graph : Create comprehensive morphological graphs
+private_to_private_graph : Generate adjacency relationships between private spaces
+private_to_public_graph : Create interface connections between private and public spaces
+public_to_public_graph : Build connectivity networks between public spaces
+
+See Also
+--------
+city2graph.graph : PyTorch Geometric graph conversion utilities
+city2graph.utils : Core utility functions for tessellation and graph operations
+city2graph.proximity : Spatial proximity and accessibility analysis
+
+Notes
+-----
+This module integrates with GeoPandas for spatial data handling, libpysal for
+spatial weights computation, and NetworkX for graph operations. The resulting
+graph structures are compatible with both traditional network analysis tools
+and modern graph neural network frameworks.
+
+Examples
+--------
+Basic morphological graph creation:
+
+>>> import geopandas as gpd
+>>> from city2graph.morphology import morphological_graph
+>>>
+>>> # Load urban data
+>>> buildings = gpd.read_file("buildings.geojson")
+>>> streets = gpd.read_file("streets.geojson")
+>>>
+>>> # Create morphological graph
+>>> nodes, edges = morphological_graph(buildings, streets)
+>>>
+>>> # Access different node types
+>>> private_spaces = nodes['private']  # Building tessellations
+>>> public_spaces = nodes['public']    # Street segments
+>>>
+>>> # Access different relationship types
+>>> private_adjacency = edges[('private', 'touched_to', 'private')]
+>>> public_connectivity = edges[('public', 'connected_to', 'public')]
+>>> private_public_interface = edges[('private', 'faced_to', 'public')]
+
+Advanced usage with spatial filtering:
+
+>>> from shapely.geometry import Point
+>>>
+>>> # Define center point for analysis
+>>> center = gpd.GeoSeries([Point(x, y)], crs=buildings.crs)
+>>>
+>>> # Create localized morphological graph
+>>> nodes, edges = morphological_graph(
+...     buildings, streets,
+...     center_point=center,
+...     distance=1000,  # 1km radius
+...     clipping_buffer=200  # Additional context
+... )
+"""
 
 import itertools
 import logging
@@ -67,7 +147,7 @@ def morphological_graph(
         GeoDataFrame containing building polygons. Should contain Polygon or MultiPolygon geometries.
     segments_gdf : geopandas.GeoDataFrame
         GeoDataFrame containing street segments. Should contain LineString geometries.
-    center_point : Union[gpd.GeoSeries, gpd.GeoDataFrame], optional
+    center_point : geopandas.GeoSeries or geopandas.GeoDataFrame, optional
         Center point(s) for spatial filtering. If provided with distance parameter,
         only segments within the specified distance will be included.
     distance : float, optional
@@ -105,7 +185,7 @@ def morphological_graph(
 
     Returns
     -------
-    tuple[dict[str, gpd.GeoDataFrame], dict[tuple[str, str, str], gpd.GeoDataFrame]]
+    tuple[dict[str, geopandas.GeoDataFrame], dict[tuple[str, str, str], geopandas.GeoDataFrame]]
         A tuple containing:
         - nodes: Dictionary with keys "private" and "public" containing node GeoDataFrames
         - edges: Dictionary with relationship type keys containing edge GeoDataFrames
