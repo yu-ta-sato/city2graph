@@ -477,8 +477,13 @@ def nx_to_pyg(
 
     Returns
     -------
-    torch_geometric.data.Data
-        PyTorch Geometric Data object.
+    torch_geometric.data.Data or torch_geometric.data.HeteroData
+        PyTorch Geometric Data object for homogeneous graphs or HeteroData
+        object for heterogeneous graphs. The returned object contains:
+
+        - Node features (x), positions (pos), and labels (y) if available
+        - Edge connectivity (edge_index) and features (edge_attr) if available
+        - Metadata for reconstruction including ID mappings and column names
 
     Raises
     ------

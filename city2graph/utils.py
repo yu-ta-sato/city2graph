@@ -1240,7 +1240,7 @@ def gdf_to_nx(
 
     Returns
     -------
-    networkx.Graph
+    networkx.Graph or networkx.MultiGraph
         A NetworkX graph object representing the spatial network. Graph-level
         metadata, such as CRS and heterogeneity information, is stored in
         `graph.graph`.
