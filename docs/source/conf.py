@@ -1,9 +1,14 @@
 # Configuration file for the Sphinx documentation builder.
 #
+# This file configures Sphinx documentation generation for the city2graph package.
+# It includes settings for autodoc, cross-references (intersphinx), SEO optimization,
+# and theme customization for the PyData Sphinx Theme.
+#
 # For the full list of built-in configuration values, see the documentation:
 # https://www.sphinx-doc.org/en/master/usage/configuration.html
 
 # -- Path setup --------------------------------------------------------------
+# Add the project root to Python path so Sphinx can import the package
 import os
 import sys
 
@@ -16,92 +21,238 @@ project = "city2graph"
 copyright = "2025, Yuta Sato & city2graph developers"
 author = "Yuta Sato"
 release = "0.1.0"
+version = "0.1.0"
 
 # -- General configuration ---------------------------------------------------
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#general-configuration
 
+# Extensions for enhanced documentation generation
 extensions = [
-    "sphinx.ext.autodoc",
-    "sphinx.ext.autosummary",
-    "sphinx.ext.napoleon",
-    "sphinx.ext.viewcode",
-    "sphinx.ext.mathjax",
-    "sphinx.ext.intersphinx",
-    "sphinx_autodoc_typehints",
-    "sphinxext.opengraph",
-    "sphinx_plotly_directive",
-    "nbsphinx",
-    "sphinx_sitemap",
+    "sphinx.ext.autodoc",          # Automatic documentation from docstrings
+    "sphinx.ext.autosummary",      # Generate summary tables for modules/classes
+    "sphinx.ext.napoleon",         # Support for NumPy and Google style docstrings
+    "sphinx.ext.viewcode",         # Add source code links to documentation
+    "sphinx.ext.mathjax",          # Math support via MathJax
+    "sphinx.ext.intersphinx",      # Cross-references to other projects
+    "sphinx_autodoc_typehints",    # Type hints in documentation
+    "sphinxext.opengraph",         # Open Graph meta tags for social sharing
+    "sphinx_plotly_directive",     # Plotly figure support
+    "nbsphinx",                    # Jupyter notebook support
+    "sphinx_sitemap",              # Generate sitemap.xml for SEO
 ]
 
+# Open Graph (social media) configuration
 ogp_site_url = "https://city2graph.net/"
 ogp_image = "https://city2graph.net/_static/social_preview.png"
+ogp_description = "Transform urban data into graphs for spatial analysis and Graph Neural Networks"
+ogp_type = "website"
 
-
+# Template and exclusion settings
 templates_path = ["_templates"]
-exclude_patterns = ["_build"]
+exclude_patterns = ["_build", "**.ipynb_checkpoints"]
 
-# -- SEO configuration ------------------------------------------------------
+# -- SEO and metadata configuration -----------------------------------------
+# Optimize documentation for search engines and social media sharing
+
 # Title for the HTML documentation
-html_title = "city2graph"
-# Base URL for sitemap and canonical URLs
+html_title = "city2graph - Urban Data to Graph Conversion"
+# Base URL for sitemap and canonical URLs  
 html_baseurl = "https://city2graph.net/"
 # Include robots.txt in the output
 html_extra_path = ["robots.txt"]
 # Default meta description for pages
 html_meta = {
     "description": "A Python package for transforming urban data into graphs for spatial analysis and Graph Neural Networks.",
+    "author": "Yuta Sato",
 }
-# Sitemap settings
+# Sitemap settings for better SEO
 sitemap_url_scheme = "{link}"
+sitemap_locales = ["en"]
 
+# Documentation language
 language = "en"
 
 # -- Options for autodoc -----------------------------------------------------
-autodoc_member_order = "bysource"
-autodoc_typehints = "description"
-autoclass_content = "both"
+# Configure automatic documentation generation from docstrings
 
-# -- Options for numpydoc ----------------------------------------------------
-numpydoc_show_class_members = False
-numpydoc_show_inherited_class_members = False
-numpydoc_class_members_toctree = False
+autodoc_member_order = "bysource"        # Order members as they appear in source
+autodoc_typehints = "description"        # Include type hints in parameter descriptions
+autoclass_content = "both"               # Include both class and __init__ docstrings
+autodoc_inherit_docstrings = True        # Inherit docstrings from parent classes
+autodoc_default_options = {
+    "members": True,                     # Document all members
+    "member-order": "bysource",          # Order members by source order
+    "special-members": "__init__",       # Include __init__ methods
+    "undoc-members": True,               # Include members without docstrings
+    "exclude-members": "__weakref__",    # Exclude certain members
+}
+
+# -- Options for autosummary ---------------------------------------------
+# Configure automatic summary table generation
+
+autosummary_generate = True              # Generate stub files for autosummary
+autosummary_imported_members = True      # Include imported members in summaries
+
+# -- Options for napoleon (NumPy/Google docstring parsing) --------------
+# Configure parsing of NumPy and Google style docstrings
+
+napoleon_google_docstring = True         # Parse Google style docstrings
+napoleon_numpy_docstring = True          # Parse NumPy style docstrings
+napoleon_include_init_with_doc = False   # Don't duplicate __init__ docs
+napoleon_include_private_with_doc = False # Don't include private members
+napoleon_include_special_with_doc = True  # Include special methods
+napoleon_use_admonition_for_examples = False # Don't use admonitions for examples
+napoleon_use_admonition_for_notes = False    # Don't use admonitions for notes
+napoleon_use_admonition_for_references = False # Don't use admonitions for references
+napoleon_use_ivar = False                # Don't use :ivar: role
+napoleon_use_param = True                # Use :param: role for parameters
+napoleon_use_rtype = True                # Use :rtype: role for return types
+
+# -- Options for type hints ----------------------------------------------
+# Configure display of type hints in documentation
+
+typehints_fully_qualified = False        # Use short names for types
+typehints_document_rtype = True          # Document return types
+typehints_use_signature = True           # Show type hints in signatures
+typehints_use_signature_return = True    # Show return type hints in signatures
+
+# -- Options for numpydoc -----------------------------------------------
+# Legacy NumPy docstring extension (kept for compatibility)
+
+numpydoc_show_class_members = False      # Don't show class members in class docs
+numpydoc_show_inherited_class_members = False # Don't show inherited members
+numpydoc_class_members_toctree = False   # Don't create toctree for class members
 
 # -- Options for HTML output -------------------------------------------------
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#options-for-html-output
 
+# Theme and static files configuration
 html_theme = "pydata_sphinx_theme"
 html_static_path = ["_static"]
 
 # Set the favicon for the browser tab
 html_favicon = "_static/city2graph_logo.png"
 
-# Custom CSS
+# Custom CSS files
 html_css_files = [
     "custom.css",
 ]
 
-# Theme configuration
+# Custom JavaScript files (if needed)
+html_js_files = []
+
+# Theme-specific configuration
 html_theme_options = {
-    "github_url": "https://github.com/c2g-dev/city2graph",  # Replace with actual GitHub URL
+    # GitHub integration
+    "github_url": "https://github.com/c2g-dev/city2graph",
     "use_edit_page_button": False,
-    "show_toc_level": 2,
+    
+    # Navigation and layout
+    "show_toc_level": 2,                 # Show 2 levels in table of contents
+    "navigation_with_keys": True,        # Enable keyboard navigation
+    "show_nav_level": 1,                 # Show 1 level in navigation
+    "navbar_start": ["navbar-logo"],     # Left side of navbar
+    "navbar_center": ["navbar-nav"],     # Center of navbar  
+    "navbar_end": ["navbar-icon-links"], # Right side of navbar
+    
+    # Logo configuration
     "logo": {
         "image_light": "_static/city2graph_logo_wide.png",
         "image_dark": "_static/city2graph_logo_wide_dark.png",
+        "alt_text": "city2graph - Urban Data to Graph Conversion",
     },
+    
+    # Footer configuration
+    "footer_start": ["copyright"],
+    "footer_end": ["sphinx-version", "theme-version"],
+    
+    # Search configuration
+    "search_bar_text": "Search city2graph documentation...",
+    
+    # Social media and SEO
     "open_graph_image": "_static/city2graph_logo_wide.png",
     "open_graph_description": "A Python package for transforming urban data into graphs for spatial analysis and Graph Neural Networks.",
+    
+    # Page layout options
+    "collapse_navigation": False,        # Keep navigation expanded
+    "sticky_navigation": True,           # Make navigation sticky
+    "includehidden": True,               # Include hidden toctree entries
+    "titles_only": False,                # Show full titles, not just page names
+}
+
+# Additional HTML context variables
+html_context = {
+    "github_user": "c2g-dev",
+    "github_repo": "city2graph", 
+    "github_version": "main",
+    "doc_path": "docs/source",
+}
+
+# HTML output options
+html_copy_source = True                  # Copy source files to output
+html_show_sourcelink = True             # Show source links
+html_show_sphinx = True                 # Show "Created with Sphinx" footer
+html_show_copyright = True              # Show copyright notice
+html_last_updated_fmt = "%b %d, %Y"     # Format for last updated date
+
+# Custom sidebar templates
+html_sidebars = {
+    "**": ["search-field", "sidebar-nav-bs"],
 }
 
 # -- Intersphinx configuration -----------------------------------------------
+# Configure cross-references to external documentation
+
 intersphinx_mapping = {
+    # Python standard library
     "python": ("https://docs.python.org/3", None),
+    
+    # Scientific computing stack
     "numpy": ("https://numpy.org/doc/stable/", None),
     "pandas": ("https://pandas.pydata.org/pandas-docs/stable/", None),
+    "scipy": ("https://docs.scipy.org/doc/scipy/", None),
+    "matplotlib": ("https://matplotlib.org/stable/", None),
+    
+    # Geospatial libraries
     "geopandas": ("https://geopandas.org/en/stable/", None),
+    "shapely": ("https://shapely.readthedocs.io/en/stable/", None),
+    "fiona": ("https://fiona.readthedocs.io/en/latest/", None),
+    "pyproj": ("https://pyproj4.github.io/pyproj/stable/", None),
+    
+    # Graph libraries
     "networkx": ("https://networkx.org/documentation/stable/", None),
+    
+    # Deep learning and PyTorch ecosystem
     "torch": ("https://pytorch.org/docs/stable/", None),
     "torch_geometric": ("https://pytorch-geometric.readthedocs.io/en/latest/", None),
+    
+    # Urban analysis libraries
     "momepy": ("http://docs.momepy.org/en/stable/", None),
+    "osmnx": ("https://osmnx.readthedocs.io/en/stable/", None),
 }
+
+# Intersphinx timeout in seconds
+intersphinx_timeout = 10
+
+# -- Additional Sphinx configuration -------------------------------------
+
+# Source file extensions
+source_suffix = {
+    ".rst": None,
+    ".md": "myst_parser",
+}
+
+# Master document (main entry point)
+master_doc = "index"
+
+# Suppress certain warnings
+suppress_warnings = [
+    "image.nonlocal_uri",      # Suppress warnings about external images
+    "toc.secnum",              # Suppress section numbering warnings
+]
+
+# Add any paths that contain custom static files (such as style sheets)
+html_static_path = ["_static"]
+
+# Add any paths that contain templates
+templates_path = ["_templates"]

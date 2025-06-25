@@ -1,23 +1,84 @@
 """
 Module for creating heterogeneous graph representations of urban environments.
 
-This module provides comprehensive functionality for converting spatial data (GeoDataFrames)
-into PyTorch Geometric graph objects, supporting both homogeneous and heterogeneous graphs.
-It handles the complex mapping between geographical coordinates, node/edge features,
-and the tensor representations required by graph neural networks.
+This module provides comprehensive functionality for converting spatial data 
+(GeoDataFrames) into PyTorch Geometric graph objects, supporting 
+both homogeneous and heterogeneous graphs. It handles the complex mapping between 
+geographical coordinates, node/edge features, and the tensor representations 
+required by graph neural networks.
 
-Key Features:
+The module serves as a bridge between geospatial data analysis tools and deep 
+learning frameworks, enabling seamless integration of spatial urban data with 
+Graph Neural Networks (GNNs) for tasks such as urban modeling, traffic prediction, 
+and spatial analysis.
+
+Key Features
+------------
 - Automatic detection of graph structure (homogeneous vs heterogeneous)
 - Intelligent column detection for source/target relationships
 - Robust type handling and ID mapping
-- Preservation of spatial geometry and coordinate reference systems
+- Preservation of spatial geometry and coordinate reference systems (CRS)
 - Bidirectional conversion between GeoDataFrames and PyTorch Geometric objects
 - NetworkX integration for graph analysis workflows
+- Support for both Data and HeteroData objects
+
+Main Functions
+--------------
+gdf_to_pyg : Convert GeoDataFrames to PyTorch Geometric objects
+pyg_to_gdf : Convert PyTorch Geometric objects back to GeoDataFrames  
+nx_to_pyg : Convert NetworkX graphs to PyTorch Geometric objects
+pyg_to_nx : Convert PyTorch Geometric objects to NetworkX graphs
+is_torch_available : Check if PyTorch Geometric dependencies are available
+
+See Also
+--------
+city2graph.utils : Utility functions for data validation and conversion
+city2graph.morphology : Urban morphology analysis functions
+city2graph.proximity : Spatial proximity and accessibility functions
+
+Notes
+-----
+This module requires PyTorch and PyTorch Geometric for full functionality. 
+If these packages are not available, the conversion functions will raise 
+ImportError with helpful installation instructions.
+
+Examples
+--------
+Basic usage with homogeneous graphs:
+
+>>> import geopandas as gpd
+>>> from city2graph.graph import gdf_to_pyg, pyg_to_gdf
+>>> 
+>>> # Load spatial data
+>>> nodes_gdf = gpd.read_file("urban_nodes.geojson")
+>>> edges_gdf = gpd.read_file("urban_edges.geojson")
+>>> 
+>>> # Convert to PyTorch Geometric
+>>> data = gdf_to_pyg(nodes_gdf, edges_gdf)
+>>> 
+>>> # Convert back to GeoDataFrames
+>>> nodes_restored, edges_restored = pyg_to_gdf(data)
+
+Advanced usage with heterogeneous graphs:
+
+>>> # Define multiple node types
+>>> buildings = gpd.read_file("buildings.geojson")
+>>> roads = gpd.read_file("roads.geojson")
+>>> 
+>>> # Define relationships
+>>> connections = gpd.read_file("building_road_connections.geojson")
+>>> 
+>>> # Create heterogeneous graph
+>>> nodes_dict = {'building': buildings, 'road': roads}
+>>> edges_dict = {('building', 'connects_to', 'road'): connections}
+>>> 
+>>> hetero_data = gdf_to_pyg(nodes_dict, edges_dict)
 """
 
 from __future__ import annotations
 
 import logging
+from typing import TYPE_CHECKING
 from typing import Any
 
 import geopandas as gpd
@@ -41,12 +102,19 @@ try:
 except ImportError:  # pragma: no cover - makes life easier for docs build.
     TORCH_AVAILABLE = False
 
-    class HeteroData:
-        """Fallback stub when torch is unavailable."""
+    # Create stubs for documentation and fallback functionality
+    if TYPE_CHECKING:
+        import torch
+        from torch_geometric.data import Data
+        from torch_geometric.data import HeteroData
+    else:
+        torch = None
 
+        class HeteroData:
+            """Fallback stub when torch is unavailable."""
 
-    class Data:
-        """Fallback stub when torch is unavailable."""
+        class Data:
+            """Fallback stub when torch is unavailable."""
 
 
 logger = logging.getLogger(__name__)
@@ -88,12 +156,12 @@ def gdf_to_pyg(
 
     Parameters
     ----------
-    nodes : dict[str, gpd.GeoDataFrame] or gpd.GeoDataFrame
+    nodes : dict[str, geopandas.GeoDataFrame] or geopandas.GeoDataFrame
         Node data. For homogeneous graphs, provide a single GeoDataFrame.
         For heterogeneous graphs, provide a dictionary mapping node type names
         to their respective GeoDataFrames. The index of these GeoDataFrames
         will be used as node identifiers.
-    edges : dict[tuple[str, str, str], gpd.GeoDataFrame] or gpd.GeoDataFrame, optional
+    edges : dict[tuple[str, str, str], geopandas.GeoDataFrame] or geopandas.GeoDataFrame, optional
         Edge data. For homogeneous graphs, provide a single GeoDataFrame.
         For heterogeneous graphs, provide a dictionary mapping edge type tuples
         (source_type, relation_type, target_type) to their GeoDataFrames.
@@ -121,6 +189,7 @@ def gdf_to_pyg(
     Data or HeteroData
         PyTorch Geometric Data object for homogeneous graphs or HeteroData
         object for heterogeneous graphs. The returned object contains:
+
         - Node features (x), positions (pos), and labels (y) if available
         - Edge connectivity (edge_index) and features (edge_attr) if available
         - Metadata for reconstruction including ID mappings and column names
@@ -128,24 +197,43 @@ def gdf_to_pyg(
     Raises
     ------
     ImportError
-        If PyTorch Geometric is not installed
+        If PyTorch Geometric is not installed.
     ValueError
-        If input GeoDataFrames are invalid or incompatible
+        If input GeoDataFrames are invalid or incompatible.
+
+    See Also
+    --------
+    pyg_to_gdf : Convert PyTorch Geometric data back to GeoDataFrames
+    nx_to_pyg : Convert NetworkX graph to PyTorch Geometric object
+    city2graph.utils.validate_gdf : Validate GeoDataFrame structure
 
     Examples
     --------
-    >>> # Homogeneous graph from single GeoDataFrames
+    Create a homogeneous graph from single GeoDataFrames:
+
+    >>> import geopandas as gpd
+    >>> from city2graph.graph import gdf_to_pyg
+    >>> 
+    >>> # Load and prepare node data
     >>> nodes_gdf = gpd.read_file("nodes.geojson").set_index("node_id")
     >>> edges_gdf = gpd.read_file("edges.geojson").set_index(["source_id", "target_id"])
+    >>> 
+    >>> # Convert to PyTorch Geometric
     >>> data = gdf_to_pyg(nodes_gdf, edges_gdf,
     ...                   node_feature_cols=['population', 'area'])
 
-    >>> # Heterogeneous graph from dictionaries
+    Create a heterogeneous graph from dictionaries:
+
+    >>> # Prepare heterogeneous data
     >>> buildings_gdf = buildings_gdf.set_index("building_id")
     >>> roads_gdf = roads_gdf.set_index("road_id")
     >>> connections_gdf = connections_gdf.set_index(["building_id", "road_id"])
+    >>> 
+    >>> # Define node and edge types
     >>> nodes_dict = {'building': buildings_gdf, 'road': roads_gdf}
     >>> edges_dict = {('building', 'connects', 'road'): connections_gdf}
+    >>> 
+    >>> # Convert to heterogeneous graph
     >>> data = gdf_to_pyg(nodes_dict, edges_dict)
 
     Notes
@@ -154,6 +242,7 @@ def gdf_to_pyg(
     - Maintains index structure for bidirectional conversion
     - Handles both Point and non-Point geometries (using centroids)
     - Creates empty tensors for missing features/edges
+    - For heterogeneous graphs, ensures consistent node/edge type mapping
     """
     # ------------------------------------------------------------------
     # 0. Input validation & dispatch
@@ -214,8 +303,8 @@ def pyg_to_gdf(
 
     Parameters
     ----------
-    data : Data or HeteroData
-        PyTorch Geometric data object to convert back to GeoDataFrames
+    data : torch_geometric.data.Data or torch_geometric.data.HeteroData
+        PyTorch Geometric data object to convert back to GeoDataFrames.
     node_types : str or list[str], optional
         For heterogeneous graphs, specify which node types to reconstruct.
         If None, reconstructs all available node types.
@@ -226,14 +315,19 @@ def pyg_to_gdf(
 
     Returns
     -------
-    For HeteroData:
-        tuple[dict[str, gpd.GeoDataFrame], dict[tuple[str, str, str], gpd.GeoDataFrame]]
-            First element: dictionary mapping node type names to node GeoDataFrames
-            Second element: dictionary mapping edge type tuples to edge GeoDataFrames
-    For Data:
-        tuple[gpd.GeoDataFrame, gpd.GeoDataFrame | None]
-            First element: nodes GeoDataFrame
-            Second element: edges GeoDataFrame (None if no edges)
+    For HeteroData
+        tuple[dict[str, GeoDataFrame], dict[tuple[str, str, str], GeoDataFrame]]
+            First element: dictionary mapping node type names to node GeoDataFrames.
+            Second element: dictionary mapping edge type tuples to edge GeoDataFrames.
+    For Data
+        tuple[GeoDataFrame, GeoDataFrame | None]
+            First element: nodes GeoDataFrame.
+            Second element: edges GeoDataFrame (None if no edges).
+
+    See Also
+    --------
+    gdf_to_pyg : Convert GeoDataFrames to PyTorch Geometric object
+    pyg_to_nx : Convert PyTorch Geometric data to NetworkX graph
 
     Notes
     -----
@@ -242,6 +336,21 @@ def pyg_to_gdf(
     - Maintains coordinate reference system (CRS) information
     - Converts feature tensors back to named DataFrame columns
     - Handles both homogeneous and heterogeneous graph structures
+
+    Examples
+    --------
+    Convert homogeneous PyTorch Geometric data back to GeoDataFrames:
+
+    >>> from city2graph.graph import pyg_to_gdf
+    >>> 
+    >>> # Convert back to GeoDataFrames
+    >>> nodes_gdf, edges_gdf = pyg_to_gdf(data)
+
+    Convert heterogeneous data with specific node types:
+
+    >>> # Convert only specific node types
+    >>> node_gdfs, edge_gdfs = pyg_to_gdf(hetero_data,
+    ...                                   node_types=['building', 'road'])
     """
     metadata = _validate_pyg(data)
 
@@ -281,19 +390,24 @@ def pyg_to_nx(data: Data | HeteroData) -> nx.Graph:
 
     Parameters
     ----------
-    data : Data or HeteroData
-        PyTorch Geometric data object to convert
+    data : torch_geometric.data.Data or torch_geometric.data.HeteroData
+        PyTorch Geometric data object to convert.
 
     Returns
     -------
-    nx.Graph
+    networkx.Graph
         NetworkX graph with node and edge attributes from the PyG object.
         For heterogeneous graphs, node and edge types are stored as attributes.
 
     Raises
     ------
     ImportError
-        If PyTorch Geometric is not installed
+        If PyTorch Geometric is not installed.
+
+    See Also
+    --------
+    nx_to_pyg : Convert NetworkX graph to PyTorch Geometric object
+    pyg_to_gdf : Convert PyTorch Geometric data to GeoDataFrames
 
     Notes
     -----
@@ -301,6 +415,21 @@ def pyg_to_nx(data: Data | HeteroData) -> nx.Graph:
     - Edge features are stored as edge attributes
     - For heterogeneous graphs, type information is preserved
     - Geometry information is converted from tensor positions
+    - Maintains compatibility with NetworkX analysis algorithms
+
+    Examples
+    --------
+    Convert PyTorch Geometric data to NetworkX:
+
+    >>> from city2graph.graph import pyg_to_nx
+    >>> import networkx as nx
+    >>>
+    >>> # Convert to NetworkX graph
+    >>> nx_graph = pyg_to_nx(data)
+    >>>
+    >>> # Use NetworkX algorithms
+    >>> centrality = nx.betweenness_centrality(nx_graph)
+    >>> communities = nx.community.greedy_modularity_communities(nx_graph)
     """
     if not TORCH_AVAILABLE:
         raise ImportError(TORCH_ERROR_MSG)
@@ -322,42 +451,83 @@ def nx_to_pyg(
 ) -> Data:
     """Convert NetworkX graph to PyTorch Geometric Data object.
 
-    Converts a NetworkX graph to a PyTorch Geometric Data object by first
-    converting to GeoDataFrames then using the main conversion pipeline.
+    Converts a NetworkX Graph to a PyTorch Geometric Data object by first 
+    converting to GeoDataFrames then using the main conversion pipeline. This 
+    provides a bridge between NetworkX's rich graph analysis tools and PyTorch 
+    Geometric's deep learning capabilities.
 
     Parameters
     ----------
-    graph : nx.Graph
-        NetworkX graph to convert
+    graph : networkx.Graph
+        NetworkX graph to convert.
     node_feature_cols : list[str], optional
-        List of node attribute names to use as features
+        List of node attribute names to use as features.
     node_label_cols : list[str], optional
-        List of node attribute names to use as labels
+        List of node attribute names to use as labels.
     edge_feature_cols : list[str], optional
-        List of edge attribute names to use as features
+        List of edge attribute names to use as features.
     device : torch.device or str, optional
-        Target device for tensor placement
+        Target device for tensor placement ('cpu', 'cuda', or torch.device).
+        If None, automatically selects CUDA if available, otherwise CPU.
     dtype : torch.dtype, optional
         Data type for float tensors (e.g., torch.float32, torch.float16).
         If None, uses torch.float32 (default PyTorch float type).
 
     Returns
     -------
-    Data
-        PyTorch Geometric Data object
+    torch_geometric.data.Data
+        PyTorch Geometric Data object.
 
     Raises
     ------
     ImportError
-        If PyTorch Geometric is not installed
+        If PyTorch Geometric is not installed.
     ValueError
-        If the NetworkX graph is invalid or empty
+        If the NetworkX graph is invalid or empty.
+
+    See Also
+    --------
+    pyg_to_nx : Convert PyTorch Geometric data to NetworkX graph
+    gdf_to_pyg : Convert GeoDataFrames to PyTorch Geometric object
+    city2graph.utils.nx_to_gdf : Convert NetworkX graph to GeoDataFrames
 
     Notes
     -----
     - Uses intermediate GeoDataFrame conversion for consistency
     - Preserves all graph attributes and metadata
     - Handles spatial coordinates if present in node attributes
+    - Maintains compatibility with existing city2graph workflows
+    - Automatically creates geometry from 'x', 'y' coordinates if available
+
+    Examples
+    --------
+    Convert a NetworkX graph with spatial data:
+
+    >>> import networkx as nx
+    >>> from city2graph.graph import nx_to_pyg
+    >>>
+    >>> # Create NetworkX graph with spatial attributes
+    >>> G = nx.Graph()
+    >>> G.add_node(0, x=0.0, y=0.0, population=1000)
+    >>> G.add_node(1, x=1.0, y=1.0, population=1500)
+    >>> G.add_edge(0, 1, weight=0.5, road_type='primary')
+    >>>
+    >>> # Convert to PyTorch Geometric
+    >>> data = nx_to_pyg(G,
+    ...                  node_feature_cols=['population'],
+    ...                  edge_feature_cols=['weight'])
+
+    Convert from graph analysis results:
+
+    >>> # Use NetworkX for analysis, then convert for ML
+    >>> communities = nx.community.greedy_modularity_communities(G)
+    >>> # Add community labels to nodes
+    >>> for i, community in enumerate(communities):
+    ...     for node in community:
+    ...         G.nodes[node]['community'] = i
+    >>>
+    >>> # Convert with community labels
+    >>> data = nx_to_pyg(G, node_label_cols=['community'])
     """
     if not TORCH_AVAILABLE:
         raise ImportError(TORCH_ERROR_MSG)
@@ -387,10 +557,37 @@ def nx_to_pyg(
 def is_torch_available() -> bool:
     """Check if PyTorch Geometric is available.
 
+    This utility function checks whether the required PyTorch and PyTorch Geometric
+    packages are installed and can be imported. It's useful for conditional
+    functionality and providing helpful error messages.
+
     Returns
     -------
     bool
-        True if PyTorch Geometric can be imported, False otherwise
+        True if PyTorch Geometric can be imported, False otherwise.
+
+    See Also
+    --------
+    gdf_to_pyg : Convert GeoDataFrames to PyTorch Geometric (requires torch)
+    pyg_to_gdf : Convert PyTorch Geometric to GeoDataFrames (requires torch)
+
+    Examples
+    --------
+    Check availability before using torch-dependent functions:
+
+    >>> from city2graph.graph import is_torch_available
+    >>>
+    >>> if is_torch_available():
+    ...     from city2graph.graph import gdf_to_pyg
+    ...     data = gdf_to_pyg(nodes_gdf, edges_gdf)
+    ... else:
+    ...     print("PyTorch Geometric not available. Install with: pip install city2graph[torch]")
+
+    Notes
+    -----
+    - Returns False if either PyTorch or PyTorch Geometric is missing
+    - Used internally by torch-dependent functions to provide helpful error messages
+    - Installation can be done with: ``pip install city2graph[torch]``
     """
     return TORCH_AVAILABLE
 
@@ -463,7 +660,7 @@ def _create_node_id_mapping(
 
     Parameters
     ----------
-    node_gdf : gpd.GeoDataFrame
+    node_gdf : geopandas.GeoDataFrame
         GeoDataFrame containing node data. The index is used for node IDs.
 
     Returns
@@ -495,7 +692,7 @@ def _create_node_features(
 
     Parameters
     ----------
-    node_gdf : gpd.GeoDataFrame
+    node_gdf : geopandas.GeoDataFrame
         GeoDataFrame containing node data
     feature_cols : list[str], optional
         List of column names to use as features (None creates empty tensor)
@@ -536,7 +733,7 @@ def _create_node_positions(
 
     Parameters
     ----------
-    node_gdf : gpd.GeoDataFrame
+    node_gdf : geopandas.GeoDataFrame
         GeoDataFrame with geometry column containing spatial data
     device : str or torch.device, optional
         Target device for tensor creation
@@ -585,7 +782,7 @@ def _create_edge_features(
 
     Parameters
     ----------
-    edge_gdf : gpd.GeoDataFrame
+    edge_gdf : geopandas.GeoDataFrame
         GeoDataFrame containing edge data
     feature_cols : list[str], optional
         List of column names to use as features
@@ -673,7 +870,8 @@ def _create_linestring_geometries(
     Creates geometric representations of edges by connecting source and target
     node coordinates. Useful for visualization and spatial analysis of networks.
 
-    Args:
+    Parameters
+    ----------
         edge_index_array: Array of shape (2, num_edges) with source/target indices
         src_pos: Array of source node coordinates
         dst_pos: Array of target node coordinates
@@ -748,7 +946,8 @@ def _build_homogeneous_graph(
     6. Package everything into PyG Data object
     7. Store metadata for bidirectional conversion
 
-    Args:
+    Parameters
+    ----------
         nodes_gdf: GeoDataFrame containing node data (index used for IDs)
         edges_gdf: GeoDataFrame containing edge data (MultiIndex used for relationships)
         node_feature_cols: Columns to use as node features
@@ -1014,9 +1213,11 @@ def _validate_pyg(data: Data | HeteroData) -> GraphMetadata:
     is_hetero = isinstance(data, HeteroData)
 
     if is_hetero and not metadata.is_hetero:
-        raise ValueError("Data is HeteroData but metadata.is_hetero is False.")
+        msg = "Data is HeteroData but metadata.is_hetero is False."
+        raise ValueError(msg)
     if not is_hetero and metadata.is_hetero:
-        raise ValueError("Data is Data but metadata.is_hetero is True.")
+        msg = "Data is Data but metadata.is_hetero is True."
+        raise ValueError(msg)
 
     return metadata
 
