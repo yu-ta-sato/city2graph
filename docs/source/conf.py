@@ -78,45 +78,15 @@ language = "en"
 autodoc_member_order = "bysource"        # Order members as they appear in source
 autodoc_typehints = "description"        # Include type hints in parameter descriptions
 autoclass_content = "both"               # Include both class and __init__ docstrings
-autodoc_inherit_docstrings = True        # Inherit docstrings from parent classes
-add_function_parentheses = False         # Don't add parentheses to function names
-add_module_names = False                 # Don't prepend module names to function names
-autodoc_default_options = {
-    "members": True,                     # Document all members
-    "member-order": "bysource",          # Order members by source order
-    "special-members": "__init__",       # Include __init__ methods
-    "undoc-members": True,               # Include members without docstrings
-    "exclude-members": "__weakref__",    # Exclude certain members
-}
 
 # -- Options for autosummary ---------------------------------------------
 # Configure automatic summary table generation
 
-autosummary_generate = True              # Generate stub files for autosummary
-autosummary_imported_members = True      # Include imported members in summaries
-
 # -- Options for napoleon (NumPy/Google docstring parsing) --------------
 # Configure parsing of NumPy and Google style docstrings
 
-napoleon_google_docstring = True         # Parse Google style docstrings
-napoleon_numpy_docstring = True          # Parse NumPy style docstrings
-napoleon_include_init_with_doc = False   # Don't duplicate __init__ docs
-napoleon_include_private_with_doc = False # Don't include private members
-napoleon_include_special_with_doc = True  # Include special methods
-napoleon_use_admonition_for_examples = False # Don't use admonitions for examples
-napoleon_use_admonition_for_notes = False    # Don't use admonitions for notes
-napoleon_use_admonition_for_references = False # Don't use admonitions for references
-napoleon_use_ivar = False                # Don't use :ivar: role
-napoleon_use_param = True                # Use :param: role for parameters
-napoleon_use_rtype = True                # Use :rtype: role for return types
-
 # -- Options for type hints ----------------------------------------------
 # Configure display of type hints in documentation
-
-typehints_fully_qualified = False        # Use short names for types
-typehints_document_rtype = True          # Document return types
-typehints_use_signature = True           # Show type hints in signatures
-typehints_use_signature_return = True    # Show return type hints in signatures
 
 # -- Options for numpydoc -----------------------------------------------
 # Legacy NumPy docstring extension (kept for compatibility)
