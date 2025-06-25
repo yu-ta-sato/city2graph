@@ -186,7 +186,7 @@ def gdf_to_pyg(
 
     Returns
     -------
-    Data or HeteroData
+    torch_geometric.data.Data or torch_geometric.data.HeteroData
         PyTorch Geometric Data object for homogeneous graphs or HeteroData
         object for heterogeneous graphs. The returned object contains:
 
@@ -316,11 +316,11 @@ def pyg_to_gdf(
     Returns
     -------
     For HeteroData
-        tuple[dict[str, GeoDataFrame], dict[tuple[str, str, str], GeoDataFrame]]
+        tuple[dict[str, GeoDataFrame], dict[tuple[str, str, str], geopandas.GeoDataFrame]]
             First element: dictionary mapping node type names to node GeoDataFrames.
             Second element: dictionary mapping edge type tuples to edge GeoDataFrames.
     For Data
-        tuple[GeoDataFrame, GeoDataFrame | None]
+        tuple[geopandas.GeoDataFrame, geopandas.GeoDataFrame | None]
             First element: nodes GeoDataFrame.
             Second element: edges GeoDataFrame (None if no edges).
 
@@ -342,7 +342,7 @@ def pyg_to_gdf(
     Convert homogeneous PyTorch Geometric data back to GeoDataFrames:
 
     >>> from city2graph.graph import pyg_to_gdf
-    >>> 
+    >>>
     >>> # Convert back to GeoDataFrames
     >>> nodes_gdf, edges_gdf = pyg_to_gdf(data)
 

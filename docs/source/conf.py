@@ -79,6 +79,8 @@ autodoc_member_order = "bysource"        # Order members as they appear in sourc
 autodoc_typehints = "description"        # Include type hints in parameter descriptions
 autoclass_content = "both"               # Include both class and __init__ docstrings
 autodoc_inherit_docstrings = True        # Inherit docstrings from parent classes
+add_function_parentheses = False         # Don't add parentheses to function names
+add_module_names = False                 # Don't prepend module names to function names
 autodoc_default_options = {
     "members": True,                     # Document all members
     "member-order": "bysource",          # Order members by source order
