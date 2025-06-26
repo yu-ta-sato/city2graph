@@ -5,21 +5,7 @@ on:
 
 jobs:
   build:
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
-        architecture: [x64, arm64]
-        python-version: ["3.10", "3.11", "3.12", "3.13"]
-        cuda: [none, "11.8.0", "12.6.0", "12.8.0"]
-        exclude:
-          - os: macos-latest
-            cuda: "11.8.0"
-          - os: macos-latest
-            cuda: "12.6.0"
-          - os: macos-latest
-            cuda: "12.8.0"
+    runs-on: ubuntu-latest
 
     steps:
       - uses: actions/checkout@v4
@@ -29,18 +15,10 @@ jobs:
           cache-dependency-glob: "uv.lock"
 
       - name: Set up Python
-        run: uv python install ${{ matrix.python-version }}
-
-      - name: Install CUDA Toolkit
-        if: matrix.cuda != 'none'
-        uses: Jimver/cuda-toolkit@v0.2.11
-        with:
-          cuda: ${{ matrix.cuda }}
+        run: uv python install 3.12
 
       - name: Build wheel
         run: uv build --wheel --out-dir dist
-        env:
-          CUDA_VERSION: ${{ matrix.cuda }}
 
       - name: Upload wheels as artifact
         uses: actions/upload-artifact@v4
