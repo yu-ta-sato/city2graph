@@ -55,6 +55,7 @@ cu128 = [
   "torchvision>=0.22.0",
   "torch_geometric>=2.6.1",
 ]
+
 [tool.uv]
 default-groups = []
 # Prevent selecting more than one variant at once
@@ -63,7 +64,7 @@ conflicts = [
     { extra = "cu118" },
     { extra = "cu126" },
     { extra = "cu128" } ]
-    ]
+]
 
 [tool.uv.sources]
 # torch index by extra
@@ -92,6 +93,12 @@ explicit = true
 [[tool.uv.index]]
 name = "pytorch-cu128"
 url = "https://download.pytorch.org/whl/cu128"
+explicit = true
+
+[[tool.uv.index]]
+name = "testpypi"
+url = "https://test.pypi.org/simple/"
+publish-url = "https://test.pypi.org/legacy/"
 explicit = true
 
 [dependency-groups]
