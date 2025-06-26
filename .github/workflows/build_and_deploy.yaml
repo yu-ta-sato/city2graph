@@ -12,14 +12,14 @@ jobs:
         os: [ubuntu-latest, windows-latest, macos-latest]
         architecture: [x64, arm64]
         python-version: ["3.10", "3.11", "3.12", "3.13"]
-        cuda: [none, "11.8", "12.6", "12.8"]
+        cuda: [none, "11.8.0", "12.6.0", "12.8.0"]
         exclude:
           - os: macos-latest
-            cuda: "11.8"
+            cuda: "11.8.0"
           - os: macos-latest
-            cuda: "12.6"
+            cuda: "12.6.0"
           - os: macos-latest
-            cuda: "12.8"
+            cuda: "12.8.0"
 
     steps:
       - uses: actions/checkout@v4
