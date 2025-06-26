@@ -35,84 +35,51 @@ This installs the core functionality without PyTorch and PyTorch Geometric.
 
 ### With PyTorch (CPU)
 
-If you need the Graph Neural Networks functionality, install with the torch option:
+If you need the Graph Neural Networks functionality, install with the `cpu` option:
 
 ```bash
 # Install with PyTorch and PyTorch Geometric (CPU version)
-pip install "city2graph[torch]"
+pip install "city2graph[cpu]"
 ```
 
 This will install PyTorch and PyTorch Geometric with CPU support, suitable for development and small-scale processing.
 
 ### With PyTorch + CUDA (GPU)
 
-For GPU acceleration with a specific CUDA version, we recommend installing PyTorch and PyTorch Geometric separately before installing city2graph:
+For GPU acceleration, you can install city2graph with a specific CUDA version extra. For example, for CUDA 12.8:
 
 ```bash
-# Step 1: Install PyTorch with your desired CUDA version (e.g. PyTorch 2.4.0 + CUDA 12.1)
-pip install torch==2.4.0  --index-url https://download.pytorch.org/whl/cu121
-
-# Step 2: Install PyTorch Geometric and its CUDA dependencies
-pip install torch_geometric
-pip install pyg_lib torch_scatter torch_sparse torch_cluster torch_spline_conv -f https://data.pyg.org/whl/torch-2.4.0+cu121.html
-
-# Step 3: Now install city2graph (it will detect the pre-installed PyTorch)
-pip install city2graph
+# e.g., for CUDA 12.8
+pip install "city2graph[cu128]"
 ```
 
-**Important:** Due to the low demand, `conda` distributions are deprecated for PyTorch and PyTorch Geometric. For the most reliable setup, we recommend using pip or uv as described above.
+Supported CUDA versions are `cu118`, `cu124`, `cu126`, and `cu128`.
 
-### Using uv
+**Important:** The PyTorch Geometric extensions (`pyg_lib`, `torch_scatter`, etc.) are not included and must be installed separately. Please refer to the `PyTorch Geometric documentation <https://pytorch-geometric.readthedocs.io/en/latest/notes/installation.html>`_ for instructions. Due to the low demand, `conda` distributions are deprecated for PyTorch and PyTorch Geometric. For the most reliable setup, we recommend using pip or uv as described above.
 
-#### Basic Installation (without PyTorch)
+#### For Development
+
+If you want to contribute to city2graph, you can set up a development environment using `uv`.
 
 ```bash
 # Install uv if you haven't already done it
 curl -LsSf https://astral.sh/uv/install.sh | sh
 
 # Clone the repository
-git clone https://github.com/yu-ta-sato/city2graph.git
+git clone https://github.com/c2g-dev/city2graph.git
 cd city2graph
 
-# Install core dependencies (without PyTorch)
-uv sync
+# Install development dependencies with a PyTorch variant (e.g., cpu or cu128)
+uv sync --extra cpu --group dev
 ```
 
-This installs the core functionality without PyTorch and PyTorch Geometric, suitable for basic graph operations with networkx, shapely, geopandas, etc.
-
-#### With PyTorch
+You can then run commands within the managed environment:
 
 ```bash
-uv sync --extra torch
-```
-
-This will install PyTorch and PyTorch Geometric with CPU support, suitable for development and small-scale processing.
-
-#### With Specific CUDA Version (for GPU acceleration)
-
-```bash
-# Step 1: Install the base dependencies with torch extra
-uv sync --extra torch
-
-# Step 2: Install PyG extensions with CUDA support via pip
-uv run pip install pyg_lib torch_scatter torch_sparse torch_cluster torch_spline_conv -f https://data.pyg.org/whl/torch-2.4.0+cu121.html
-```
-
-**Note:** Due to uv's current limitations with custom index URLs for PyTorch packages, PyG extensions must be installed via pip within the uv environment.
-
-#### With Development or Documentation Dependencies
-
-```bash
-# Install with development dependencies (includes ipython, jupyter, notebook, and code formatting tools)
-uv sync --group dev
-
-# Install Jupyter kernel for the project (recommended for notebook development)
-uv run ipython kernel install --user --env VIRTUAL_ENV $(pwd)/.venv --name=city2gragh-uv
-
-# Start IPython for interactive development
+# Add IPython kernel for interactive development
 uv run ipython kernel install --name "your-env-name" --user
 
-# Start Jupyter Notebook (the city2graph kernel will be available)
+# Or start Jupyter Notebook
 uv run jupyter notebook
 ```
 
