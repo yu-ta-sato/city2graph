@@ -170,7 +170,7 @@ html_last_updated_fmt = "%b %d, %Y"     # Format for last updated date
 
 # Custom sidebar templates
 html_sidebars = {
-    "**": ["search-field", "sidebar-nav-bs"],
+    "**": ["sidebar-nav-bs"],
 }
 
 # -- Intersphinx configuration -----------------------------------------------
