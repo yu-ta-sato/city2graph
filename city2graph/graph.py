@@ -599,7 +599,7 @@ def is_torch_available() -> bool:
     return TORCH_AVAILABLE
 
 
-def _get_device(device: str | torch.device | None = None) -> torch.device:
+def _get_device(device: str | torch.device | None) -> torch.device:
     """Normalize the device argument and return a torch.device instance.
 
     Parameters
@@ -1567,31 +1567,43 @@ def _add_hetero_edges_to_graph(graph: nx.Graph, data: HeteroData, node_offset: d
     metadata = data.graph_metadata
     for edge_type in metadata.edge_types:
         src_type, rel_type, dst_type = edge_type
+        edge_store = data[edge_type]
 
-        if hasattr(data[edge_type], "edge_index") and data[edge_type].edge_index is not None:
-            edge_index = data[edge_type].edge_index.detach().cpu().numpy()
+        if not hasattr(edge_store, "edge_index") or edge_store.edge_index is None:
+            continue
 
-            # Get edge feature column names for this edge type
-            edge_feature_cols = metadata.edge_feature_cols.get(rel_type)
+        edge_index = edge_store.edge_index.detach().cpu().numpy()
+        num_edges = edge_index.shape[1]
+        if num_edges == 0:
+            continue
 
-            # Get original edge index values
-            original_edge_indices = metadata.edge_index_values.get(edge_type)
+        # Prepare attributes using pandas for efficiency
+        edge_feature_cols = metadata.edge_feature_cols.get(rel_type)
+        if hasattr(edge_store, "edge_attr") and edge_store.edge_attr is not None:
+            edge_attrs_np = edge_store.edge_attr.detach().cpu().numpy()
+            attrs_df = pd.DataFrame(
+                edge_attrs_np,
+                columns=edge_feature_cols if edge_feature_cols else None,
+            )
+            if not edge_feature_cols:
+                attrs_df = attrs_df.add_prefix("edge_feat_")
+        else:
+            attrs_df = pd.DataFrame(index=range(num_edges))
 
-            for i in range(edge_index.shape[1]):
-                attrs = {}
-                _add_edge_attributes(data[edge_type], i, attrs, edge_feature_cols)
+        # Add original edge indices
+        original_edge_indices = metadata.edge_index_values.get(edge_type)
+        if original_edge_indices:
+            attrs_df["_original_edge_index"] = list(zip(*original_edge_indices, strict=True))
 
-                if original_edge_indices and i < len(original_edge_indices[0]):
-                    attrs["_original_edge_index"] = tuple(
-                        level[i] for level in original_edge_indices
-                    )
+        # Add relation type as an attribute
+        attrs_df["edge_type"] = rel_type
+        attrs_list = attrs_df.to_dict("records")
 
-                graph.add_edge(
-                    int(edge_index[0, i]) + node_offset[src_type],
-                    int(edge_index[1, i]) + node_offset[dst_type],
-                    edge_type=rel_type,
-                    **attrs,
-                )
+        # Prepare nodes and add edges in bulk
+        src_nodes = edge_index[0] + node_offset[src_type]
+        dst_nodes = edge_index[1] + node_offset[dst_type]
+
+        graph.add_edges_from(zip(src_nodes, dst_nodes, attrs_list, strict=True))
 
 
 def _add_homo_nodes_to_graph(graph: nx.Graph, data: Data) -> None:
@@ -1622,22 +1634,35 @@ def _add_homo_edges_to_graph(graph: nx.Graph, data: Data) -> None:
     edge_feature_cols = metadata.edge_feature_cols
     original_edge_indices = metadata.edge_index_values
 
-    if hasattr(data, "edge_index") and data.edge_index is not None:
-        edge_index = data.edge_index.detach().cpu().numpy()
+    if not hasattr(data, "edge_index") or data.edge_index is None:
+        return
 
-        # Add edges
-        for i in range(edge_index.shape[1]):
-            src_idx = int(edge_index[0, i])
-            dst_idx = int(edge_index[1, i])
-            attrs = {}
-            _add_edge_attributes(data, i, attrs, edge_feature_cols)
+    edge_index = data.edge_index.detach().cpu().numpy()
+    num_edges = edge_index.shape[1]
+    if num_edges == 0:
+        return
 
-            if original_edge_indices and i < len(original_edge_indices[0]):
-                attrs["_original_edge_index"] = tuple(
-                    level[i] for level in original_edge_indices
-                )
+    # Prepare attributes using pandas for efficiency
+    if hasattr(data, "edge_attr") and data.edge_attr is not None:
+        edge_attrs_np = data.edge_attr.detach().cpu().numpy()
+        attrs_df = pd.DataFrame(edge_attrs_np, columns=edge_feature_cols or None)
+        if not edge_feature_cols:
+            attrs_df = attrs_df.add_prefix("edge_feat_")
+    else:
+        attrs_df = pd.DataFrame(index=range(num_edges))
 
-            graph.add_edge(src_idx, dst_idx, **attrs)
+    # Add original edge indices
+    if original_edge_indices:
+        attrs_df["_original_edge_index"] = list(zip(*original_edge_indices, strict=True))
+
+    # Convert to list of dictionaries for networkx
+    attrs_list = attrs_df.to_dict("records")
+
+    # Prepare nodes and add edges in bulk
+    src_nodes = edge_index[0]
+    dst_nodes = edge_index[1]
+
+    graph.add_edges_from(zip(src_nodes, dst_nodes, attrs_list, strict=True))
 
 
 def _convert_homo_pyg_to_nx(data: Data, metadata: GraphMetadata) -> nx.Graph:
