@@ -1574,15 +1574,24 @@ def _add_hetero_edges_to_graph(graph: nx.Graph, data: HeteroData, node_offset: d
             # Get edge feature column names for this edge type
             edge_feature_cols = metadata.edge_feature_cols.get(rel_type)
 
-            # Add edges using comprehension
-            [graph.add_edge(
-                int(edge_index[0, i]) + node_offset[src_type],
-                int(edge_index[1, i]) + node_offset[dst_type],
-                edge_type=rel_type,
-                **{k: v for attrs in [{}] for k, v in (
-                    _add_edge_attributes(data[edge_type], i, attrs, edge_feature_cols) or attrs
-                ).items()},
-            ) for i in range(edge_index.shape[1])]
+            # Get original edge index values
+            original_edge_indices = metadata.edge_index_values.get(edge_type)
+
+            for i in range(edge_index.shape[1]):
+                attrs = {}
+                _add_edge_attributes(data[edge_type], i, attrs, edge_feature_cols)
+
+                if original_edge_indices and i < len(original_edge_indices[0]):
+                    attrs["_original_edge_index"] = tuple(
+                        level[i] for level in original_edge_indices
+                    )
+
+                graph.add_edge(
+                    int(edge_index[0, i]) + node_offset[src_type],
+                    int(edge_index[1, i]) + node_offset[dst_type],
+                    edge_type=rel_type,
+                    **attrs,
+                )
 
 
 def _add_homo_nodes_to_graph(graph: nx.Graph, data: Data) -> None:
@@ -1611,6 +1620,7 @@ def _add_homo_edges_to_graph(graph: nx.Graph, data: Data) -> None:
     """Add homogeneous edges to NetworkX graph."""
     metadata = data.graph_metadata
     edge_feature_cols = metadata.edge_feature_cols
+    original_edge_indices = metadata.edge_index_values
 
     if hasattr(data, "edge_index") and data.edge_index is not None:
         edge_index = data.edge_index.detach().cpu().numpy()
@@ -1621,6 +1631,12 @@ def _add_homo_edges_to_graph(graph: nx.Graph, data: Data) -> None:
             dst_idx = int(edge_index[1, i])
             attrs = {}
             _add_edge_attributes(data, i, attrs, edge_feature_cols)
+
+            if original_edge_indices and i < len(original_edge_indices[0]):
+                attrs["_original_edge_index"] = tuple(
+                    level[i] for level in original_edge_indices
+                )
+
             graph.add_edge(src_idx, dst_idx, **attrs)
 
 

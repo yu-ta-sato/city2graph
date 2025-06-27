@@ -37,8 +37,8 @@ class GraphMetadata:
         self.is_hetero = is_hetero
         self.node_types: list[str] = []
         self.edge_types: list[tuple[str, str, str]] = []
-        self.node_index_names: dict[str, Any] | str | None = {}
-        self.edge_index_names: dict[str, Any] | list[str] | None = {}
+        self.node_index_names: dict[str, Any] | str | None = None
+        self.edge_index_names: dict[str, Any] | list[str] | None = None
         self.node_geom_cols: list[str] = []
         self.edge_geom_cols: list[str] = []
         # PyG-specific metadata
@@ -281,7 +281,7 @@ class GraphConverter:
         if nodes is not None:
             self._add_homogeneous_nodes(graph, nodes)
             metadata.node_geom_cols = list(nodes.select_dtypes(include=["geometry"]).columns)
-            metadata.node_index_names = nodes.index.name
+            metadata.node_index_names = nodes.index.names if isinstance(nodes.index, pd.MultiIndex) else [nodes.index.name]
 
         # Add edges
         self._add_homogeneous_edges(graph, edges, nodes)
@@ -406,6 +406,9 @@ class GraphConverter:
         if not nodes_dict:
             return {}
 
+        if metadata.node_index_names is None:
+            metadata.node_index_names = {}
+
         node_offset = {}
         current_offset = 0
 
@@ -441,6 +444,8 @@ class GraphConverter:
         metadata: "GraphMetadata",
     ) -> None:
         """Add heterogeneous edges to graph."""
+        if metadata.edge_index_names is None:
+            metadata.edge_index_names = {}
         for edge_type, edge_gdf in edges_dict.items():
             # Get edge type components
             src_type, rel_type, dst_type = edge_type
@@ -562,6 +567,11 @@ class GraphConverter:
         nodes_dict = {}
         edges_dict = {}
 
+        if metadata.node_index_names is None:
+            metadata.node_index_names = {}
+        if metadata.edge_index_names is None:
+            metadata.edge_index_names = {}
+
         if nodes:
             nodes_dict = self._create_heterogeneous_nodes_dict(graph, metadata)
 
@@ -591,12 +601,15 @@ class GraphConverter:
             for nid, attrs in node_data.items()
         ]
 
-        gdf = gpd.GeoDataFrame(records, index=original_indices, crs=metadata.crs)
+        index_names = metadata.node_index_names
+        if index_names and isinstance(index_names, list) and len(index_names) > 1:
+            index = pd.MultiIndex.from_tuples(original_indices, names=index_names)
+        else:
+            name = index_names[0] if index_names and isinstance(index_names, list) else index_names
+            index = pd.Index(original_indices, name=name)
 
-        # Restore index name
-        index_name = metadata.node_index_names
-        if index_name:
-            gdf.index.name = index_name
+        gdf = gpd.GeoDataFrame(records, index=index, crs=metadata.crs)
+
 
         # Convert geometry columns
         for col in metadata.node_geom_cols:
@@ -634,12 +647,13 @@ class GraphConverter:
                 for attrs in attrs_list
             ]
 
-            gdf = gpd.GeoDataFrame(records, geometry="geometry", index=indices, crs=metadata.crs)
+            index_names = metadata.node_index_names.get(node_type)
+            if index_names and isinstance(index_names, list):
+                index = pd.MultiIndex.from_tuples(indices, names=index_names)
+            else:
+                index = pd.Index(indices, name=index_names)
 
-            # Restore index name
-            index_name = metadata.node_index_names.get(node_type)
-            if index_name:
-                gdf.index.name = index_name
+            gdf = gpd.GeoDataFrame(records, geometry="geometry", index=index, crs=metadata.crs)
 
             nodes_dict[node_type] = gdf
 
@@ -657,10 +671,16 @@ class GraphConverter:
         is_multigraph = isinstance(graph, nx.MultiGraph)
         if is_multigraph:
             edge_data = list(graph.edges(data=True, keys=True))
-            original_indices = [attrs.get("_original_edge_index", (u, v, k)) for u, v, k, attrs in edge_data]
+            original_indices = [
+                attrs.get("_original_edge_index", (u, v, k))
+                for u, v, k, attrs in edge_data
+            ]
         else:
             edge_data = list(graph.edges(data=True))
-            original_indices = [attrs.get("_original_edge_index", (u, v)) for u, v, attrs in edge_data]
+            original_indices = [
+                attrs.get("_original_edge_index", (u, v))
+                for u, v, attrs in edge_data
+            ]
 
         records = []
         for edge in edge_data:
@@ -684,12 +704,14 @@ class GraphConverter:
         if original_indices and isinstance(original_indices[0], tuple):
             index = pd.MultiIndex.from_tuples(original_indices)
         else:
-            index = original_indices
+            index = pd.Index(original_indices)
 
         gdf = gpd.GeoDataFrame(records, index=index, crs=metadata.crs)
 
         # Restore index names
         index_names = metadata.edge_index_names
+        if isinstance(index_names, dict):
+            index_names = None
 
         if index_names and hasattr(gdf.index, "names"):
             gdf.index.names = index_names
@@ -728,7 +750,9 @@ class GraphConverter:
                 edges_dict[edge_type] = gpd.GeoDataFrame(geometry=[], crs=metadata.crs)
                 continue
 
-            original_indices = [edge[-1].get("_original_edge_index") for edge in type_edges]
+            original_indices = [
+                edge[-1].get("_original_edge_index") for edge in type_edges
+            ]
             records = []
             for edge in type_edges:
                 if is_multigraph:
@@ -758,7 +782,7 @@ class GraphConverter:
             ):
                 index = pd.MultiIndex.from_tuples(original_indices)
             else:
-                index = original_indices
+                index = pd.Index(original_indices)
 
             gdf = gpd.GeoDataFrame(records, geometry="geometry", index=index, crs=metadata.crs)
 
