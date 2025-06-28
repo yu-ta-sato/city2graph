@@ -1241,6 +1241,9 @@ def _extract_tensor_data(
 
     features_array = tensor.detach().cpu().numpy()
 
+    if column_names is None:
+        return {}
+
     num_cols = min(len(column_names), features_array.shape[1])
     return {column_names[i]: features_array[:, i] for i in range(num_cols)}
 
@@ -1254,7 +1257,7 @@ def _get_node_data_info(
 
 
 def _get_mapping_info(
-    data: Data | HeteroData, node_type: str | None, metadata: GraphMetadata,
+    node_type: str | None, metadata: GraphMetadata,
 ) -> dict | None:
     """Get mapping info for the given node type."""
     mapping_key = "default" if not metadata.is_hetero or not node_type else node_type
@@ -1274,7 +1277,7 @@ def _create_geometry_from_positions(node_data: Data) -> gpd.array.GeometryArray 
 
 
 def _extract_node_features_and_labels(
-    data: Data | HeteroData, node_data: Data, node_type: str | None, metadata: GraphMetadata,
+    node_data: Data, node_type: str | None, metadata: GraphMetadata,
 ) -> dict[str, np.ndarray]:
     """Extract features and labels from node data."""
     gdf_data = {}
@@ -1298,7 +1301,7 @@ def _extract_node_features_and_labels(
 
 
 def _set_gdf_index_and_crs(
-    gdf: gpd.GeoDataFrame, data: Data | HeteroData, node_type: str | None, metadata: GraphMetadata,
+    gdf: gpd.GeoDataFrame, node_type: str | None, metadata: GraphMetadata,
 ) -> None:
     """Set index names and CRS on GeoDataFrame."""
     # Set index names
@@ -1325,11 +1328,11 @@ def _reconstruct_node_gdf(
 ) -> gpd.GeoDataFrame:
     """Reconstruct node GeoDataFrame from PyTorch Geometric data."""
     node_data, num_nodes = _get_node_data_info(data, node_type, metadata)
-    mapping_info = _get_mapping_info(data, node_type, metadata)
+    mapping_info = _get_mapping_info(node_type, metadata)
 
     # Extract node IDs and features/labels
     gdf_data = {}
-    features_labels = _extract_node_features_and_labels(data, node_data, node_type, metadata)
+    features_labels = _extract_node_features_and_labels(node_data, node_type, metadata)
     gdf_data.update(features_labels)
 
     # Create geometry and index
@@ -1338,13 +1341,12 @@ def _reconstruct_node_gdf(
 
     # Create GeoDataFrame
     gdf = gpd.GeoDataFrame(gdf_data, geometry=geometry, index=index_values)
-    _set_gdf_index_and_crs(gdf, data, node_type, metadata)
+    _set_gdf_index_and_crs(gdf, node_type, metadata)
 
     return gdf
 
 
 def _reconstruct_edge_index(
-    data: Data | HeteroData,
     edge_type: str | tuple[str, str, str] | None,
     is_hetero: bool,
     edge_data_dict: dict[str, list | np.ndarray],
@@ -1369,7 +1371,10 @@ def _reconstruct_edge_index(
 
 
 def _extract_edge_features(
-    edge_data: Data, edge_type: str | tuple | None, is_hetero: bool, metadata: GraphMetadata,
+    edge_data: Data,
+    edge_type: str | tuple | None,
+    is_hetero: bool,
+    metadata: GraphMetadata,
 ) -> dict[str, np.ndarray]:
     """Extract edge features from edge data."""
     edge_data_dict = {}
@@ -1386,7 +1391,10 @@ def _extract_edge_features(
 
 
 def _create_edge_geometries(
-    edge_data: Data, edge_type: str | tuple | None, is_hetero: bool, data: Data | HeteroData,
+    edge_data: Data,
+    edge_type: str | tuple | None,
+    is_hetero: bool,
+    data: Data | HeteroData,
 ) -> gpd.array.GeometryArray | None:
     """Create edge geometries from edge indices and node positions."""
     # Get edge index array
@@ -1414,7 +1422,6 @@ def _create_edge_geometries(
 
 def _set_edge_index_names(
     gdf: gpd.GeoDataFrame,
-    data: Data | HeteroData,
     edge_type: str | tuple | None,
     is_hetero: bool,
     metadata: GraphMetadata,
@@ -1448,13 +1455,13 @@ def _reconstruct_edge_gdf(
     geometry = _create_edge_geometries(edge_data, edge_type, is_hetero, data)
 
     # Reconstruct index from stored values
-    index_values = _reconstruct_edge_index(data, edge_type, is_hetero, edge_data_dict, metadata)
+    index_values = _reconstruct_edge_index(edge_type, is_hetero, edge_data_dict, metadata)
 
     # Create GeoDataFrame
     gdf = gpd.GeoDataFrame(edge_data_dict, geometry=geometry, index=index_values)
 
     # Set index names if available
-    _set_edge_index_names(gdf, data, edge_type, is_hetero, metadata)
+    _set_edge_index_names(gdf, edge_type, is_hetero, metadata)
 
     # Set CRS
     if metadata.crs:

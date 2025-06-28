@@ -472,7 +472,7 @@ class GraphConverter:
             valid_u = u_nodes[valid_mask]
             valid_v = v_nodes[valid_mask]
 
-            self._create_edge_list(graph, valid_u, valid_v, valid_edges, self.keep_geom, rel_type)
+            self._create_edge_list(graph, valid_u, valid_v, valid_edges, self.keep_geom, edge_type)
 
     def _create_edge_list(
         self,
@@ -497,7 +497,7 @@ class GraphConverter:
                 (u, v, k, {
                     **attrs,
                     "_original_edge_index": orig_idx,
-                    **({"edge_type": edge_type} if edge_type else {}),
+                    **({"full_edge_type": edge_type} if edge_type else {}),
                 })
                 for u, v, k, orig_idx, attrs in zip(
                     u_nodes, v_nodes, keys, edges_gdf.index, edge_attrs, strict=True,
@@ -508,7 +508,7 @@ class GraphConverter:
                 (u, v, {
                     **attrs,
                     "_original_edge_index": orig_idx,
-                    **({"edge_type": edge_type} if edge_type else {}),
+                    **({"full_edge_type": edge_type} if edge_type else {}),
                 })
                 for u, v, orig_idx, attrs in zip(
                     u_nodes, v_nodes, edges_gdf.index, edge_attrs, strict=True,
@@ -710,8 +710,6 @@ class GraphConverter:
 
         # Restore index names
         index_names = metadata.edge_index_names
-        if isinstance(index_names, dict):
-            index_names = None
 
         if index_names and hasattr(gdf.index, "names"):
             gdf.index.names = index_names
@@ -738,12 +736,12 @@ class GraphConverter:
             if is_multigraph:
                 type_edges = [
                     (u, v, k, d) for u, v, k, d in graph.edges(data=True, keys=True)
-                    if d.get("edge_type") == rel_type
+                    if d.get("full_edge_type") == edge_type
                 ]
             else:
                 type_edges = [
                     (u, v, d) for u, v, d in graph.edges(data=True)
-                    if d.get("edge_type") == rel_type
+                    if d.get("full_edge_type") == edge_type
                 ]
 
             if not type_edges:
@@ -769,7 +767,7 @@ class GraphConverter:
                         **{
                             k: v
                             for k, v in attrs.items()
-                            if k not in ["edge_type", "_original_edge_index"]
+                            if k not in ["full_edge_type", "_original_edge_index"]
                         },
                         "geometry": geom,
                     },
@@ -788,7 +786,7 @@ class GraphConverter:
 
             # Restore index names
             index_names = metadata.edge_index_names.get(edge_type)
-            if index_names and hasattr(gdf.index, "names"):
+            if index_names and isinstance(index_names, list) and hasattr(gdf.index, "names"):
                 gdf.index.names = index_names
 
             edges_dict[edge_type] = gdf

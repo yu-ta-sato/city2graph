@@ -317,7 +317,7 @@ def test_gdf_to_nx_roundtrip_hetero(
     sample_hetero_edges_dict: dict[tuple[str, str, str], gpd.GeoDataFrame],
 ) -> None:
     """Test round trip conversion for heterogeneous graphs."""
-    H = gdf_to_nx(nodes=sample_hetero_nodes_dict, edges=sample_hetero_edges_dict)
+    H = gdf_to_nx(nodes=sample_hetero_nodes_dict, edges=sample_hetero_edges_dict, multigraph=True)
     nodes_dict_trip, edges_dict_trip = nx_to_gdf(H)
 
     assert isinstance(nodes_dict_trip, dict)
