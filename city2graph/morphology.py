@@ -162,11 +162,11 @@ def morphological_graph(
         `segs_buffer` (segments used for tessellation context).
         If `clipping_buffer` is `math.inf` (and `distance` is set), `segs_buffer` is
         filtered by `distance` alone.
-        The `max_distance` for `_filter_adjacent_tessellation` becomes
+        The `max_distance` for `_filter_adjacent_tessellations` becomes
         `distance + clipping_buffer` (this evaluates to `math.inf` if `clipping_buffer`
         is `math.inf` or if `distance` is not set).
         If `distance` is not provided, `clipping_buffer` is effectively ignored for
-        `segs_buffer` filtering, and `max_distance` for `_filter_adjacent_tessellation`
+        `segs_buffer` filtering, and `max_distance` for `_filter_adjacent_tessellations`
         defaults to `math.inf`.
         Must be non-negative. Defaults to `math.inf`.
     primary_barrier_col : str, optional
@@ -258,7 +258,7 @@ def morphological_graph(
         segs = edges_unfiltered
 
     # Create a buffered version of the graph for tessellation creation (segs_buffer)
-    # This segs_buffer is used for _prepare_barriers -> create_tessellation
+    # This segs_buffer is used to _prepare_barriers -> create_tessellation
     # and as the segments context for _filter_adjacent_tessellation.
     if center_point is not None and distance is not None and not segments_gdf.empty:
         if not math.isinf(clipping_buffer):
@@ -328,17 +328,17 @@ def morphological_graph(
         group_col_for_priv_priv = None
 
     # Create private-to-private graph (adjacency between tessellation cells)
-    priv_priv = private_to_private_graph(
+    priv_priv_nodes, priv_priv_edges = private_to_private_graph(
         tessellation,
         group_col=group_col_for_priv_priv,
         contiguity=contiguity,
     )
 
     # Create public-to-public graph (connectivity between street segments)
-    pub_pub = public_to_public_graph(segs) # Use 'segs' (final graph segments)
+    pub_pub_nodes, pub_pub_edges = public_to_public_graph(segs) # Use 'segs' (final graph segments)
 
     # Create private-to-public graph (interfaces between tessellation and streets)
-    priv_pub = private_to_public_graph(
+    priv_pub_edges = private_to_public_graph(
         tessellation,
         segs, # Use 'segs' (final graph segments)
         primary_barrier_col=primary_barrier_col, # Optional alternative geometry for public spaces
@@ -346,7 +346,7 @@ def morphological_graph(
     )
 
     # Log warning if no private-public connections found
-    if priv_pub.empty:
+    if priv_pub_edges.empty:
         logger.warning("No private to public connections found")
 
     # Organize output as a heterogeneous graph structure (nodes and edges dictionaries)
@@ -356,13 +356,13 @@ def morphological_graph(
     }
     edges = {
         ("private", "touched_to", "private"): _set_edge_index(
-            priv_priv, "from_private_id", "to_private_id", # Private-private edges
+            priv_priv_edges, "from_private_id", "to_private_id", # Private-private edges
         ),
         ("public", "connected_to", "public"): _set_edge_index(
-            pub_pub, "from_public_id", "to_public_id", # Public-public edges
+            pub_pub_edges, "from_public_id", "to_public_id", # Public-public edges
         ),
         ("private", "faced_to", "public"): _set_edge_index(
-            priv_pub, "private_id", "public_id", # Private-public edges
+            priv_pub_edges, "private_id", "public_id", # Private-public edges
         ),
     }
     return nodes, edges # Return the structured graph data
@@ -377,7 +377,8 @@ def private_to_private_graph(
     private_gdf: gpd.GeoDataFrame,
     group_col: str | None = None,
     contiguity: str = "queen",
-) -> gpd.GeoDataFrame:
+    as_nx: bool = False,
+) -> tuple[gpd.GeoDataFrame, gpd.GeoDataFrame] | nx.Graph:
     """
     Create edges between contiguous private polygons based on spatial adjacency.
 
@@ -396,12 +397,16 @@ def private_to_private_graph(
     contiguity : str, default="queen"
         Type of spatial contiguity to use. Must be either "queen" or "rook".
         Queen contiguity includes vertex neighbors, Rook includes only edge neighbors.
+    as_nx : bool, default=False
+        If True, convert the output to a NetworkX graph.
 
     Returns
     -------
-    geopandas.GeoDataFrame
-        GeoDataFrame containing edge geometries between adjacent polygons.
-        Columns include from_private_id, to_private_id, group column, and geometry.
+    tuple[geopandas.GeoDataFrame, geopandas.GeoDataFrame] | networkx.Graph
+        A tuple containing:
+        - Nodes of the private graph (the input private_gdf).
+        - Edges of the private graph (adjacency connections).
+        If as_nx is True, returns a NetworkX graph.
 
     Raises
     ------
@@ -435,9 +440,12 @@ def private_to_private_graph(
     # Handle empty or insufficient data: return empty edges GeoDataFrame
     if private_gdf.empty or len(private_gdf) < 2:
         group_cols = [group_col or "group"]
-        return _create_empty_edges_gdf(
+        empty_edges = _create_empty_edges_gdf(
             private_gdf.crs, "from_private_id", "to_private_id", group_cols,
         )
+        if as_nx:
+            return gdf_to_nx(nodes=private_gdf, edges=empty_edges)
+        return private_gdf, empty_edges
 
     # Validate that the group column exists if specified
     if group_col and group_col not in private_gdf.columns:
@@ -459,11 +467,16 @@ def private_to_private_graph(
     edges_gdf_data = _create_adjacency_edges(adjacency_data, gdf_indexed, group_col or "group")
 
     # Convert the DataFrame with edge geometries to a GeoDataFrame
-    return gpd.GeoDataFrame(
+    edges_gdf = gpd.GeoDataFrame(
         edges_gdf_data, # Data including 'from_private_id', 'to_private_id', group, and geometry
         geometry="geometry",
         crs=private_gdf.crs, # Preserve original CRS
     )
+
+    if as_nx:
+        return gdf_to_nx(nodes=private_gdf, edges=edges_gdf)
+    return private_gdf, edges_gdf
+
 
 # ============================================================================
 # PRIVATE TO PUBLIC GRAPH FUNCTIONS
@@ -474,7 +487,8 @@ def private_to_public_graph(
     public_gdf: gpd.GeoDataFrame,
     primary_barrier_col: str | None = None,
     tolerance: float = 1e-6,
-) -> gpd.GeoDataFrame:
+    as_nx: bool = False,
+) -> gpd.GeoDataFrame | nx.Graph:
     """
     Create edges between private polygons and nearby public geometries.
 
@@ -495,12 +509,14 @@ def private_to_public_graph(
         this geometry will be used instead of the main geometry column.
     tolerance : float, default=1e-6
         Buffer distance for public geometries to detect proximity to private spaces.
+    as_nx : bool, default=False
+        If True, convert the output to a NetworkX graph.
 
     Returns
     -------
-    geopandas.GeoDataFrame
-        GeoDataFrame containing edge geometries between private and public spaces.
-        Columns include private_id, public_id, and geometry.
+    geopandas.GeoDataFrame | networkx.Graph
+        A GeoDataFrame of edge geometries between private and public spaces.
+        If as_nx is True, returns a NetworkX graph.
 
     Raises
     ------
@@ -525,7 +541,11 @@ def private_to_public_graph(
 
     # Handle empty data: return empty edges GeoDataFrame
     if private_gdf.empty or public_gdf.empty:
-        return _create_empty_edges_gdf(private_gdf.crs, _priv_id_col, _pub_id_col)
+        empty_edges = _create_empty_edges_gdf(private_gdf.crs, _priv_id_col, _pub_id_col)
+        if as_nx:
+            all_nodes = pd.concat([private_gdf, public_gdf], ignore_index=True)
+            return gdf_to_nx(nodes=all_nodes, edges=empty_edges)
+        return empty_edges
 
     # Ensure required ID columns exist in the input GeoDataFrames
     if _priv_id_col not in private_gdf.columns:
@@ -588,7 +608,12 @@ def private_to_public_graph(
 
     # Convert the DataFrame with edge geometries to a GeoDataFrame
     # Columns are already named _priv_id_col ("private_id") and _pub_id_col ("public_id").
-    return gpd.GeoDataFrame(joined_with_geom, geometry="geometry", crs=private_gdf.crs)
+    edges_gdf = gpd.GeoDataFrame(joined_with_geom, geometry="geometry", crs=private_gdf.crs)
+
+    if as_nx:
+        all_nodes = pd.concat([private_gdf, public_gdf], ignore_index=True)
+        return gdf_to_nx(nodes=all_nodes, edges=edges_gdf)
+    return edges_gdf
 
 
 # ============================================================================
@@ -598,7 +623,8 @@ def private_to_public_graph(
 
 def public_to_public_graph(
     public_gdf: gpd.GeoDataFrame,
-) -> gpd.GeoDataFrame:
+    as_nx: bool = False,
+) -> tuple[gpd.GeoDataFrame, gpd.GeoDataFrame] | nx.Graph:
     """
     Create edges between connected public segments based on topological connectivity.
 
@@ -611,12 +637,16 @@ def public_to_public_graph(
     ----------
     public_gdf : geopandas.GeoDataFrame
         GeoDataFrame containing public space geometries (typically LineString).
+    as_nx : bool, default=False
+        If True, convert the output to a NetworkX graph.
 
     Returns
     -------
-    geopandas.GeoDataFrame
-        GeoDataFrame containing edge geometries between connected public segments.
-        The GeoDataFrame will have 'from_public_id' and 'to_public_id' columns.
+    tuple[geopandas.GeoDataFrame, geopandas.GeoDataFrame] | networkx.Graph
+        A tuple containing:
+        - Nodes of the public graph (the input public_gdf).
+        - Edges of the public graph (connectivity).
+        If as_nx is True, returns a NetworkX graph.
 
     Raises
     ------
@@ -634,7 +664,10 @@ def public_to_public_graph(
 
     # Handle empty or insufficient data: return empty edges GeoDataFrame
     if public_gdf.empty or len(public_gdf) < 2:
-        return _create_empty_edges_gdf(public_gdf.crs, "from_public_id", "to_public_id")
+        empty_edges = _create_empty_edges_gdf(public_gdf.crs, "from_public_id", "to_public_id")
+        if as_nx:
+            return gdf_to_nx(nodes=public_gdf, edges=empty_edges)
+        return public_gdf, empty_edges
 
     # Create a copy to avoid modifying the original
     public_gdf_work = public_gdf.copy()
@@ -663,7 +696,7 @@ def public_to_public_graph(
     nodes, edges = segments_to_graph(public_gdf_work)
 
     # Create dual graph (nodes are segments, edges are connections)
-    _, dual_edges = dual_graph(
+    dual_nodes, dual_edges = dual_graph(
         (nodes, edges), edge_id_col=edge_id_col, keep_original_geom=True,
     )
 
@@ -671,7 +704,12 @@ def public_to_public_graph(
     if isinstance(dual_edges.index, pd.MultiIndex):
         dual_edges.index.names = ["from_public_id", "to_public_id"]
 
-    return dual_edges.reset_index()
+    # The nodes of the public graph are the original public segments
+    # The dual_nodes represent these segments, but we return the original public_gdf
+    # for consistency and to preserve all original attributes.
+    if as_nx:
+        return gdf_to_nx(nodes=public_gdf, edges=dual_edges.reset_index())
+    return public_gdf, dual_edges.reset_index()
 
 
 # ============================================================================
