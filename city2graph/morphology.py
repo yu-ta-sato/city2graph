@@ -128,7 +128,8 @@ def morphological_graph(
     contiguity: str = "queen",
     keep_buildings: bool = False,
     tolerance: float = 1e-6,
-    ) -> tuple[dict[str, gpd.GeoDataFrame], dict[tuple[str, str, str], gpd.GeoDataFrame]]:
+    as_nx: bool = False,
+    ) -> tuple[dict[str, gpd.GeoDataFrame], dict[tuple[str, str, str], gpd.GeoDataFrame]] | nx.Graph:
     """
     Create a morphological graph from buildings and street segments.
 
@@ -182,13 +183,16 @@ def morphological_graph(
         Buffer distance for public geometries when creating private-to-public connections.
         This parameter controls how close private spaces need to be to public spaces
         to establish a connection.
+    as_nx : bool, default=False
+        If True, convert the output to a NetworkX graph.
 
     Returns
     -------
-    tuple[dict[str, geopandas.GeoDataFrame], dict[tuple[str, str, str], geopandas.GeoDataFrame]]
+    tuple[dict[str, geopandas.GeoDataFrame], dict[tuple[str, str, str], geopandas.GeoDataFrame]] | networkx.Graph
         A tuple containing:
         - nodes: Dictionary with keys "private" and "public" containing node GeoDataFrames
         - edges: Dictionary with relationship type keys containing edge GeoDataFrames
+        If as_nx is True, returns a NetworkX graph.
 
     Raises
     ------
@@ -365,6 +369,8 @@ def morphological_graph(
             priv_pub_edges, "private_id", "public_id", # Private-public edges
         ),
     }
+    if as_nx:
+        return gdf_to_nx(nodes=nodes, edges=edges)
     return nodes, edges # Return the structured graph data
 
 
