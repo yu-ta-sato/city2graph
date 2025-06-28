@@ -55,7 +55,7 @@ pip install "city2graph[cu128]"
 
 Supported CUDA versions are `cu118`, `cu124`, `cu126`, and `cu128`.
 
-**Important:** The PyTorch Geometric extensions (`pyg_lib`, `torch_scatter`, etc.) are not included and must be installed separately. Please refer to the `PyTorch Geometric documentation <https://pytorch-geometric.readthedocs.io/en/latest/notes/installation.html>`_ for instructions. Due to the low demand, `conda` distributions are deprecated for PyTorch and PyTorch Geometric. For the most reliable setup, we recommend using pip or uv as described above.
+**Important:** The PyTorch Geometric extensions (`pyg_lib`, `torch_scatter`, etc.) are not included and must be installed separately. Please refer to the [PyTorch Geometric documentation](https://pytorch-geometric.readthedocs.io/en/latest/notes/installation.html) for instructions. Due to the low demand, `conda` distributions are deprecated for PyTorch and PyTorch Geometric. For the most reliable setup, we recommend using pip or uv as described above.
 
 #### For Development
 
