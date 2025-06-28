@@ -19,6 +19,11 @@ city2graph documentation
 It is designed to facilitate the graph data analytics in particular for urban studies and spatial analysis.
 It supports `Pytorch Geometric <https://pytorch-geometric.readthedocs.io/en/latest/>`_ to enable graph representation learning, such as Graph Neural Networks (GNNs).
 
+.. figure:: _static/scope.png
+   :width: 1000px
+   :alt: Overview scope of city2graph
+   :align: center
+
 Features
 --------
 
