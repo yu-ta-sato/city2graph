@@ -39,7 +39,7 @@ class TestMorphologicalGraph:
     ):
         """Test morphological graph creation as NetworkX graph."""
         graph = morphological_graph(
-            sample_buildings_gdf, sample_segments_gdf, as_nx=True
+            sample_buildings_gdf, sample_segments_gdf, as_nx=True,
         )
 
         assert isinstance(graph, nx.Graph)

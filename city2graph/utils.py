@@ -697,7 +697,7 @@ class GraphConverter:
                 {
                     **{k: v for k, v in attrs.items() if k != "_original_edge_index"},
                     "geometry": geom,
-                }
+                },
             )
 
         # Handle MultiIndex
@@ -772,7 +772,7 @@ class GraphConverter:
                             if k not in ["edge_type", "_original_edge_index"]
                         },
                         "geometry": geom,
-                    }
+                    },
                 )
 
             # Handle MultiIndex
@@ -1030,7 +1030,7 @@ def dual_graph(
     # Validate edges_gdf is a GeoDataFrame and clean it.
     # This will raise TypeError for non-GDF input, fixing one test failure.
     edges_clean = processor.validate_gdf(
-        edges_gdf, ["LineString", "MultiLineString"], allow_empty=True
+        edges_gdf, ["LineString", "MultiLineString"], allow_empty=True,
     )
 
     # Handle empty or cleaned-to-empty edges GeoDataFrame.

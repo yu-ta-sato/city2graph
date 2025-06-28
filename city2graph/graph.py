@@ -1,15 +1,15 @@
 """
 Module for creating heterogeneous graph representations of urban environments.
 
-This module provides comprehensive functionality for converting spatial data 
-(GeoDataFrames) into PyTorch Geometric graph objects, supporting 
-both homogeneous and heterogeneous graphs. It handles the complex mapping between 
-geographical coordinates, node/edge features, and the tensor representations 
+This module provides comprehensive functionality for converting spatial data
+(GeoDataFrames) into PyTorch Geometric graph objects, supporting
+both homogeneous and heterogeneous graphs. It handles the complex mapping between
+geographical coordinates, node/edge features, and the tensor representations
 required by graph neural networks.
 
-The module serves as a bridge between geospatial data analysis tools and deep 
-learning frameworks, enabling seamless integration of spatial urban data with 
-Graph Neural Networks (GNNs) for tasks such as urban modeling, traffic prediction, 
+The module serves as a bridge between geospatial data analysis tools and deep
+learning frameworks, enabling seamless integration of spatial urban data with
+Graph Neural Networks (GNNs) for tasks such as urban modeling, traffic prediction,
 and spatial analysis.
 
 Key Features
@@ -25,7 +25,7 @@ Key Features
 Main Functions
 --------------
 gdf_to_pyg : Convert GeoDataFrames to PyTorch Geometric objects
-pyg_to_gdf : Convert PyTorch Geometric objects back to GeoDataFrames  
+pyg_to_gdf : Convert PyTorch Geometric objects back to GeoDataFrames
 nx_to_pyg : Convert NetworkX graphs to PyTorch Geometric objects
 pyg_to_nx : Convert PyTorch Geometric objects to NetworkX graphs
 is_torch_available : Check if PyTorch Geometric dependencies are available
@@ -38,8 +38,8 @@ city2graph.proximity : Spatial proximity and accessibility functions
 
 Notes
 -----
-This module requires PyTorch and PyTorch Geometric for full functionality. 
-If these packages are not available, the conversion functions will raise 
+This module requires PyTorch and PyTorch Geometric for full functionality.
+If these packages are not available, the conversion functions will raise
 ImportError with helpful installation instructions.
 
 Examples
@@ -48,14 +48,14 @@ Basic usage with homogeneous graphs:
 
 >>> import geopandas as gpd
 >>> from city2graph.graph import gdf_to_pyg, pyg_to_gdf
->>> 
+>>>
 >>> # Load spatial data
 >>> nodes_gdf = gpd.read_file("urban_nodes.geojson")
 >>> edges_gdf = gpd.read_file("urban_edges.geojson")
->>> 
+>>>
 >>> # Convert to PyTorch Geometric
 >>> data = gdf_to_pyg(nodes_gdf, edges_gdf)
->>> 
+>>>
 >>> # Convert back to GeoDataFrames
 >>> nodes_restored, edges_restored = pyg_to_gdf(data)
 
@@ -64,14 +64,14 @@ Advanced usage with heterogeneous graphs:
 >>> # Define multiple node types
 >>> buildings = gpd.read_file("buildings.geojson")
 >>> roads = gpd.read_file("roads.geojson")
->>> 
+>>>
 >>> # Define relationships
 >>> connections = gpd.read_file("building_road_connections.geojson")
->>> 
+>>>
 >>> # Create heterogeneous graph
 >>> nodes_dict = {'building': buildings, 'road': roads}
 >>> edges_dict = {('building', 'connects_to', 'road'): connections}
->>> 
+>>>
 >>> hetero_data = gdf_to_pyg(nodes_dict, edges_dict)
 """
 
@@ -79,7 +79,6 @@ from __future__ import annotations
 
 import logging
 from typing import TYPE_CHECKING
-from typing import Any
 
 import geopandas as gpd
 import networkx as nx
@@ -213,11 +212,11 @@ def gdf_to_pyg(
 
     >>> import geopandas as gpd
     >>> from city2graph.graph import gdf_to_pyg
-    >>> 
+    >>>
     >>> # Load and prepare node data
     >>> nodes_gdf = gpd.read_file("nodes.geojson").set_index("node_id")
     >>> edges_gdf = gpd.read_file("edges.geojson").set_index(["source_id", "target_id"])
-    >>> 
+    >>>
     >>> # Convert to PyTorch Geometric
     >>> data = gdf_to_pyg(nodes_gdf, edges_gdf,
     ...                   node_feature_cols=['population', 'area'])
@@ -228,11 +227,11 @@ def gdf_to_pyg(
     >>> buildings_gdf = buildings_gdf.set_index("building_id")
     >>> roads_gdf = roads_gdf.set_index("road_id")
     >>> connections_gdf = connections_gdf.set_index(["building_id", "road_id"])
-    >>> 
+    >>>
     >>> # Define node and edge types
     >>> nodes_dict = {'building': buildings_gdf, 'road': roads_gdf}
     >>> edges_dict = {('building', 'connects', 'road'): connections_gdf}
-    >>> 
+    >>>
     >>> # Convert to heterogeneous graph
     >>> data = gdf_to_pyg(nodes_dict, edges_dict)
 
@@ -1414,7 +1413,11 @@ def _create_edge_geometries(
 
 
 def _set_edge_index_names(
-    gdf: gpd.GeoDataFrame, data: Data | HeteroData, edge_type: str | tuple | None, is_hetero: bool, metadata: GraphMetadata,
+    gdf: gpd.GeoDataFrame,
+    data: Data | HeteroData,
+    edge_type: str | tuple | None,
+    is_hetero: bool,
+    metadata: GraphMetadata,
 ) -> None:
     """Set index names on edge GeoDataFrame."""
     index_names = None
@@ -1464,69 +1467,76 @@ def _reconstruct_edge_gdf(
 # NETWORKX CONVERSION HELPERS
 # ============================================================================
 
-def _add_features_to_attrs(
-    tensor_data: np.ndarray,
-    column_names: list[str] | None,
-    attrs: dict[str, Any],
-    prefix: str,
-) -> None:
-    """Add tensor data to attribute dictionary with proper column names."""
-    if tensor_data is None or tensor_data.size == 0:
+def _add_homo_nodes_to_graph(graph: nx.Graph, data: Data) -> None:
+    """Add homogeneous nodes to NetworkX graph."""
+    metadata = data.graph_metadata
+    node_mapping_info = metadata.node_mappings.get("default", {})
+    original_ids = node_mapping_info.get("original_ids", [])
+    num_nodes = data.x.size(0)
+
+    # Prepare base attributes
+    attrs_df = pd.DataFrame({
+        "_original_index": [original_ids[i] if i < len(original_ids) else i for i in range(num_nodes)],
+    })
+
+    # Add positions using vectorized operations
+    if hasattr(data, "pos") and data.pos is not None:
+        pos_np = data.pos.detach().cpu().numpy()
+        attrs_df["pos"] = [tuple(pos_np[i]) for i in range(min(num_nodes, len(pos_np)))]
+
+    # Add features using vectorized operations
+    if hasattr(data, "x") and data.x is not None:
+        x_np = data.x.detach().cpu().numpy()
+        feature_cols = metadata.node_feature_cols or [f"feat_{j}" for j in range(x_np.shape[1])]
+        for j, col_name in enumerate(feature_cols[:x_np.shape[1]]):
+            attrs_df[col_name] = x_np[:, j]
+
+    # Add labels using vectorized operations
+    if hasattr(data, "y") and data.y is not None:
+        y_np = data.y.detach().cpu().numpy()
+        label_cols = metadata.node_label_cols or [f"label_{j}" for j in range(y_np.shape[1])]
+        for j, col_name in enumerate(label_cols[:y_np.shape[1]]):
+            attrs_df[col_name] = y_np[:, j]
+
+    # Add nodes in bulk
+    graph.add_nodes_from([(i, attrs_df.iloc[i].to_dict()) for i in range(num_nodes)])
+
+
+def _add_homo_edges_to_graph(graph: nx.Graph, data: Data) -> None:
+    """Add homogeneous edges to NetworkX graph."""
+    metadata = data.graph_metadata
+    edge_feature_cols = metadata.edge_feature_cols
+    original_edge_indices = metadata.edge_index_values
+
+    if not hasattr(data, "edge_index") or data.edge_index is None:
         return
 
-    if column_names and len(column_names) > 0:
-        # Use original column names
-        # Ensure we don't go out of bounds for tensor_data
-        num_elements_to_process = min(len(column_names), len(tensor_data))
-        update_dict = {
-            column_names[j]: float(tensor_data[j])
-            for j in range(num_elements_to_process)
-        }
-        attrs.update(update_dict)
+    edge_index = data.edge_index.detach().cpu().numpy()
+    num_edges = edge_index.shape[1]
+    if num_edges == 0:
+        return
+
+    # Prepare attributes using pandas for efficiency
+    if hasattr(data, "edge_attr") and data.edge_attr is not None:
+        edge_attrs_np = data.edge_attr.detach().cpu().numpy()
+        attrs_df = pd.DataFrame(edge_attrs_np, columns=edge_feature_cols or None)
+        if not edge_feature_cols:
+            attrs_df = attrs_df.add_prefix("edge_feat_")
     else:
-        # Fallback to generic names
-        update_dict = {
-            f"{prefix}_{j}": float(value)
-            for j, value in enumerate(tensor_data)
-        }
-        attrs.update(update_dict)
+        attrs_df = pd.DataFrame(index=range(num_edges))
 
+    # Add original edge indices
+    if original_edge_indices:
+        attrs_df["_original_edge_index"] = list(zip(*original_edge_indices, strict=True))
 
-def _add_node_attributes(
-    node_data: Data,
-    node_id: int,
-    attrs: dict[str, Any],
-    feature_cols: list[str] | None,
-    label_cols: list[str] | None,
-) -> None:
-    """Add node attributes (position, features, labels) to attribute dictionary."""
-    # Add position if available
-    if (hasattr(node_data, "pos") and node_data.pos is not None and
-        node_id < node_data.pos.size(0)):
-        pos = node_data.pos[node_id].detach().cpu().numpy()
-        attrs["pos"] = tuple(float(p) for p in pos)
+    # Convert to list of dictionaries for networkx
+    attrs_list = attrs_df.to_dict("records")
 
-    # Add features
-    if (hasattr(node_data, "x") and node_data.x is not None and
-        node_id < node_data.x.size(0)):
-        x = node_data.x[node_id].detach().cpu().numpy()
-        _add_features_to_attrs(x, feature_cols, attrs, "feat")
+    # Prepare nodes and add edges in bulk
+    src_nodes = edge_index[0]
+    dst_nodes = edge_index[1]
 
-    # Add labels
-    if (hasattr(node_data, "y") and node_data.y is not None and
-        node_id < node_data.y.size(0)):
-        y = node_data.y[node_id].detach().cpu().numpy()
-        _add_features_to_attrs(y, label_cols, attrs, "label")
-
-
-def _add_edge_attributes(
-    edge_data: Data, edge_id: int, attrs: dict[str, Any], feature_cols: list[str] | None,
-) -> None:
-    """Add edge attributes to attribute dictionary."""
-    if (hasattr(edge_data, "edge_attr") and edge_data.edge_attr is not None and
-        edge_id < edge_data.edge_attr.size(0)):
-        edge_attr = edge_data.edge_attr[edge_id].detach().cpu().numpy()
-        _add_features_to_attrs(edge_attr, feature_cols, attrs, "edge_feat")
+    graph.add_edges_from(zip(src_nodes, dst_nodes, attrs_list, strict=True))
 
 
 def _add_hetero_nodes_to_graph(graph: nx.Graph, data: HeteroData) -> dict[str, int]:
@@ -1537,26 +1547,38 @@ def _add_hetero_nodes_to_graph(graph: nx.Graph, data: HeteroData) -> dict[str, i
 
     for node_type in metadata.node_types:
         node_offset[node_type] = current_offset
-        num_nodes = data[node_type].num_nodes
+        node_data = data[node_type]
+        num_nodes = node_data.num_nodes
 
-        # Get original node IDs from metadata
+        # Get original node IDs and prepare base attributes
         node_mapping_info = metadata.node_mappings.get(node_type, {})
         original_ids = node_mapping_info.get("original_ids", list(range(num_nodes)))
+        attrs_df = pd.DataFrame({
+            "node_type": node_type,
+            "_original_index": [original_ids[i] if i < len(original_ids) else i for i in range(num_nodes)],
+        })
 
-        # Get feature and label column names for this node type
-        node_feature_cols = metadata.node_feature_cols.get(node_type)
-        node_label_cols = metadata.node_label_cols.get(node_type)
+        # Add positions using vectorized operations
+        if hasattr(node_data, "pos") and node_data.pos is not None:
+            pos_np = node_data.pos.detach().cpu().numpy()
+            attrs_df["pos"] = [tuple(pos_np[i]) for i in range(min(num_nodes, len(pos_np)))]
 
-        # Add nodes with type information and original IDs
-        for i in range(num_nodes):
-            node_id = current_offset + i
-            original_id = original_ids[i] if i < len(original_ids) else i
-            attrs = {"node_type": node_type, "_original_index": original_id}
-            _add_node_attributes(
-                data[node_type], i, attrs, node_feature_cols, node_label_cols,
-            )
-            graph.add_node(node_id, **attrs)
+        # Add features using vectorized operations
+        if hasattr(node_data, "x") and node_data.x is not None:
+            x_np = node_data.x.detach().cpu().numpy()
+            feature_cols = metadata.node_feature_cols.get(node_type) or [f"feat_{j}" for j in range(x_np.shape[1])]
+            for j, col_name in enumerate(feature_cols[:x_np.shape[1]]):
+                attrs_df[col_name] = x_np[:, j]
 
+        # Add labels using vectorized operations
+        if hasattr(node_data, "y") and node_data.y is not None:
+            y_np = node_data.y.detach().cpu().numpy()
+            label_cols = metadata.node_label_cols.get(node_type) or [f"label_{j}" for j in range(y_np.shape[1])]
+            for j, col_name in enumerate(label_cols[:y_np.shape[1]]):
+                attrs_df[col_name] = y_np[:, j]
+
+        # Add nodes in bulk
+        graph.add_nodes_from([(current_offset + i, attrs_df.iloc[i].to_dict()) for i in range(num_nodes)])
         current_offset += num_nodes
 
     return node_offset
@@ -1604,65 +1626,6 @@ def _add_hetero_edges_to_graph(graph: nx.Graph, data: HeteroData, node_offset: d
         dst_nodes = edge_index[1] + node_offset[dst_type]
 
         graph.add_edges_from(zip(src_nodes, dst_nodes, attrs_list, strict=True))
-
-
-def _add_homo_nodes_to_graph(graph: nx.Graph, data: Data) -> None:
-    """Add homogeneous nodes to NetworkX graph."""
-    metadata = data.graph_metadata
-    node_feature_cols = metadata.node_feature_cols
-    node_label_cols = metadata.node_label_cols
-
-    # Get original node IDs from metadata
-    node_mapping_info = metadata.node_mappings.get("default", {})
-    original_ids = node_mapping_info.get("original_ids", [])
-
-    # Determine number of nodes
-    num_nodes = data.x.size(0)
-
-    # Add nodes with preserved original IDs
-    for i in range(num_nodes):
-        # Use original ID if available, otherwise use sequential index
-        original_id = original_ids[i] if i < len(original_ids) else i
-        attrs = {"_original_index": original_id}
-        _add_node_attributes(data, i, attrs, node_feature_cols, node_label_cols)
-        graph.add_node(i, **attrs)
-
-
-def _add_homo_edges_to_graph(graph: nx.Graph, data: Data) -> None:
-    """Add homogeneous edges to NetworkX graph."""
-    metadata = data.graph_metadata
-    edge_feature_cols = metadata.edge_feature_cols
-    original_edge_indices = metadata.edge_index_values
-
-    if not hasattr(data, "edge_index") or data.edge_index is None:
-        return
-
-    edge_index = data.edge_index.detach().cpu().numpy()
-    num_edges = edge_index.shape[1]
-    if num_edges == 0:
-        return
-
-    # Prepare attributes using pandas for efficiency
-    if hasattr(data, "edge_attr") and data.edge_attr is not None:
-        edge_attrs_np = data.edge_attr.detach().cpu().numpy()
-        attrs_df = pd.DataFrame(edge_attrs_np, columns=edge_feature_cols or None)
-        if not edge_feature_cols:
-            attrs_df = attrs_df.add_prefix("edge_feat_")
-    else:
-        attrs_df = pd.DataFrame(index=range(num_edges))
-
-    # Add original edge indices
-    if original_edge_indices:
-        attrs_df["_original_edge_index"] = list(zip(*original_edge_indices, strict=True))
-
-    # Convert to list of dictionaries for networkx
-    attrs_list = attrs_df.to_dict("records")
-
-    # Prepare nodes and add edges in bulk
-    src_nodes = edge_index[0]
-    dst_nodes = edge_index[1]
-
-    graph.add_edges_from(zip(src_nodes, dst_nodes, attrs_list, strict=True))
 
 
 def _convert_homo_pyg_to_nx(data: Data, metadata: GraphMetadata) -> nx.Graph:
