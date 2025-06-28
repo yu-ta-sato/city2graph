@@ -1598,15 +1598,39 @@ def create_tessellation(
             clip=False,
         )
 
-        tessellation = momepy.enclosed_tessellation(
-            geometry=geometry,
-            enclosures=enclosures,
-            shrink=shrink,
-            segment=segment,
-            threshold=threshold,
-            n_jobs=n_jobs,
-            **kwargs,
-        )
+        if not enclosures.empty:
+            try:
+                tessellation = momepy.enclosed_tessellation(
+                    geometry=geometry,
+                    enclosures=enclosures,
+                    shrink=shrink,
+                    segment=segment,
+                    threshold=threshold,
+                    n_jobs=n_jobs,
+                    **kwargs,
+                )
+            except ValueError as e:
+                if "No objects to concatenate" in str(e):
+                    logger.warning("Momepy could not generate tessellation, returning empty GeoDataFrame.")
+                    return gpd.GeoDataFrame(
+                        columns=["geometry", "enclosure_index", "tess_id"],
+                        geometry="geometry",
+                        crs=geometry.crs,
+                    )
+                raise
+        else:
+            tessellation = gpd.GeoDataFrame(
+                columns=["geometry", "enclosure_index"],
+                geometry="geometry",
+                crs=geometry.crs,
+            )
+
+        if tessellation.empty:
+            return gpd.GeoDataFrame(
+                columns=["geometry", "enclosure_index"],
+                geometry="geometry",
+                crs=geometry.crs,
+            )
 
         tessellation["tess_id"] = [
             f"{i}_{j}"

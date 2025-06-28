@@ -1,5 +1,3 @@
-"""Test fixtures and configuration for the city2graph test suite."""
-
 import pathlib
 from typing import Any
 
@@ -108,10 +106,10 @@ def sample_hetero_edges_dict(sample_crs: str) -> dict[tuple[str, str, str], gpd.
 
     # Roads connect to other roads (example of same-type connection)
     road_links_data = {
-        "source_road_id": ["r1"],
-        "target_road_id": ["r2"],
-        "link_feat1": [0.7],
-        "geometry": [LineString([(10, 12), (12, 12)])],
+        "source_road_id": ["r1", "r2"],
+        "target_road_id": ["r2", "r1"],
+        "link_feat1": [0.7, 0.7],
+        "geometry": [LineString([(10, 12), (12, 12)]), LineString([(12, 12), (10, 12)])],
     }
     road_links_multi_index = pd.MultiIndex.from_arrays(
         [road_links_data["source_road_id"], road_links_data["target_road_id"]],
@@ -357,6 +355,15 @@ def segments_gdf_no_crs(sample_segments_gdf: gpd.GeoDataFrame) -> gpd.GeoDataFra
     gdf_no_crs = sample_segments_gdf.copy()
     gdf_no_crs.crs = None
     return gdf_no_crs
+
+
+@pytest.fixture
+def segments_gdf_alt_crs(sample_segments_gdf: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
+    """Sample segments GDF with an alternative CRS."""
+    gdf = sample_segments_gdf.copy()
+    if not gdf.empty:
+        gdf = gdf.to_crs("EPSG:4326")
+    return gdf
 
 
 @pytest.fixture
@@ -676,3 +683,46 @@ def invalid_input_dict() -> dict:
 def invalid_input_list() -> list:
     """Fixture for invalid input (list instead of graph)."""
     return [1, 2, 3]
+
+
+@pytest.fixture
+def p2pub_private_single_cell(sample_crs: str) -> gpd.GeoDataFrame:
+    """A single private cell for private_to_public tests."""
+    poly = Polygon([(0.4, 0.4), (0.4, 0.6), (0.6, 0.6), (0.6, 0.4)])
+    return _create_gdf([poly], [{"private_id": 0}], crs=sample_crs)
+
+
+@pytest.fixture
+def p2pub_public_single_segment(sample_crs: str) -> gpd.GeoDataFrame:
+    """A single public segment for private_to_public tests."""
+    line = LineString([(0.5, 0.3), (0.5, 0.7)])
+    return _create_gdf([line], [{"public_id": 10}], crs=sample_crs)
+
+
+@pytest.fixture
+def p2p_isolated_polys_gdf(sample_crs: str) -> gpd.GeoDataFrame:
+    """A GDF with polygons that are not contiguous, for testing private_to_private_graph."""
+    polys = [
+        Polygon([(0, 0), (0, 1), (1, 1), (1, 0)]),
+        Polygon([(10, 10), (10, 11), (11, 11), (11, 10)]),
+        Polygon([(20, 20), (20, 21), (21, 21), (21, 20)]),
+    ]
+    attrs = [{"private_id": i} for i in range(len(polys))]
+    return _create_gdf(polys, attrs, crs=sample_crs)
+
+
+@pytest.fixture
+def segments_gdf_with_multiindex_public_id(sample_crs: str) -> gpd.GeoDataFrame:
+    """A GDF with segments and a MultiIndex for public_id, for public_to_public_graph."""
+    data = {
+        "seg_id": ["s1", "s2", "s3"],
+        "geometry": [
+            LineString([(0, 0), (1, 0)]),
+            LineString([(1, 0), (2, 0)]),
+            LineString([(2, 0), (3, 0)]),
+        ],
+    }
+    gdf = gpd.GeoDataFrame(data, crs=sample_crs)
+    # Create a dummy MultiIndex for public_id
+    gdf["public_id"] = pd.MultiIndex.from_tuples([("A", 1), ("B", 2), ("C", 3)], names=["type", "idx"])
+    return gdf

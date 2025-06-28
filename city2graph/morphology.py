@@ -602,6 +602,13 @@ def private_to_public_graph(
     # Prepare to add edge geometries to the joined DataFrame
     joined_with_geom = joined.copy()
 
+    if joined_with_geom.empty:
+        edges_gdf = gpd.GeoDataFrame(joined_with_geom, geometry="geometry", crs=private_gdf.crs)
+        if as_nx:
+            all_nodes = pd.concat([private_gdf, public_gdf], ignore_index=True)
+            return gdf_to_nx(nodes=all_nodes, edges=edges_gdf)
+        return edges_gdf
+
     # Get centroid geometries for each pair in the 'joined' DataFrame
     p1_geoms = private_centroids_map.loc[joined_with_geom[_priv_id_col]].reset_index(drop=True)
     p2_geoms = public_centroids_map.loc[joined_with_geom[_pub_id_col]].reset_index(drop=True)
@@ -609,7 +616,10 @@ def private_to_public_graph(
     # Stack the coordinates of the centroids to create LineString geometries
     coords_p1 = np.array(list(zip(p1_geoms.x, p1_geoms.y, strict=True))) # Coordinates for private centroids
     coords_p2 = np.array(list(zip(p2_geoms.x, p2_geoms.y, strict=True))) # Coordinates for public centroids
-    line_coords = np.stack((coords_p1, coords_p2), axis=1) # Stack coordinates for LineString creation
+    if coords_p1.ndim == 1:
+        line_coords = np.stack((coords_p1, coords_p2), axis=0)[np.newaxis, :, :]
+    else:
+        line_coords = np.stack((coords_p1, coords_p2), axis=1) # Stack coordinates for LineString creation
     joined_with_geom["geometry"] = list(sh_linestrings(line_coords)) # Create LineStrings
 
     # Convert the DataFrame with edge geometries to a GeoDataFrame
@@ -1388,6 +1398,9 @@ def _create_adjacency_edges(
     adj_data_processed = adj_data_processed.drop_duplicates(
         subset=["from_private_id", "to_private_id", group_col],
     )
+
+    if adj_data_processed.empty:
+        return adj_data_processed.reindex(columns=["from_private_id", "to_private_id", group_col, "geometry"])
 
     # Calculate centroids of all polygons in the input GeoDataFrame 'gdf'
     # 'gdf' is assumed to be the one with 0..N-1 index matching 'row'/'col' in adjacency_data
