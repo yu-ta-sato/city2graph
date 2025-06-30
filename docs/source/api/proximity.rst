@@ -15,3 +15,5 @@ Gilbert random graphs, and Waxman random graphs.
 .. autofunction:: gilbert_graph
 
 .. autofunction:: waxman_graph
+
+.. autofunction:: bridge_nodes
