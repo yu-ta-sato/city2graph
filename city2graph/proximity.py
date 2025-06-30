@@ -60,11 +60,16 @@ Basic usage of knn_graph:
 Graph has 4 nodes and 4 edges.
 """
 
+from __future__ import annotations
+
+import itertools
 from itertools import combinations
+from typing import Any
 
 import geopandas as gpd
 import networkx as nx
 import numpy as np
+import pandas as pd
 import scipy.spatial.qhull
 from scipy.spatial import Delaunay
 from scipy.spatial.distance import pdist
@@ -77,8 +82,18 @@ from .utils import gdf_to_nx
 from .utils import nx_to_gdf
 from .utils import validate_gdf
 
-__all__ = ["delaunay_graph", "gilbert_graph", "knn_graph", "waxman_graph"]
+__all__ = [
+    "bridge_nodes",
+    "delaunay_graph",
+    "gilbert_graph",
+    "knn_graph",
+    "waxman_graph",
+]
 
+
+# ============================================================================
+# GRAPH GENERATION FUNCTIONS
+# ============================================================================
 
 def knn_graph(gdf: gpd.GeoDataFrame,
               k: int = 5,
@@ -1106,3 +1121,295 @@ def _add_distance_weights(graph: nx.Graph,
 
     # Set all weights at once
     nx.set_edge_attributes(graph, edge_weights, "weight")
+
+
+# ============================================================================
+# NODE BRIDGING FUNCTION
+# ============================================================================
+
+def bridge_nodes(
+    nodes_dict: dict[str, gpd.GeoDataFrame],
+    proximity_method: str = "knn",
+    as_nx: bool = False,
+    multigraph: bool = False,
+    **kwargs: Any,
+):
+    """Generate directed proximity edges between different node types.
+
+    This function creates directed proximity connections between different types
+    of nodes (layers) in a heterogeneous graph. For each ordered pair of node
+    types, it generates edges from all nodes of the source type to their nearest
+    neighbors in the destination type, ensuring comprehensive cross-layer
+    connectivity based on spatial proximity.
+
+    The function guarantees that all nodes of each source type will have edges
+    to nodes in each destination type (subject to the proximity constraints).
+    For example, with k=1 KNN between 10 type-A nodes and 2 type-B nodes, the
+    result will have exactly 10 A→B edges and 2 B→A edges.
+
+    Parameters
+    ----------
+    nodes_dict : dict[str, geopandas.GeoDataFrame]
+        Dictionary mapping node type names (strings) to GeoDataFrames containing
+        the spatial data for each node type. Each GeoDataFrame should have
+        geometry data representing point or polygon locations.
+    proximity_method : str, default "knn"
+        The proximity method to use for connecting nodes between layers.
+        Options: "knn" (k-nearest neighbors) or "gilbert" (fixed radius).
+    as_nx : bool, default False
+        If True, returns a NetworkX graph. If False, returns a tuple of
+        (nodes_dict, edges_dict) where edges_dict contains GeoDataFrames
+        for each edge type.
+    multigraph : bool, default False
+        If True and as_nx=True, returns a NetworkX MultiGraph to handle
+        multiple edge types between the same nodes. Only relevant when
+        as_nx=True.
+    **kwargs : Any
+        Additional parameters for the proximity method:
+
+        For proximity_method="knn":
+        - k : int, default 1
+            Number of nearest neighbors to connect to for each source node.
+        - distance_metric : str, default "euclidean"
+            Distance metric ("euclidean", "manhattan", or "network").
+        - network_gdf : geopandas.GeoDataFrame, optional
+            Network for distance calculations when distance_metric="network".
+
+        For proximity_method="gilbert":
+        - radius : float, required
+            Maximum distance for creating connections between nodes.
+        - distance_metric : str, default "euclidean"
+            Distance metric ("euclidean", "manhattan", or "network").
+        - network_gdf : geopandas.GeoDataFrame, optional
+            Network for distance calculations when distance_metric="network".
+
+    Returns
+    -------
+    networkx.Graph or tuple[dict[str, geopandas.GeoDataFrame], dict[tuple[str, str, str], geopandas.GeoDataFrame]]
+        If as_nx=True, returns a NetworkX graph with nodes from all types and
+        directed edges representing proximity relationships.
+
+        If as_nx=False, returns a tuple containing:
+        - nodes_dict : dict[str, geopandas.GeoDataFrame]
+            The original input nodes dictionary.
+        - edges_dict : dict[tuple[str, str, str], geopandas.GeoDataFrame]
+            Dictionary mapping edge type tuples (src_type, "is_nearby", dst_type)
+            to GeoDataFrames containing the proximity edges. Each edge GeoDataFrame
+            has a MultiIndex with (source_node_id, destination_node_id) and
+            includes 'weight' and 'geometry' columns.
+
+    Raises
+    ------
+    ValueError
+        If fewer than two node types are provided, if proximity_method is not
+        "knn" or "gilbert", if required parameters are missing (e.g., radius
+        for gilbert method), or if no proximity edges are generated.
+    TypeError
+        If nodes_dict values are not GeoDataFrames.
+
+    See Also
+    --------
+    knn_graph : Generate k-nearest neighbor graphs for single node types.
+    gilbert_graph : Generate fixed-radius graphs for single node types.
+    city2graph.utils.gdf_to_nx : Convert GeoDataFrames to NetworkX graphs.
+
+    Notes
+    -----
+    - The function creates directed edges for every ordered pair of node types,
+      meaning if you have types A and B, it will create both A→B and B→A edges.
+    - Each source node is guaranteed to connect to its k nearest destination
+      nodes (for KNN) or all destination nodes within radius (for Gilbert),
+      ensuring comprehensive cross-layer connectivity.
+    - Edge geometries represent straight-line connections for "euclidean"
+      distance, L-shaped paths for "manhattan" distance, and network paths
+      for "network" distance.
+    - The centroids of input geometries are used as node positions for
+      distance calculations.
+
+    Examples
+    --------
+    Create proximity edges between building and amenity nodes:
+
+    >>> import geopandas as gpd
+    >>> from shapely.geometry import Point
+    >>> from city2graph.proximity import bridge_nodes
+    >>>
+    >>> # Create building nodes
+    >>> buildings = gpd.GeoDataFrame({
+    ...     'type': ['residential', 'commercial'],
+    ...     'geometry': [Point(0, 0), Point(1, 1)]
+    ... }, crs="EPSG:4326")
+    >>>
+    >>> # Create amenity nodes  
+    >>> amenities = gpd.GeoDataFrame({
+    ...     'type': ['school', 'hospital', 'park'],
+    ...     'geometry': [Point(0.5, 0.5), Point(1.5, 1.5), Point(2, 2)]
+    ... }, crs="EPSG:4326")
+    >>>
+    >>> nodes_dict = {'buildings': buildings, 'amenities': amenities}
+    >>>
+    >>> # Connect each building to its 2 nearest amenities
+    >>> nodes, edges = bridge_nodes(nodes_dict, proximity_method="knn", k=2)
+    >>> print(f"Edge types: {list(edges.keys())}")
+    Edge types: [('buildings', 'is_nearby', 'amenities'), ('amenities', 'is_nearby', 'buildings')]
+
+    Create proximity edges using fixed radius:
+
+    >>> # Connect nodes within 1.0 unit distance
+    >>> nodes, edges = bridge_nodes(nodes_dict, proximity_method="gilbert", radius=1.0)
+    >>> buildings_to_amenities = edges[('buildings', 'is_nearby', 'amenities')]
+    >>> print(f"Buildings→Amenities edges: {len(buildings_to_amenities)}")
+    Buildings→Amenities edges: 2
+
+    Return as NetworkX graph:
+
+    >>> G = bridge_nodes(nodes_dict, proximity_method="knn", k=1, as_nx=True)
+    >>> print(f"Graph has {G.number_of_nodes()} nodes and {G.number_of_edges()} edges")
+    Graph has 5 nodes and 4 edges
+    """
+    if len(nodes_dict) < 2:
+        msg = "Need at least two layers."
+        raise ValueError(msg)
+
+    method = proximity_method.lower()
+    if method not in {"knn", "gilbert"}:
+        msg = "proximity_method must be 'knn' or 'gilbert'."
+        raise ValueError(msg)
+
+    # quick validation of mandatory keyword arguments
+    if method == "knn":
+        kwargs.setdefault("k", 1)
+    elif "radius" not in kwargs:
+        msg = "gilbert method requires `radius=`."
+        raise ValueError(msg)
+
+    edges_dict: dict[tuple[str, str, str], gpd.GeoDataFrame] = {}
+
+    # create *directed* edges for every ordered pair of layers
+    for src_type, dst_type in itertools.permutations(nodes_dict.keys(), 2):
+        src_gdf, dst_gdf = nodes_dict[src_type], nodes_dict[dst_type]
+        edges = _cross_layer_edges(src_gdf, dst_gdf, method, **kwargs)
+
+        edges_dict[(src_type, "is_nearby", dst_type)] = edges
+
+    if not edges_dict:
+        msg = "No inter-layer proximity edges were generated."
+        raise ValueError(msg)
+
+    if as_nx:
+        return gdf_to_nx(
+            nodes=nodes_dict,
+            edges=edges_dict,
+            keep_geom=True,
+            multigraph=multigraph,
+        )
+
+    return nodes_dict, edges_dict
+
+
+def _cross_layer_edges(
+    src_gdf: gpd.GeoDataFrame,
+    dst_gdf: gpd.GeoDataFrame,
+    proximity_method: str,
+    **kwargs: Any,
+) -> gpd.GeoDataFrame:
+    """
+    Build *directed* proximity edges from every src node to (at least one)
+    dst node, guaranteeing that EACH src node is represented in the final
+    edge set.
+
+    The routine still relies exclusively on the PUBLIC builders
+    `knn_graph` and `gilbert_graph`, it just post-processes their output
+    to make sure that no src node is left behind.
+    """
+    # ------------------------------------------------------------------
+    # 1) run the public builder once on the UNION of the two layers
+    # ------------------------------------------------------------------
+    both = pd.concat([src_gdf, dst_gdf])
+
+    if proximity_method == "knn":
+        k = int(kwargs.get("k", 1))
+        _, edges_gdf = knn_graph(both, k=k, as_nx=False)
+    else:
+        radius = float(kwargs["radius"])
+        _, edges_gdf = gilbert_graph(both, radius=radius, as_nx=False)
+
+    # keep only src → dst relations
+    src_ids = set(src_gdf.index)
+    dst_ids = set(dst_gdf.index)
+
+    mask = (
+        edges_gdf.index.get_level_values(0).isin(src_ids)
+        & edges_gdf.index.get_level_values(1).isin(dst_ids)
+    )
+    edges_gdf = edges_gdf.loc[mask]
+
+    # ------------------------------------------------------------------
+    # 2) guarantee that *all* src nodes appear at least once
+    # ------------------------------------------------------------------
+    missing_src = src_ids.difference(edges_gdf.index.get_level_values(0))
+
+    if missing_src:
+        add_edges = _fill_missing_src_edges(
+            src_gdf.loc[list(missing_src)],
+            dst_gdf,
+            proximity_method,
+            **kwargs,
+        )
+        # union → drop potential duplicates that may occur for radius case
+        edges_gdf = (
+            pd.concat([edges_gdf, add_edges])
+            .loc[~pd.concat([edges_gdf, add_edges]).index.duplicated()]
+        )
+
+    return edges_gdf
+
+
+def _fill_missing_src_edges(
+    lonely_src_gdf: gpd.GeoDataFrame,
+    dst_gdf: gpd.GeoDataFrame,
+    proximity_method: str,
+    **kwargs: Any,
+) -> gpd.GeoDataFrame:
+    """
+    For every source node that did not yet get a dst neighbour, build the
+    minimal set of extra edges so that *all* sources are represented.
+
+    The helper now guarantees that the temporary “mini” dataframe passed to
+    the public proximity builders is a *GeoDataFrame*; otherwise
+    `validate_gdf()` inside `knn_graph` / `gilbert_graph` raises a TypeError.
+    """
+    extra_edges = []
+    geom_col = dst_gdf.geometry.name or "geometry"
+    crs = dst_gdf.crs
+
+    for src_id in lonely_src_gdf.index:
+        # a one-row GeoDataFrame for the missing source
+        src_single = lonely_src_gdf.loc[[src_id]]
+        # just to be absolutely safe, cast it explicitly to GeoDataFrame
+        src_single = gpd.GeoDataFrame(src_single, geometry=geom_col, crs=crs)
+
+        # union of that single source with the whole dst layer
+        mini = pd.concat([src_single, dst_gdf])
+        # concat can downgrade the object to plain DataFrame – cast back
+        mini = gpd.GeoDataFrame(mini, geometry=geom_col, crs=crs)
+
+        # run the chosen public builder
+        if proximity_method == "knn":
+            k = int(kwargs.get("k", 1))
+            _, mini_edges = knn_graph(mini, k=k, as_nx=False)
+        else:  # gilbert
+            radius = float(kwargs["radius"])
+            _, mini_edges = gilbert_graph(mini, radius=radius, as_nx=False)
+
+        # keep only edges that go from *this* src → any dst
+        mask = (
+            mini_edges.index.get_level_values(0) == src_id
+        ) & mini_edges.index.get_level_values(1).isin(dst_gdf.index)
+        extra_edges.append(mini_edges.loc[mask])
+
+    if extra_edges:
+        return pd.concat(extra_edges)
+
+    # should not occur, but return an empty GeoDataFrame for completeness
+    return gpd.GeoDataFrame([], columns=["geometry", "weight"], geometry="geometry", crs=crs)
