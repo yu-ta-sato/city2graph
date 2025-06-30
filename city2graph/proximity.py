@@ -13,7 +13,7 @@ internal workflow:
 The public API remains unchanged:
     • knn_graph
     • delaunay_graph
-    • gilbert_graph
+    • fixed_radius_graph
     • waxman_graph
     • bridge_nodes
 No classes are introduced everything is implemented with plain functions.
@@ -46,7 +46,7 @@ if TYPE_CHECKING:
 __all__ = [
     "bridge_nodes",
     "delaunay_graph",
-    "gilbert_graph",
+    "fixed_radius_graph",
     "knn_graph",
     "waxman_graph",
 ]
@@ -113,7 +113,7 @@ def knn_graph(
     See Also
     --------
     delaunay_graph : Generate a Delaunay triangulation graph
-    gilbert_graph : Generate a fixed-radius (Gilbert) graph
+    fixed_radius_graph : Generate a fixed-radius graph
     waxman_graph : Generate a probabilistic Waxman graph
 
     Notes
@@ -266,7 +266,7 @@ def delaunay_graph(
     See Also
     --------
     knn_graph : Generate a k-nearest neighbour graph.
-    gilbert_graph : Generate a fixed-radius (Gilbert) graph.
+    fixed_radius_graph : Generate a fixed-radius graph.
     waxman_graph : Generate a probabilistic Waxman graph.
 
     Notes
@@ -314,7 +314,7 @@ def delaunay_graph(
     return G if as_nx else nx_to_gdf(G, nodes=True, edges=True)
 
 
-def gilbert_graph(
+def fixed_radius_graph(
     gdf: gpd.GeoDataFrame,
     radius: float,
     distance_metric: str = "euclidean",
@@ -323,7 +323,7 @@ def gilbert_graph(
     target_gdf: gpd.GeoDataFrame | None = None,
     as_nx: bool = False,
 ) -> tuple[gpd.GeoDataFrame, gpd.GeoDataFrame] | nx.Graph:
-    r"""Generate a fixed-radius (Gilbert) graph from a GeoDataFrame of points.
+    r"""Generate a fixed-radius graph from a GeoDataFrame of points.
 
     This function constructs a graph where nodes are connected if the distance between
     them is within a specified radius. This model is particularly useful for modeling
@@ -408,8 +408,8 @@ def gilbert_graph(
     Hospital_D hospital   POINT (1.000 3.000)
     Mall_E   commercial   POINT (4.000 4.000)
 
-    >>> # Generate Gilbert graph with radius=2.0
-    >>> nodes_gdf, edges_gdf = gilbert_graph(gdf, radius=2.0)
+    >>> # Generate fix radius graph with radius=2.0
+    >>> nodes_gdf, edges_gdf = fixed_radius_graph(gdf, radius=2.0)
     >>> print(f"\\nConnections within 2.0 units:")
     >>> print(f"Nodes: {len(nodes_gdf)}, Edges: {len(edges_gdf)}")
     Connections within 2.0 units:
@@ -424,24 +424,24 @@ def gilbert_graph(
     3: weight = 2.236
 
     >>> # Compare with smaller radius
-    >>> nodes_small, edges_small = gilbert_graph(gdf, radius=1.0)
+    >>> nodes_small, edges_small = fixed_radius_graph(gdf, radius=1.0)
     >>> print(f"\\nWith radius=1.0: {len(edges_small)} edges")
     With radius=1.0: 0 edges
 
     >>> # Compare with larger radius  
-    >>> nodes_large, edges_large = gilbert_graph(gdf, radius=3.0)
+    >>> nodes_large, edges_large = fixed_radius_graph(gdf, radius=3.0)
     >>> print(f"With radius=3.0: {len(edges_large)} edges")
     With radius=3.0: 7 edges
 
     >>> # Manhattan distance example
-    >>> nodes_manh, edges_manh = gilbert_graph(
+    >>> nodes_manh, edges_manh = fixed_radius_graph(
     ...     gdf, radius=3.0, distance_metric="manhattan"
     ... )
     >>> print(f"\\nManhattan metric (radius=3.0): {len(edges_manh)} edges")
     Manhattan metric (radius=3.0): 6 edges
 
     >>> # NetworkX graph with radius information
-    >>> G = gilbert_graph(gdf, radius=2.5, as_nx=True)
+    >>> G = fixed_radius_graph(gdf, radius=2.5, as_nx=True)
     >>> print(f"\\nNetworkX graph properties:")
     >>> print(f"Radius parameter: {G.graph['radius']}")
     >>> print(f"Graph density: {nx.density(G):.3f}")
@@ -457,7 +457,7 @@ def gilbert_graph(
     ...     'geometry': [Point(2, 2), Point(3.5, 1.5)]
     ... }, crs="EPSG:4326", index=['Emergency_Hub', 'Transit_Stop'])
     >>> 
-    >>> nodes_dir, edges_dir = gilbert_graph(
+    >>> nodes_dir, edges_dir = fixed_radius_graph(
     ...     gdf, radius=2.5, target_gdf=targets
     ... )
     >>> print(f"\\nDirected connections to targets: {len(edges_dir)} edges")
@@ -566,7 +566,7 @@ def waxman_graph(
     --------
     knn_graph : Generate a k-nearest neighbour graph
     delaunay_graph : Generate a Delaunay triangulation graph
-    gilbert_graph : Generate a fixed-radius (Gilbert) graph
+    fixed_radius_graph : Generate a fixed-radius graph
 
     Notes
     -----
@@ -694,7 +694,7 @@ def bridge_nodes(
     This function creates a multi-layer spatial network by generating directed proximity
     edges from nodes in one GeoDataFrame layer to nodes in another. It systematically
     processes all ordered pairs of layers and applies either k-nearest neighbors (KNN)
-    or fixed-radius (Gilbert) method to establish inter-layer connections. This is
+    or fixed-radius method to establish inter-layer connections. This is
     particularly useful for modeling complex urban systems, ecological networks, or
     multi-modal transportation systems where different types of entities interact.
 
@@ -707,7 +707,7 @@ def bridge_nodes(
     proximity_method : str, default "knn"
         The method to use for generating proximity edges between layers. Options are:
         - "knn": k-nearest neighbors method
-        - "gilbert": fixed-radius method
+        - "fixed_radius": fixed-radius method
     multigraph : bool, default False
         If True, the resulting NetworkX graph will be a MultiGraph, allowing multiple
         edges between the same pair of nodes from different proximity relationships.
@@ -725,7 +725,7 @@ def bridge_nodes(
         - network_gdf : geopandas.GeoDataFrame, optional
             Network for "network" distance calculations
 
-        For `proximity_method="gilbert"`:
+        For `proximity_method="fixed_radius"`:
         - radius : float, required
             Maximum connection distance between layers
         - distance_metric : str, default "euclidean"
@@ -748,13 +748,13 @@ def bridge_nodes(
     ------
     ValueError
         If `nodes_dict` contains fewer than two layers.
-        If `proximity_method` is not "knn" or "gilbert".
-        If `proximity_method` is "gilbert" but `radius` is not provided in `kwargs`.
+        If `proximity_method` is not "knn" or "fixed_radius".
+        If `proximity_method` is "fixed_radius" but `radius` is not provided in `kwargs`.
 
     See Also
     --------
     knn_graph : Generate a k-nearest neighbour graph
-    gilbert_graph : Generate a fixed-radius (Gilbert) graph
+    fixed_radius_graph : Generate a fixed-radius graph
 
     Notes
     -----
@@ -834,33 +834,33 @@ def bridge_nodes(
     1    1.414214
     2    2.828427
 
-    >>> # Bridge nodes using Gilbert method with radius
-    >>> nodes_gilbert, edges_gilbert = bridge_nodes(
-    ...     nodes_dict, proximity_method="gilbert", radius=2.5
+    >>> # Bridge nodes using fixed radius
+    >>> nodes_fr, edges_fr = bridge_nodes(
+    ...     nodes_dict, proximity_method="fixed_radius", radius=2.5
     ... )
     >>>
-    >>> total_gilbert_edges = sum(len(gdf) for gdf in edges_gilbert.values())
-    >>> print(f"\\nGilbert method (radius=2.5): {total_gilbert_edges} total edges")
-    Gilbert method (radius=2.5): 8 total edges
+    >>> total_fr_edges = sum(len(gdf) for gdf in edges_fr.values())
+    >>> print(f"\\nFixed radius method (radius=2.5): {total_fr_edges} total edges")
+    Fixed radius method (radius=2.5): 8 total edges
 
     >>> # Compare edge counts by method
     >>> print("\\nEdge count comparison:")
     >>> for edge_key in edges_out.keys():
     ...     knn_count = len(edges_out[edge_key])
-    ...     gilbert_count = len(edges_gilbert[edge_key]) if edge_key in edges_gilbert else 0
-    ...     print(f"  {edge_key[0]} → {edge_key[2]}: KNN={knn_count}, Gilbert={gilbert_count}")
+    ...     fr_count = len(edges_fr[edge_key]) if edge_key in edges_fr else 0
+    ...     print(f"  {edge_key[0]} → {edge_key[2]}: KNN={knn_count}, Fixed radious={fr_count}")
     Edge count comparison:
-      schools → hospitals: KNN=3, Gilbert=2
-      schools → parks: KNN=3, Gilbert=3
-      hospitals → schools: KNN=2, Gilbert=1  
-      hospitals → parks: KNN=2, Gilbert=1
-      parks → schools: KNN=3, Gilbert=1
+      schools → hospitals: KNN=3, Fixed radious=2
+      schools → parks: KNN=3, Fixed radious=3
+      hospitals → schools: KNN=2, Fixed radious=1
+      hospitals → parks: KNN=2, Fixed radious=1
+      parks → schools: KNN=3, Fixed radious=1
     """
     if len(nodes_dict) < 2:
         msg = "`nodes_dict` needs at least two layers"
         raise ValueError(msg)
-    if proximity_method.lower() not in {"knn", "gilbert"}:
-        msg = "proximity_method must be 'knn' or 'gilbert'"
+    if proximity_method.lower() not in {"knn", "fixed_radius"}:
+        msg = "proximity_method must be 'knn' or 'fixed_radius'"
         raise ValueError(msg)
 
     edge_dict = {}
@@ -876,9 +876,9 @@ def bridge_nodes(
                 target_gdf=dst_gdf,
                 **{k_: v for k_, v in kwargs.items() if k_ not in {"k", "radius"}},
             )
-        else:  # gilbert
+        else:  # fixed_radius
             radius = float(kwargs["radius"])
-            _, edges_gdf = gilbert_graph(
+            _, edges_gdf = fixed_radius_graph(
                 src_gdf,
                 radius=radius,
                 target_gdf=dst_gdf,
