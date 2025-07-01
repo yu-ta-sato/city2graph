@@ -131,6 +131,7 @@ docs = [
 dev = [
     "pytest",
     "pytest-cov",
+    "mypy",
     "ipython >=8.14.0",
     "jupyter >=1.0.0",
     "notebook >=7.0.0",
@@ -201,6 +202,9 @@ extend-ignore = [
     "TRY300",
     ]
 extend-select = ["ALL"]
+
+[tool.mypy]
+python_version = 3.12
 
 [tool.ruff.lint.isort]
 force-single-line = true

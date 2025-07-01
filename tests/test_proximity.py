@@ -577,7 +577,7 @@ class TestNetworkGeometryHandling:
         # This should trigger the fallback case in lines 1442-1444
         nodes, edges = _run_or_skip(knn_graph, points, k=1,
                                    distance_metric="network", network_gdf=network_with_pos)
-        
+
         # Should create edges using fallback geometry (direct line between original coordinates)
         assert len(edges) >= 0, "Should handle single network node case gracefully"
         if not edges.empty:
