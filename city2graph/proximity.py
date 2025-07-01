@@ -46,6 +46,7 @@ if TYPE_CHECKING:
 __all__ = [
     "bridge_nodes",
     "delaunay_graph",
+    "euclidean_minimum_spanning_tree",
     "fixed_radius_graph",
     "gabriel_graph",
     "knn_graph",
@@ -315,6 +316,306 @@ def delaunay_graph(
     return G if as_nx else nx_to_gdf(G, nodes=True, edges=True)
 
 
+def gabriel_graph(
+    gdf: gpd.GeoDataFrame,
+    distance_metric: str = "euclidean",
+    network_gdf: gpd.GeoDataFrame | None = None,
+    *,
+    as_nx: bool = False,
+) -> tuple[gpd.GeoDataFrame, gpd.GeoDataFrame] | nx.Graph:
+    r"""Generate a Gabriel graph from a GeoDataFrame of points.
+
+    In a Gabriel graph two nodes *u* and *v* are connected iff the closed
+    disc that has $uv$ as its diameter contains no other node of the set.
+
+    Parameters
+    ----------
+    gdf : geopandas.GeoDataFrame
+        Input point layer. The GeoDataFrame index is preserved as the node id.
+    distance_metric : {'euclidean', 'manhattan', 'network'}, default 'euclidean'
+        Metric used for edge weights / geometries (see the other generators).
+    network_gdf : geopandas.GeoDataFrame, optional
+        Required when *distance_metric='network'*.
+    as_nx : bool, default False
+        If *True* return a NetworkX graph, otherwise return two GeoDataFrames
+        (nodes, edges) via `nx_to_gdf`.
+
+    Returns
+    -------
+    tuple[gpd.GeoDataFrame, gpd.GeoDataFrame] | networkx.Graph
+        Same convention as the other graph-generator functions.
+
+    Notes
+    -----
+    • The Gabriel graph is a sub-graph of the Delaunay triangulation; therefore
+      the implementation first builds the Delaunay edges then filters them
+      according to the disc-emptiness predicate, achieving an overall
+
+      $$\mathcal O(n \log n + m k)$$ complexity ( *m* = Delaunay edges,
+      *k* = average neighbours tested per edge).
+    • When the input layer has exactly two points, the unique edge is returned.
+    • If the layer has fewer than two points, an empty graph is produced.
+
+    Examples
+    --------
+    >>> nodes, edges = gabriel_graph(points_gdf)
+    >>> G = gabriel_graph(points_gdf, as_nx=True)
+    """
+    # ---- node preparation ---------------------------------------------------
+    G, coords, node_ids = _prepare_nodes(gdf)
+    n_points = len(coords)
+    if n_points < 2:
+        return G if as_nx else nx_to_gdf(G, nodes=True, edges=True)
+
+    # ---- candidate edges: Delaunay ------------------------------------------
+    if n_points == 2:
+        delaunay_edges = {(0, 1)}
+    else:
+        tri = Delaunay(coords)
+        delaunay_edges = {
+            tuple(sorted((i, j)))
+            for simplex in tri.simplices
+            for i, j in combinations(simplex, 2)
+        }
+
+    # ---- Gabriel filtering --------------------------------------------------
+    # Square distances for numerical stability
+    kept_edges: set[tuple[Any, Any]] = set()
+    tol = 1e-12
+    for i, j in delaunay_edges:
+        mid = 0.5 * (coords[i] + coords[j])
+        rad2 = np.sum((coords[i] - coords[j]) ** 2) * 0.25  # (|pi-pj|/2)^2
+        if rad2 == 0.0:   # coincident points – ignore
+            continue
+        # squared distance of *all* points to the midpoint
+        d2 = np.sum((coords - mid) ** 2, axis=1)
+        mask = d2 <= rad2 + tol
+        # exactly the two endpoints inside the disc?
+        if np.count_nonzero(mask) == 2:
+            kept_edges.add((node_ids[i], node_ids[j]))
+
+    # ---- weights + geometries ----------------------------------------------
+    dm = None
+    if distance_metric.lower() == "network":
+        dm = _distance_matrix(coords, "network", network_gdf, gdf.crs)
+
+    _add_edges(
+        G,
+        kept_edges,
+        coords,
+        node_ids,
+        metric=distance_metric,
+        dm=dm,
+        network_gdf=network_gdf,
+    )
+
+    return G if as_nx else nx_to_gdf(G, nodes=True, edges=True)
+
+
+def relative_neighborhood_graph(
+    gdf: gpd.GeoDataFrame,
+    distance_metric: str = "euclidean",
+    network_gdf: gpd.GeoDataFrame | None = None,
+    *,
+    as_nx: bool = False,
+) -> tuple[gpd.GeoDataFrame, gpd.GeoDataFrame] | nx.Graph:
+    r"""Generate a Relative-Neighbourhood Graph (RNG) from a GeoDataFrame.
+
+    In an RNG two nodes *u* and *v* are connected iff there is **no third node
+    *w*** such that both $$d(u,w) < d(u,v)$$ **and** $$d(v,w) < d(u,v)$$.
+    Equivalently, the intersection of the two open discs having radius
+
+    $$d(u,v)$$ and centres *u* and *v* (the *lune*) is empty.
+
+    Parameters
+    ----------
+    gdf : geopandas.GeoDataFrame
+        Input point layer whose index provides the node ids.
+    distance_metric : {'euclidean', 'manhattan', 'network'}, default 'euclidean'
+        Metric used to attach edge weights / geometries.
+    network_gdf : geopandas.GeoDataFrame, optional
+        Required when *distance_metric='network'*.
+    as_nx : bool, default False
+        If *True* return a NetworkX graph, otherwise return two GeoDataFrames
+        (nodes, edges) via `nx_to_gdf`.
+
+    Returns
+    -------
+    tuple[gpd.GeoDataFrame, gpd.GeoDataFrame] | networkx.Graph
+        Same convention as the other graph-generator functions.
+
+    Notes
+    -----
+    •  The RNG is a sub-graph of the Delaunay triangulation; therefore the
+       implementation first collects Delaunay edges ( $$\mathcal O(n\log n)$$ )
+       and then filters them according to the lune-emptiness predicate.
+    •  When the input layer has exactly two points the unique edge is returned.
+    •  If the layer has fewer than two points, an empty graph is produced.
+
+    Examples
+    --------
+    >>> nodes, edges = relative_neighborhood_graph(points_gdf)
+    >>> G = relative_neighborhood_graph(points_gdf, as_nx=True)
+    """
+    # ---- node preparation -------------------------------------------------
+    G, coords, node_ids = _prepare_nodes(gdf)
+    n_points = len(coords)
+    if n_points < 2:
+        return G if as_nx else nx_to_gdf(G, nodes=True, edges=True)
+
+    # ---- candidate edges: Delaunay ---------------------------------------
+    if n_points == 2:
+        cand_edges = {(0, 1)}
+    else:
+        tri = Delaunay(coords)
+        cand_edges = {
+            tuple(sorted((i, j)))
+            for simplex in tri.simplices
+            for i, j in combinations(simplex, 2)
+        }
+
+    # ---- RNG filtering ----------------------------------------------------
+    kept_edges: set[tuple[Any, Any]] = set()
+    # work with squared distances to avoid sqrt
+    for i, j in cand_edges:
+        dij2 = np.dot(coords[i] - coords[j], coords[i] - coords[j])
+        if dij2 == 0.0:  # coincident points → ignore
+            continue
+        # vectorised test of the lune-emptiness predicate
+        di2 = np.sum((coords - coords[i]) ** 2, axis=1) < dij2
+        dj2 = np.sum((coords - coords[j]) ** 2, axis=1) < dij2
+        # any third point closer to *both* i and j?
+        closer_both = np.where(di2 & dj2)[0]
+        if len(closer_both) == 0:
+            kept_edges.add((node_ids[i], node_ids[j]))
+
+    # ---- weights + geometries --------------------------------------------
+    dm = None
+    if distance_metric.lower() == "network":
+        dm = _distance_matrix(coords, "network", network_gdf, gdf.crs)
+
+    _add_edges(
+        G,
+        kept_edges,
+        coords,
+        node_ids,
+        metric=distance_metric,
+        dm=dm,
+        network_gdf=network_gdf,
+    )
+    return G if as_nx else nx_to_gdf(G, nodes=True, edges=True)
+
+
+def euclidean_minimum_spanning_tree(
+    gdf: gpd.GeoDataFrame,
+    distance_metric: str = "euclidean",
+    network_gdf: gpd.GeoDataFrame | None = None,
+    *,
+    as_nx: bool = False,
+) -> tuple[gpd.GeoDataFrame, gpd.GeoDataFrame] | nx.Graph:
+    r"""Generate a (generalised) Euclidean Minimum Spanning Tree from a GeoDataFrame of points.
+
+    The classical Euclidean Minimum Spanning Tree (EMST) is the minimum-
+    total-length tree that connects a set of points when edge weights are the
+    straight-line ( L₂ ) distances.  For consistency with the other generators
+    this implementation also supports *manhattan* and *network* metrics - it
+    simply computes the minimum-weight spanning tree under the chosen metric.
+    When the metric is *euclidean* the edge search is restricted to the
+    Delaunay triangulation (  EMST ⊆ Delaunay ), guaranteeing an
+
+    $$\mathcal O(n \log n)$$ overall complexity.  With other metrics, or
+    degenerate cases where the triangulation cannot be built, the algorithm
+    gracefully falls back to the complete graph.
+
+    Parameters
+    ----------
+    gdf : geopandas.GeoDataFrame
+        Input point layer.  The index is preserved as the node identifier.
+    distance_metric : {'euclidean', 'manhattan', 'network'}, default 'euclidean'
+        Metric used for the edge weights / geometries.
+    network_gdf : geopandas.GeoDataFrame, optional
+        Required when *distance_metric='network'*.  Must contain the network
+        arcs with valid *pos* attributes on its nodes.
+    as_nx : bool, default False
+        If *True* return a NetworkX graph, otherwise return two GeoDataFrames
+        (nodes, edges) via ``nx_to_gdf``.
+
+    Returns
+    -------
+    tuple[gpd.GeoDataFrame, gpd.GeoDataFrame] | networkx.Graph
+        Same convention as the other graph-generator functions.
+
+    Examples
+    --------
+    >>> nodes, edges = euclidean_minimum_spanning_tree(points_gdf)
+    >>> G = euclidean_minimum_spanning_tree(points_gdf, as_nx=True)
+
+    Notes
+    -----
+    •  The resulting graph always contains *n - 1* edges (or 0 / 1 when the
+       input has < 2 points).
+    •  For planar Euclidean inputs the computation is
+
+       $$\mathcal O(n \log n)$$ thanks to the Delaunay pruning.
+    •  All the usual spatial attributes (*weight*, *geometry*, CRS checks,
+       etc.) are attached through the shared private helpers.
+    """
+    # ---- node preparation -------------------------------------------------
+    G, coords, node_ids = _prepare_nodes(gdf)
+    n_points = len(coords)
+    if n_points < 2:
+        # MST is empty (0 nodes) or a single isolated node
+        return G if as_nx else nx_to_gdf(G, nodes=True, edges=True)
+
+    # ---- candidate edge set ----------------------------------------------
+    # Fast O(n) candidate set via Delaunay when it is applicable
+    use_complete_graph = False
+    cand_edges: set[tuple[Any, Any]]
+
+    if distance_metric.lower() == "euclidean" and n_points >= 3:
+        try:
+            tri = Delaunay(coords)
+            cand_edges = {
+                tuple(sorted((i, j)))
+                for simplex in tri.simplices
+                for i, j in combinations(simplex, 2)
+            }
+        except QhullError:
+            # Collinear or otherwise degenerate set – fall back
+            use_complete_graph = True
+    else:
+        use_complete_graph = True
+
+    if use_complete_graph:
+        cand_edges = {
+            (i, j) for i in range(n_points) for j in range(i + 1, n_points)
+        }
+
+    # Convert vertex indices → actual node ids
+    cand_edges = {(node_ids[i], node_ids[j]) for i, j in cand_edges}
+
+    # ---- attach weights / geometries -------------------------------------
+    dm = None
+    if distance_metric.lower() == "network":
+        dm = _distance_matrix(coords, "network", network_gdf, gdf.crs)
+
+    _add_edges(
+        G,
+        cand_edges,
+        coords,
+        node_ids,
+        metric=distance_metric,
+        dm=dm,
+        network_gdf=network_gdf,
+    )
+
+    # ---- compute the minimum-spanning tree -------------------------------
+    mst_G = nx.minimum_spanning_tree(G, weight="weight", algorithm="kruskal")
+
+    # ---- output formatting ------------------------------------------------
+    return mst_G if as_nx else nx_to_gdf(mst_G, nodes=True, edges=True)
+
+
 def fixed_radius_graph(
     gdf: gpd.GeoDataFrame,
     radius: float,
@@ -457,7 +758,7 @@ def fixed_radius_graph(
     ...     'service': ['Emergency', 'Transit'],
     ...     'geometry': [Point(2, 2), Point(3.5, 1.5)]
     ... }, crs="EPSG:4326", index=['Emergency_Hub', 'Transit_Stop'])
-    >>> 
+    >>>
     >>> nodes_dir, edges_dir = fixed_radius_graph(
     ...     gdf, radius=2.5, target_gdf=targets
     ... )
@@ -679,196 +980,6 @@ def waxman_graph(
 
     _add_edges(G, edges, coords, node_ids, metric=distance_metric, dm=dm, network_gdf=network_gdf)
     G.graph.update({"beta": beta, "r0": r0})
-    return G if as_nx else nx_to_gdf(G, nodes=True, edges=True)
-
-
-def gabriel_graph(
-    gdf: gpd.GeoDataFrame,
-    distance_metric: str = "euclidean",
-    network_gdf: gpd.GeoDataFrame | None = None,
-    *,
-    as_nx: bool = False,
-) -> tuple[gpd.GeoDataFrame, gpd.GeoDataFrame] | nx.Graph:
-    r"""Generate a Gabriel graph from a GeoDataFrame of points.
-
-    In a Gabriel graph two nodes *u* and *v* are connected iff the closed
-    disc that has $uv$ as its diameter contains no other node of the set.
-
-    Parameters
-    ----------
-    gdf : geopandas.GeoDataFrame
-        Input point layer. The GeoDataFrame index is preserved as the node id.
-    distance_metric : {'euclidean', 'manhattan', 'network'}, default 'euclidean'
-        Metric used for edge weights / geometries (see the other generators).
-    network_gdf : geopandas.GeoDataFrame, optional
-        Required when *distance_metric='network'*.
-    as_nx : bool, default False
-        If *True* return a NetworkX graph, otherwise return two GeoDataFrames
-        (nodes, edges) via `nx_to_gdf`.
-
-    Returns
-    -------
-    tuple[gpd.GeoDataFrame, gpd.GeoDataFrame] | networkx.Graph
-        Same convention as the other graph-generator functions.
-
-    Notes
-    -----
-    • The Gabriel graph is a sub-graph of the Delaunay triangulation; therefore
-      the implementation first builds the Delaunay edges then filters them
-      according to the disc-emptiness predicate, achieving an overall
-
-      $$\mathcal O(n \log n + m k)$$ complexity ( *m* = Delaunay edges,
-      *k* = average neighbours tested per edge).
-    • When the input layer has exactly two points, the unique edge is returned.
-    • If the layer has fewer than two points, an empty graph is produced.
-
-    Examples
-    --------
-    >>> nodes, edges = gabriel_graph(points_gdf)
-    >>> G = gabriel_graph(points_gdf, as_nx=True)
-    """
-    # ---- node preparation ---------------------------------------------------
-    G, coords, node_ids = _prepare_nodes(gdf)
-    n_points = len(coords)
-    if n_points < 2:
-        return G if as_nx else nx_to_gdf(G, nodes=True, edges=True)
-
-    # ---- candidate edges: Delaunay ------------------------------------------
-    if n_points == 2:
-        delaunay_edges = {(0, 1)}
-    else:
-        tri = Delaunay(coords)
-        delaunay_edges = {
-            tuple(sorted((i, j)))
-            for simplex in tri.simplices
-            for i, j in combinations(simplex, 2)
-        }
-
-    # ---- Gabriel filtering --------------------------------------------------
-    # Square distances for numerical stability
-    kept_edges: set[tuple[Any, Any]] = set()
-    tol = 1e-12
-    for i, j in delaunay_edges:
-        mid = 0.5 * (coords[i] + coords[j])
-        rad2 = np.sum((coords[i] - coords[j]) ** 2) * 0.25  # (|pi-pj|/2)^2
-        if rad2 == 0.0:   # coincident points – ignore
-            continue
-        # squared distance of *all* points to the midpoint
-        d2 = np.sum((coords - mid) ** 2, axis=1)
-        mask = d2 <= rad2 + tol
-        # exactly the two endpoints inside the disc?
-        if np.count_nonzero(mask) == 2:
-            kept_edges.add((node_ids[i], node_ids[j]))
-
-    # ---- weights + geometries ----------------------------------------------
-    dm = None
-    if distance_metric.lower() == "network":
-        dm = _distance_matrix(coords, "network", network_gdf, gdf.crs)
-
-    _add_edges(
-        G,
-        kept_edges,
-        coords,
-        node_ids,
-        metric=distance_metric,
-        dm=dm,
-        network_gdf=network_gdf,
-    )
-
-    return G if as_nx else nx_to_gdf(G, nodes=True, edges=True)
-
-
-def relative_neighborhood_graph(
-    gdf: gpd.GeoDataFrame,
-    distance_metric: str = "euclidean",
-    network_gdf: gpd.GeoDataFrame | None = None,
-    *,
-    as_nx: bool = False,
-) -> tuple[gpd.GeoDataFrame, gpd.GeoDataFrame] | nx.Graph:
-    r"""Generate a Relative-Neighbourhood Graph (RNG) from a GeoDataFrame.
-
-    In an RNG two nodes *u* and *v* are connected iff there is **no third node
-    *w*** such that both $$d(u,w) < d(u,v)$$ **and** $$d(v,w) < d(u,v)$$.
-    Equivalently, the intersection of the two open discs having radius
-
-    $$d(u,v)$$ and centres *u* and *v* (the *lune*) is empty.
-
-    Parameters
-    ----------
-    gdf : geopandas.GeoDataFrame
-        Input point layer whose index provides the node ids.
-    distance_metric : {'euclidean', 'manhattan', 'network'}, default 'euclidean'
-        Metric used to attach edge weights / geometries.
-    network_gdf : geopandas.GeoDataFrame, optional
-        Required when *distance_metric='network'*.
-    as_nx : bool, default False
-        If *True* return a NetworkX graph, otherwise return two GeoDataFrames
-        (nodes, edges) via `nx_to_gdf`.
-
-    Returns
-    -------
-    tuple[gpd.GeoDataFrame, gpd.GeoDataFrame] | networkx.Graph
-        Same convention as the other graph-generator functions.
-
-    Notes
-    -----
-    •  The RNG is a sub-graph of the Delaunay triangulation; therefore the
-       implementation first collects Delaunay edges ( $$\mathcal O(n\log n)$$ )
-       and then filters them according to the lune-emptiness predicate.
-    •  When the input layer has exactly two points the unique edge is returned.
-    •  If the layer has fewer than two points, an empty graph is produced.
-
-    Examples
-    --------
-    >>> nodes, edges = relative_neighborhood_graph(points_gdf)
-    >>> G = relative_neighborhood_graph(points_gdf, as_nx=True)
-    """
-    # ---- node preparation -------------------------------------------------
-    G, coords, node_ids = _prepare_nodes(gdf)
-    n_points = len(coords)
-    if n_points < 2:
-        return G if as_nx else nx_to_gdf(G, nodes=True, edges=True)
-
-    # ---- candidate edges: Delaunay ---------------------------------------
-    if n_points == 2:
-        cand_edges = {(0, 1)}
-    else:
-        tri = Delaunay(coords)
-        cand_edges = {
-            tuple(sorted((i, j)))
-            for simplex in tri.simplices
-            for i, j in combinations(simplex, 2)
-        }
-
-    # ---- RNG filtering ----------------------------------------------------
-    kept_edges: set[tuple[Any, Any]] = set()
-    # work with squared distances to avoid sqrt
-    for i, j in cand_edges:
-        dij2 = np.dot(coords[i] - coords[j], coords[i] - coords[j])
-        if dij2 == 0.0:  # coincident points → ignore
-            continue
-        # vectorised test of the lune-emptiness predicate
-        di2 = np.sum((coords - coords[i]) ** 2, axis=1) < dij2
-        dj2 = np.sum((coords - coords[j]) ** 2, axis=1) < dij2
-        # any third point closer to *both* i and j?
-        closer_both = np.where(di2 & dj2)[0]
-        if len(closer_both) == 0:
-            kept_edges.add((node_ids[i], node_ids[j]))
-
-    # ---- weights + geometries --------------------------------------------
-    dm = None
-    if distance_metric.lower() == "network":
-        dm = _distance_matrix(coords, "network", network_gdf, gdf.crs)
-
-    _add_edges(
-        G,
-        kept_edges,
-        coords,
-        node_ids,
-        metric=distance_metric,
-        dm=dm,
-        network_gdf=network_gdf,
-    )
     return G if as_nx else nx_to_gdf(G, nodes=True, edges=True)
 
 

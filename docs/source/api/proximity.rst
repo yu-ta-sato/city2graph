@@ -16,9 +16,9 @@ Gilbert random graphs, and Waxman random graphs.
 
 .. autofunction:: relative_neighborhood_graph
 
-.. autofunction:: fixed_radius_graph
+.. autofunction:: euclidean_minimum_spanning_tree
 
-.. autofunction:: gilbert_graph
+.. autofunction:: fixed_radius_graph
 
 .. autofunction:: waxman_graph
 
