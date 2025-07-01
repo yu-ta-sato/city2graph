@@ -10,14 +10,16 @@ Gilbert random graphs, and Waxman random graphs.
 
 .. autofunction:: knn_graph
 
-.. autofunction:: fixed_radius_graph
-
-.. autofunction:: waxman_graph
-
 .. autofunction:: delaunay_graph
+
+.. autofunction:: gabriel_graph
+
+.. autofunction:: relative_neighborhood_graph
+
+.. autofunction:: fixed_radius_graph
 
 .. autofunction:: gilbert_graph
 
-.. autofunction:: relative_neighborhood_graph
+.. autofunction:: waxman_graph
 
 .. autofunction:: bridge_nodes
