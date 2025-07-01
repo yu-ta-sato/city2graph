@@ -332,8 +332,10 @@ class GraphConverter:
             metadata.edge_types = list(edges_dict.keys())
 
         # Add nodes and edges
-        node_offset = self._add_heterogeneous_nodes(graph, nodes_dict, metadata)
-        self._add_heterogeneous_edges(graph, edges_dict, node_offset, metadata)
+        if nodes_dict:
+            self._add_heterogeneous_nodes(graph, nodes_dict, metadata)
+        if edges_dict:
+            self._add_heterogeneous_edges(graph, edges_dict, metadata)
 
         # Store metadata
         graph.graph.update(metadata.to_dict())
@@ -447,7 +449,6 @@ class GraphConverter:
         self,
         graph: nx.Graph | nx.MultiGraph,
         edges_dict: dict[tuple[str, str, str], gpd.GeoDataFrame],
-        _node_offset: dict[str, int],  # Unused but kept for interface consistency
         metadata: "GraphMetadata",
     ) -> None:
         """Add heterogeneous edges to graph."""
