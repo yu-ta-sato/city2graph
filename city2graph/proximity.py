@@ -126,6 +126,11 @@ def knn_graph(
     - For Manhattan distance, edge geometries follow L-shaped paths
     - The graph is undirected unless `target_gdf` is specified
 
+    References
+    ----------
+    Eppstein, D., Paterson, M.S. & Yao, F.F. On Nearest-Neighbor Graphs.
+    Discrete Comput Geom 17, 263-282 (1997). [1](https://doi.org/10.1007/PL00009293)
+
     Examples
     --------
     >>> import geopandas as gpd
@@ -279,6 +284,11 @@ def delaunay_graph(
     - If the input `gdf` has fewer than 3 points, an empty graph will be returned
       as Delaunay triangulation requires at least 3 non-collinear points.
 
+    References
+    ----------
+    Lee, D. T., & Schachter, B. J. (1980). Two algorithms for constructing a Delaunay
+    triangulation. International Journal of Computer & Information Sciences, 9(3), 219-242. [1](https://doi.org/10.1007/BF00977785)
+
     Examples
     --------
     >>> import geopandas as gpd
@@ -358,6 +368,11 @@ def gabriel_graph(
       *k* = average neighbours tested per edge).
     • When the input layer has exactly two points, the unique edge is returned.
     • If the layer has fewer than two points, an empty graph is produced.
+
+    References
+    ----------
+    Gabriel, K. R., & Sokal, R. R. (1969). A new statistical approach to geographic
+    variation analysis. Systematic zoology, 18(3), 259-278. [1](https://doi.org/10.2307/2412323)
 
     Examples
     --------
@@ -458,6 +473,11 @@ def relative_neighborhood_graph(
     •  When the input layer has exactly two points the unique edge is returned.
     •  If the layer has fewer than two points, an empty graph is produced.
 
+    References
+    ----------
+    Toussaint, G. T. (1980). The relative neighbourhood graph of a finite planar set.
+    Pattern recognition, 12(4), 261-268. [1](https://doi.org/10.1016/0031-3203(80)90066-7)
+
     Examples
     --------
     >>> nodes, edges = relative_neighborhood_graph(points_gdf)
@@ -553,6 +573,12 @@ def euclidean_minimum_spanning_tree(
         - nodes_gdf: GeoDataFrame of nodes with spatial and attribute information
         - edges_gdf: GeoDataFrame of edges with 'weight' and 'geometry' attributes
         If `as_nx` is True, returns a NetworkX graph object with spatial attributes.
+
+    References
+    ----------
+    March, W. B., Ram, P., & Gray, A. G. (2010, July). Fast euclidean minimum spanning tree:
+    algorithm, analysis, and applications. In Proceedings of the 16th ACM SIGKDD international
+    conference on Knowledge discovery and data mining (pp. 603-612). [1](https://doi.org/10.1145/1835804.1835882)
 
     Examples
     --------
@@ -685,6 +711,12 @@ def fixed_radius_graph(
     delaunay_graph : Generate a Delaunay triangulation graph
     waxman_graph : Generate a probabilistic Waxman graph
 
+    References
+    ----------
+    Bentley, J. L., Stanat, D. F., & Williams Jr, E. H. (1977).
+    The complexity of finding fixed-radius near neighbors.
+    Information processing letters, 6(6), 209-212. [1](https://doi.org/10.1016/0020-0190(77)90070-9)
+
     Notes
     -----
     - Node IDs are preserved from the input GeoDataFrame's index
@@ -698,7 +730,7 @@ def fixed_radius_graph(
     >>> import geopandas as gpd
     >>> import numpy as np
     >>> from shapely.geometry import Point
-    >>> 
+    >>>
     >>> # Create a sample GeoDataFrame representing city facilities
     >>> facilities = {
     ...     'name': ['Library_A', 'Park_B', 'School_C', 'Hospital_D', 'Mall_E'],
@@ -887,6 +919,11 @@ def waxman_graph(
     - The graph stores parameters in `G.graph["beta"]` and `G.graph["r0"]`
     - Results are stochastic; use `seed` parameter for reproducible outputs
     - The graph is undirected with symmetric edge probabilities
+
+    References
+    ----------
+    Waxman, B. M. (2002). Routing of multipoint connections.
+    IEEE journal on selected areas in communications, 6(9), 1617-1622. [1](https://doi.org/10.1109/49.12889)
 
     Examples
     --------
