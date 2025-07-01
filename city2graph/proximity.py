@@ -254,11 +254,11 @@ def delaunay_graph(
 
     Returns
     -------
-    geopandas.GeoDataFrame or networkx.Graph
+    tuple[geopandas.GeoDataFrame, geopandas.GeoDataFrame] or networkx.Graph
         If `as_nx` is False, returns a tuple of GeoDataFrames:
-        - nodes_gdf: GeoDataFrame of nodes (same as input `gdf` with added attributes).
-        - edges_gdf: GeoDataFrame of edges with 'weight' and 'geometry' attributes.
-        If `as_nx` is True, returns a NetworkX graph object.
+        - nodes_gdf: GeoDataFrame of nodes with spatial and attribute information
+        - edges_gdf: GeoDataFrame of edges with 'weight' and 'geometry' attributes
+        If `as_nx` is True, returns a NetworkX graph object with spatial attributes.
 
     Raises
     ------
@@ -342,8 +342,11 @@ def gabriel_graph(
 
     Returns
     -------
-    tuple[gpd.GeoDataFrame, gpd.GeoDataFrame] | networkx.Graph
-        Same convention as the other graph-generator functions.
+    tuple[geopandas.GeoDataFrame, geopandas.GeoDataFrame] or networkx.Graph
+        If `as_nx` is False, returns a tuple of GeoDataFrames:
+        - nodes_gdf: GeoDataFrame of nodes with spatial and attribute information
+        - edges_gdf: GeoDataFrame of edges with 'weight' and 'geometry' attributes
+        If `as_nx` is True, returns a NetworkX graph object with spatial attributes.
 
     Notes
     -----
@@ -441,8 +444,11 @@ def relative_neighborhood_graph(
 
     Returns
     -------
-    tuple[gpd.GeoDataFrame, gpd.GeoDataFrame] | networkx.Graph
-        Same convention as the other graph-generator functions.
+    tuple[geopandas.GeoDataFrame, geopandas.GeoDataFrame] or networkx.Graph
+        If `as_nx` is False, returns a tuple of GeoDataFrames:
+        - nodes_gdf: GeoDataFrame of nodes with spatial and attribute information
+        - edges_gdf: GeoDataFrame of edges with 'weight' and 'geometry' attributes
+        If `as_nx` is True, returns a NetworkX graph object with spatial attributes.
 
     Notes
     -----
@@ -542,8 +548,11 @@ def euclidean_minimum_spanning_tree(
 
     Returns
     -------
-    tuple[gpd.GeoDataFrame, gpd.GeoDataFrame] | networkx.Graph
-        Same convention as the other graph-generator functions.
+    tuple[geopandas.GeoDataFrame, geopandas.GeoDataFrame] or networkx.Graph
+        If `as_nx` is False, returns a tuple of GeoDataFrames:
+        - nodes_gdf: GeoDataFrame of nodes with spatial and attribute information
+        - edges_gdf: GeoDataFrame of edges with 'weight' and 'geometry' attributes
+        If `as_nx` is True, returns a NetworkX graph object with spatial attributes.
 
     Examples
     --------
@@ -1040,7 +1049,7 @@ def bridge_nodes(
     tuple[dict[str, geopandas.GeoDataFrame], dict[tuple[str, str, str], geopandas.GeoDataFrame]] | networkx.Graph
         If `as_nx` is False, returns a tuple:
         - nodes_dict: The original input `nodes_dict` (unchanged)
-        - edges_dict: Dictionary where keys are edge type tuples 
+        - edges_dict: Dictionary where keys are edge type tuples
           `(source_layer_name, "is_nearby", target_layer_name)` and values are
           GeoDataFrames of the generated directed edges
         If `as_nx` is True, returns a NetworkX graph object containing all nodes
