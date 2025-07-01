@@ -211,9 +211,10 @@ class GeoDataProcessor:
 class GraphConverter:
     """Unified graph conversion engine for both homogeneous and heterogeneous graphs."""
 
-    def __init__(self, keep_geom: bool = True, multigraph: bool = False) -> None:
+    def __init__(self, keep_geom: bool = True, multigraph: bool = False, directed: bool = False) -> None:
         self.keep_geom = keep_geom
         self.multigraph = multigraph
+        self.directed = directed
         self.processor = GeoDataProcessor()
 
     def gdf_to_nx(
@@ -274,7 +275,10 @@ class GraphConverter:
         self.processor.ensure_crs_consistency(nodes, edges)
 
         # Create graph and metadata
-        graph = nx.MultiGraph() if self.multigraph else nx.Graph()
+        if self.multigraph:
+            graph = nx.MultiDiGraph() if self.directed else nx.MultiGraph()
+        else:
+            graph = nx.DiGraph() if self.directed else nx.Graph()
         metadata = GraphMetadata(crs=edges.crs, is_hetero=False)
 
         # Add nodes
@@ -312,7 +316,10 @@ class GraphConverter:
                 )
 
         # Create graph and metadata
-        graph = nx.MultiGraph() if self.multigraph else nx.Graph()
+        if self.multigraph:
+            graph = nx.MultiDiGraph() if self.directed else nx.MultiGraph()
+        else:
+            graph = nx.DiGraph() if self.directed else nx.Graph()
         metadata = GraphMetadata(is_hetero=True)
 
         if nodes_dict is not None and nodes_dict:
@@ -666,7 +673,8 @@ class GraphConverter:
     ) -> gpd.GeoDataFrame:
         """Create homogeneous edges GeoDataFrame."""
         if graph.number_of_edges() == 0:
-            return gpd.GeoDataFrame(geometry=[], crs=metadata.crs)
+            # Create empty GeoDataFrame with expected columns
+            return gpd.GeoDataFrame({"weight": [], "geometry": []}, crs=metadata.crs)
 
         is_multigraph = isinstance(graph, nx.MultiGraph)
         if is_multigraph:
@@ -695,7 +703,8 @@ class GraphConverter:
 
             records.append(
                 {
-                    **{k: v for k, v in attrs.items() if k != "_original_edge_index"},
+                    **{k: v for k, v in attrs.items() if k not in ["_original_edge_index", "weight"]},
+                    "weight": attrs.get("weight"),
                     "geometry": geom,
                 },
             )
@@ -1229,7 +1238,8 @@ def gdf_to_nx(
     edges: gpd.GeoDataFrame | dict[tuple[str, str, str], gpd.GeoDataFrame] | None = None,
     keep_geom: bool = True,
     multigraph: bool = False,
-) -> nx.Graph | nx.MultiGraph:
+    directed: bool = False,
+) -> nx.Graph | nx.MultiGraph | nx.DiGraph | nx.MultiDiGraph:
     """Convert GeoDataFrames of nodes and edges to a NetworkX graph.
 
     This function provides a high-level interface to convert geospatial data,
@@ -1259,10 +1269,13 @@ def gdf_to_nx(
     multigraph : bool, default False
         If True, a `networkx.MultiGraph` is created, which can store multiple
         edges between the same two nodes.
+    directed : bool, default False
+        If True, a directed graph (`networkx.DiGraph` or `networkx.MultiDiGraph`)
+        is created. Otherwise, an undirected graph is created.
 
     Returns
     -------
-    networkx.Graph or networkx.MultiGraph
+    networkx.Graph or networkx.MultiGraph or networkx.DiGraph or networkx.MultiDiGraph
         A NetworkX graph object representing the spatial network. Graph-level
         metadata, such as CRS and heterogeneity information, is stored in
         `graph.graph`.
@@ -1327,7 +1340,7 @@ def gdf_to_nx(
     else:
         validate_gdf(nodes_gdf=nodes, edges_gdf=edges)
 
-    converter = GraphConverter(keep_geom=keep_geom, multigraph=multigraph)
+    converter = GraphConverter(keep_geom=keep_geom, multigraph=multigraph, directed=directed)
     return converter.gdf_to_nx(nodes, edges)
 
 def nx_to_gdf(

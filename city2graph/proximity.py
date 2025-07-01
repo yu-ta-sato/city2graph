@@ -30,7 +30,7 @@ import networkx as nx
 import numpy as np
 from scipy.spatial import Delaunay
 from scipy.spatial import distance as sdist
-from scipy.spatial.qhull import QhullError
+from scipy.spatial import QhullError
 from shapely.geometry import LineString
 from sklearn.neighbors import NearestNeighbors
 
@@ -312,11 +312,8 @@ def delaunay_graph(
     if len(coords) < 3:
         return G if as_nx else nx_to_gdf(G, nodes=True, edges=True)
 
-    try:
-        tri = Delaunay(coords)
-        edges = {(node_ids[i], node_ids[j]) for simplex in tri.simplices for i, j in combinations(simplex, 2)}
-    except QhullError:
-        edges = set()
+    tri = Delaunay(coords)
+    edges = {(node_ids[i], node_ids[j]) for simplex in tri.simplices for i, j in combinations(simplex, 2)}
 
     dm = None
     if distance_metric == "network":
@@ -608,16 +605,12 @@ def euclidean_minimum_spanning_tree(
     cand_edges: set[tuple[Any, Any]]
 
     if distance_metric.lower() == "euclidean" and n_points >= 3:
-        try:
-            tri = Delaunay(coords)
-            cand_edges = {
-                tuple(sorted((i, j)))
-                for simplex in tri.simplices
-                for i, j in combinations(simplex, 2)
-            }
-        except QhullError:
-            # Collinear or otherwise degenerate set – fall back
-            use_complete_graph = True
+        tri = Delaunay(coords)
+        cand_edges = {
+            tuple(sorted((i, j)))
+            for simplex in tri.simplices
+            for i, j in combinations(simplex, 2)
+        }
     else:
         use_complete_graph = True
 
@@ -1236,7 +1229,7 @@ def bridge_nodes(
         edge_dict[(src_type, "is_nearby", dst_type)] = edges_gdf
 
     if as_nx:
-        return gdf_to_nx(nodes=nodes_dict, edges=edge_dict, multigraph=multigraph)
+        return gdf_to_nx(nodes=nodes_dict, edges=edge_dict, multigraph=multigraph, directed=True)
     return nodes_dict, edge_dict
 
 # ============================================================================
@@ -1259,6 +1252,7 @@ def _prepare_nodes(
 
     for node_id, attrs, (x, y) in zip(node_ids, gdf.to_dict("records"), coords, strict=False):
         G.add_node(node_id, **attrs, pos=(x, y))
+    G.graph["crs"] = gdf.crs
 
     return G, coords, node_ids
 
