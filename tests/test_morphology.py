@@ -21,7 +21,7 @@ class TestMorphologicalGraph:
     """Test suite for morphological_graph function."""
 
     def test_basic_morphological_graph(
-        self, sample_buildings_gdf, sample_segments_gdf
+        self, sample_buildings_gdf, sample_segments_gdf,
     ):
         """Test basic morphological graph creation."""
         nodes, edges = morphological_graph(sample_buildings_gdf, sample_segments_gdf)
@@ -35,7 +35,7 @@ class TestMorphologicalGraph:
         assert ("private", "faced_to", "public") in edges
 
     def test_morphological_graph_as_nx(
-        self, sample_buildings_gdf, sample_segments_gdf
+        self, sample_buildings_gdf, sample_segments_gdf,
     ):
         """Test morphological graph creation as NetworkX graph."""
         graph = morphological_graph(
@@ -47,18 +47,18 @@ class TestMorphologicalGraph:
 
     @pytest.mark.parametrize("contiguity", ["queen", "rook"])
     def test_morphological_graph_contiguity(
-        self, sample_buildings_gdf, sample_segments_gdf, contiguity
+        self, sample_buildings_gdf, sample_segments_gdf, contiguity,
     ):
         """Test morphological graph with different contiguity types."""
         nodes, edges = morphological_graph(
-            sample_buildings_gdf, sample_segments_gdf, contiguity=contiguity
+            sample_buildings_gdf, sample_segments_gdf, contiguity=contiguity,
         )
 
         assert isinstance(nodes["private"], gpd.GeoDataFrame)
         assert isinstance(edges[("private", "touched_to", "private")], gpd.GeoDataFrame)
 
     def test_morphological_graph_with_distance_filtering(
-        self, sample_buildings_gdf, sample_segments_gdf, custom_center_point
+        self, sample_buildings_gdf, sample_segments_gdf, custom_center_point,
     ):
         """Test morphological graph with distance filtering."""
         nodes, edges = morphological_graph(
@@ -73,7 +73,7 @@ class TestMorphologicalGraph:
 
     @pytest.mark.parametrize("clipping_buffer", [0, 100, 500, math.inf])
     def test_morphological_graph_clipping_buffer(
-        self, sample_buildings_gdf, sample_segments_gdf, custom_center_point, clipping_buffer
+        self, sample_buildings_gdf, sample_segments_gdf, custom_center_point, clipping_buffer,
     ):
         """Test morphological graph with various clipping buffer values."""
         nodes, edges = morphological_graph(
@@ -88,7 +88,7 @@ class TestMorphologicalGraph:
         assert isinstance(edges, dict)
 
     def test_morphological_graph_with_barrier_column(
-        self, sample_buildings_gdf, segments_gdf_alt_geom
+        self, sample_buildings_gdf, segments_gdf_alt_geom,
     ):
         """Test morphological graph with alternative barrier geometry column."""
         nodes, edges = morphological_graph(
@@ -101,7 +101,7 @@ class TestMorphologicalGraph:
         assert "public" in nodes
 
     def test_morphological_graph_with_custom_barrier(
-        self, sample_buildings_gdf, segments_gdf_with_custom_barrier
+        self, sample_buildings_gdf, segments_gdf_with_custom_barrier,
     ):
         """Test morphological graph with custom barrier column."""
         nodes, edges = morphological_graph(
@@ -113,11 +113,11 @@ class TestMorphologicalGraph:
         assert isinstance(nodes["private"], gpd.GeoDataFrame)
 
     def test_morphological_graph_keep_buildings(
-        self, sample_buildings_gdf, sample_segments_gdf
+        self, sample_buildings_gdf, sample_segments_gdf,
     ):
         """Test morphological graph with keep_buildings option."""
         nodes, edges = morphological_graph(
-            sample_buildings_gdf, sample_segments_gdf, keep_buildings=True
+            sample_buildings_gdf, sample_segments_gdf, keep_buildings=True,
         )
 
         private_nodes = nodes["private"]
@@ -128,17 +128,17 @@ class TestMorphologicalGraph:
 
     @pytest.mark.parametrize("tolerance", [1e-6, 1e-3, 0.1, 1.0])
     def test_morphological_graph_tolerance(
-        self, sample_buildings_gdf, sample_segments_gdf, tolerance
+        self, sample_buildings_gdf, sample_segments_gdf, tolerance,
     ):
         """Test morphological graph with different tolerance values."""
         nodes, edges = morphological_graph(
-            sample_buildings_gdf, sample_segments_gdf, tolerance=tolerance
+            sample_buildings_gdf, sample_segments_gdf, tolerance=tolerance,
         )
 
         assert isinstance(edges[("private", "faced_to", "public")], gpd.GeoDataFrame)
 
     def test_morphological_graph_empty_buildings(
-        self, empty_gdf, sample_segments_gdf
+        self, empty_gdf, sample_segments_gdf,
     ):
         """Test morphological graph with empty buildings."""
         nodes, edges = morphological_graph(empty_gdf, sample_segments_gdf)
@@ -148,7 +148,7 @@ class TestMorphologicalGraph:
         assert edges[("private", "faced_to", "public")].empty
 
     def test_morphological_graph_empty_segments(
-        self, sample_buildings_gdf, empty_gdf
+        self, sample_buildings_gdf, empty_gdf,
     ):
         """Test morphological graph with empty segments."""
         nodes, edges = morphological_graph(sample_buildings_gdf, empty_gdf)
@@ -165,11 +165,11 @@ class TestMorphologicalGraph:
         assert all(edge_gdf.empty for edge_gdf in edges.values())
 
     def test_morphological_graph_single_building_single_segment(
-        self, single_building_gdf, single_segment_gdf
+        self, single_building_gdf, single_segment_gdf,
     ):
         """Test morphological graph with single building and segment."""
         nodes, edges = morphological_graph(
-            single_building_gdf, single_segment_gdf
+            single_building_gdf, single_segment_gdf,
         )
 
         # Tessellation might fail with single building/segment, so just check structure
@@ -180,77 +180,77 @@ class TestMorphologicalGraph:
         assert len(nodes["public"]) == 1
 
     def test_morphological_graph_crs_mismatch(
-        self, sample_buildings_gdf, segments_gdf_alt_crs
+        self, sample_buildings_gdf, segments_gdf_alt_crs,
     ):
         """Test morphological graph with CRS mismatch."""
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             nodes, edges = morphological_graph(
-                sample_buildings_gdf, segments_gdf_alt_crs
+                sample_buildings_gdf, segments_gdf_alt_crs,
             )
 
         assert nodes["private"].crs == sample_buildings_gdf.crs
         assert nodes["public"].crs == sample_buildings_gdf.crs
 
     def test_morphological_graph_invalid_contiguity(
-        self, sample_buildings_gdf, sample_segments_gdf
+        self, sample_buildings_gdf, sample_segments_gdf,
     ):
         """Test morphological graph with invalid contiguity parameter."""
         with pytest.raises(ValueError, match="contiguity must be 'queen' or 'rook'"):
             morphological_graph(
-                sample_buildings_gdf, sample_segments_gdf, contiguity="invalid"
+                sample_buildings_gdf, sample_segments_gdf, contiguity="invalid",
             )
 
     def test_morphological_graph_negative_clipping_buffer(
-        self, sample_buildings_gdf, sample_segments_gdf
+        self, sample_buildings_gdf, sample_segments_gdf,
     ):
         """Test morphological graph with negative clipping buffer."""
         with pytest.raises(ValueError, match="clipping_buffer cannot be negative"):
             morphological_graph(
-                sample_buildings_gdf, sample_segments_gdf, clipping_buffer=-100
+                sample_buildings_gdf, sample_segments_gdf, clipping_buffer=-100,
             )
 
     def test_morphological_graph_invalid_buildings_type(
-        self, not_a_gdf, sample_segments_gdf
+        self, not_a_gdf, sample_segments_gdf,
     ):
         """Test morphological graph with invalid buildings type."""
         with pytest.raises(TypeError, match="buildings_gdf must be a GeoDataFrame"):
             morphological_graph(not_a_gdf, sample_segments_gdf)
 
     def test_morphological_graph_invalid_segments_type(
-        self, sample_buildings_gdf, not_a_gdf
+        self, sample_buildings_gdf, not_a_gdf,
     ):
         """Test morphological graph with invalid segments type."""
         with pytest.raises(TypeError, match="segments_gdf must be a GeoDataFrame"):
             morphological_graph(sample_buildings_gdf, not_a_gdf)
 
     def test_morphological_graph_invalid_buildings_geometry(
-        self, buildings_invalid_geom_gdf, sample_segments_gdf
+        self, buildings_invalid_geom_gdf, sample_segments_gdf,
     ):
         """Test morphological graph with invalid building geometry types."""
         with pytest.raises(ValueError, match="buildings_gdf must contain only Polygon"):
             morphological_graph(buildings_invalid_geom_gdf, sample_segments_gdf)
 
     def test_morphological_graph_invalid_segments_geometry(
-        self, sample_buildings_gdf, segments_invalid_geom_gdf
+        self, sample_buildings_gdf, segments_invalid_geom_gdf,
     ):
         """Test morphological graph with invalid segment geometry types."""
         with pytest.raises(ValueError, match="segments_gdf must contain only LineString"):
             morphological_graph(sample_buildings_gdf, segments_invalid_geom_gdf)
 
     def test_morphological_graph_no_private_public_connections(
-        self, sample_buildings_gdf, segments_gdf_far_away
+        self, sample_buildings_gdf, segments_gdf_far_away,
     ):
         """Test morphological graph when buildings and segments are far apart."""
         nodes, edges = morphological_graph(
-            sample_buildings_gdf, segments_gdf_far_away
+            sample_buildings_gdf, segments_gdf_far_away,
         )
 
         # Private-public edges should be empty due to distance
         assert edges[("private", "faced_to", "public")].empty
 
     def test_morphological_graph_center_point_as_point(
-        self, sample_buildings_gdf, sample_segments_gdf, custom_center_point
+        self, sample_buildings_gdf, sample_segments_gdf, custom_center_point,
     ):
         """Test morphological graph with center_point as Point object."""
         nodes, edges = morphological_graph(
@@ -278,7 +278,7 @@ class TestMorphologicalGraph:
         """Test that distance filtering actually reduces the graph size."""
         # Full graph
         nodes_full, _ = morphological_graph(
-            sample_buildings_gdf, sample_segments_gdf
+            sample_buildings_gdf, sample_segments_gdf,
         )
 
         # Filtered graph
@@ -327,7 +327,7 @@ class TestMorphologicalGraph:
         )
 
         nodes, edges = morphological_graph(
-            buildings_gdf, segments_gdf, keep_buildings=True
+            buildings_gdf, segments_gdf, keep_buildings=True,
         )
 
         # Verify all components are created
@@ -363,7 +363,7 @@ class TestPrivateToPrivateGraph:
     def test_private_to_private_contiguity(self, sample_tessellation_gdf, contiguity):
         """Test private-to-private with different contiguity types."""
         nodes, edges = private_to_private_graph(
-            sample_tessellation_gdf, contiguity=contiguity
+            sample_tessellation_gdf, contiguity=contiguity,
         )
 
         assert isinstance(edges, gpd.GeoDataFrame)
@@ -374,7 +374,7 @@ class TestPrivateToPrivateGraph:
     def test_private_to_private_with_group_col(self, sample_tessellation_gdf):
         """Test private-to-private with group column."""
         nodes, edges = private_to_private_graph(
-            sample_tessellation_gdf, group_col="enclosure_index"
+            sample_tessellation_gdf, group_col="enclosure_index",
         )
 
         assert isinstance(edges, gpd.GeoDataFrame)
@@ -445,7 +445,7 @@ class TestPrivateToPublicGraph:
     """Test suite for private_to_public_graph function."""
 
     def test_basic_private_to_public(
-        self, sample_tessellation_gdf, sample_segments_gdf
+        self, sample_tessellation_gdf, sample_segments_gdf,
     ):
         """Test basic private-to-public graph creation."""
         edges = private_to_public_graph(sample_tessellation_gdf, sample_segments_gdf)
@@ -456,28 +456,28 @@ class TestPrivateToPublicGraph:
             assert "public_id" in edges.columns
 
     def test_private_to_public_as_nx(
-        self, sample_tessellation_gdf, sample_segments_gdf
+        self, sample_tessellation_gdf, sample_segments_gdf,
     ):
         """Test private-to-public graph as NetworkX."""
         graph = private_to_public_graph(
-            sample_tessellation_gdf, sample_segments_gdf, as_nx=True
+            sample_tessellation_gdf, sample_segments_gdf, as_nx=True,
         )
 
         assert isinstance(graph, nx.Graph)
 
     @pytest.mark.parametrize("tolerance", [1e-6, 1e-3, 0.1, 1.0])
     def test_private_to_public_tolerance(
-        self, sample_tessellation_gdf, sample_segments_gdf, tolerance
+        self, sample_tessellation_gdf, sample_segments_gdf, tolerance,
     ):
         """Test private-to-public with different tolerance values."""
         edges = private_to_public_graph(
-            sample_tessellation_gdf, sample_segments_gdf, tolerance=tolerance
+            sample_tessellation_gdf, sample_segments_gdf, tolerance=tolerance,
         )
 
         assert isinstance(edges, gpd.GeoDataFrame)
 
     def test_private_to_public_with_barrier_col(
-        self, sample_tessellation_gdf, segments_gdf_alt_geom
+        self, sample_tessellation_gdf, segments_gdf_alt_geom,
     ):
         """Test private-to-public with alternative barrier column."""
         edges = private_to_public_graph(
@@ -507,11 +507,11 @@ class TestPrivateToPublicGraph:
         assert edges.empty
 
     def test_private_to_public_single_cell_single_segment(
-        self, p2pub_private_single_cell, p2pub_public_single_segment
+        self, p2pub_private_single_cell, p2pub_public_single_segment,
     ):
         """Test private-to-public with single cell and segment."""
         edges = private_to_public_graph(
-            p2pub_private_single_cell, p2pub_public_single_segment
+            p2pub_private_single_cell, p2pub_public_single_segment,
         )
 
         # Should have a connection due to proximity
@@ -520,61 +520,61 @@ class TestPrivateToPublicGraph:
         assert edges.iloc[0]["public_id"] == 10
 
     def test_private_to_public_no_connections(
-        self, sample_tessellation_gdf, segments_gdf_far_away
+        self, sample_tessellation_gdf, segments_gdf_far_away,
     ):
         """Test private-to-public with no possible connections."""
         edges = private_to_public_graph(
-            sample_tessellation_gdf, segments_gdf_far_away
+            sample_tessellation_gdf, segments_gdf_far_away,
         )
 
         assert edges.empty
 
     def test_private_to_public_crs_mismatch(
-        self, sample_tessellation_gdf, segments_gdf_alt_crs
+        self, sample_tessellation_gdf, segments_gdf_alt_crs,
     ):
         """Test private-to-public with CRS mismatch."""
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             edges = private_to_public_graph(
-                sample_tessellation_gdf, segments_gdf_alt_crs
+                sample_tessellation_gdf, segments_gdf_alt_crs,
             )
 
         assert edges.crs == sample_tessellation_gdf.crs
 
     def test_private_to_public_invalid_private_type(
-        self, not_a_gdf, sample_segments_gdf
+        self, not_a_gdf, sample_segments_gdf,
     ):
         """Test private-to-public with invalid private type."""
         with pytest.raises(TypeError, match="private_gdf must be a GeoDataFrame"):
             private_to_public_graph(not_a_gdf, sample_segments_gdf)
 
     def test_private_to_public_invalid_public_type(
-        self, sample_tessellation_gdf, not_a_gdf
+        self, sample_tessellation_gdf, not_a_gdf,
     ):
         """Test private-to-public with invalid public type."""
         with pytest.raises(TypeError, match="public_gdf must be a GeoDataFrame"):
             private_to_public_graph(sample_tessellation_gdf, not_a_gdf)
 
     def test_private_to_public_missing_private_id(
-        self, private_gdf_no_private_id, sample_segments_gdf
+        self, private_gdf_no_private_id, sample_segments_gdf,
     ):
         """Test private-to-public with missing private_id."""
         with pytest.raises(ValueError, match="Expected ID column 'private_id' not found"):
             private_to_public_graph(private_gdf_no_private_id, sample_segments_gdf)
 
     def test_private_to_public_missing_public_id(
-        self, sample_tessellation_gdf, segments_no_public_id_gdf
+        self, sample_tessellation_gdf, segments_no_public_id_gdf,
     ):
         """Test private-to-public with missing public_id."""
         with pytest.raises(ValueError, match="Expected ID column 'public_id' not found"):
             private_to_public_graph(sample_tessellation_gdf, segments_no_public_id_gdf)
 
     def test_private_to_public_edge_geometries(
-        self, sample_tessellation_gdf, sample_segments_gdf
+        self, sample_tessellation_gdf, sample_segments_gdf,
     ):
         """Test that edge geometries are LineStrings connecting centroids."""
         edges = private_to_public_graph(
-            sample_tessellation_gdf, sample_segments_gdf
+            sample_tessellation_gdf, sample_segments_gdf,
         )
 
         if not edges.empty:
@@ -637,7 +637,7 @@ class TestPublicToPublicGraph:
         assert "public_id" in nodes.columns
 
     def test_public_to_public_multiindex_public_id(
-        self, segments_gdf_with_multiindex_public_id
+        self, segments_gdf_with_multiindex_public_id,
     ):
         """Test public-to-public with MultiIndex public_id."""
         # This test should handle the MultiIndex issue gracefully
@@ -668,7 +668,7 @@ class TestEdgeCasesAndIntegration:
     """Test suite for edge cases and integration scenarios."""
 
     def test_morphological_graph_with_all_parameters(
-        self, sample_buildings_gdf, segments_gdf_alt_geom, custom_center_point
+        self, sample_buildings_gdf, segments_gdf_alt_geom, custom_center_point,
     ):
         """Test morphological graph with all parameters specified."""
         nodes, edges = morphological_graph(
@@ -747,14 +747,14 @@ class TestEdgeCasesAndIntegration:
             assert len(edges_gdf) == nx_graph.number_of_edges()
 
     def test_morphological_graph_reproducibility(
-        self, sample_buildings_gdf, sample_segments_gdf
+        self, sample_buildings_gdf, sample_segments_gdf,
     ):
         """Test that morphological graph creation is reproducible."""
         nodes1, edges1 = morphological_graph(
-            sample_buildings_gdf, sample_segments_gdf
+            sample_buildings_gdf, sample_segments_gdf,
         )
         nodes2, edges2 = morphological_graph(
-            sample_buildings_gdf, sample_segments_gdf
+            sample_buildings_gdf, sample_segments_gdf,
         )
 
         # Check that the same inputs produce the same outputs
@@ -774,7 +774,7 @@ class TestComprehensiveCoverage:
 
         # Test with empty buildings but non-empty segments
         nodes, edges = morphological_graph(
-            sample_buildings_gdf.iloc[:0], sample_segments_gdf
+            sample_buildings_gdf.iloc[:0], sample_segments_gdf,
         )
         assert nodes["private"].empty
         assert edges[("private", "touched_to", "private")].empty
@@ -782,14 +782,14 @@ class TestComprehensiveCoverage:
 
         # Test with non-empty buildings but empty segments
         nodes, edges = morphological_graph(
-            sample_buildings_gdf, sample_segments_gdf.iloc[:0]
+            sample_buildings_gdf, sample_segments_gdf.iloc[:0],
         )
         assert nodes["public"].empty
         assert edges[("public", "connected_to", "public")].empty
 
         # Test with both empty
         nodes, edges = morphological_graph(
-            sample_buildings_gdf.iloc[:0], sample_segments_gdf.iloc[:0]
+            sample_buildings_gdf.iloc[:0], sample_segments_gdf.iloc[:0],
         )
         assert nodes["private"].empty
         assert nodes["public"].empty
@@ -806,7 +806,7 @@ class TestComprehensiveCoverage:
         # Test with single polygon
         single_poly = gpd.GeoDataFrame({
             "private_id": [0],
-            "geometry": [Polygon([(0, 0), (1, 0), (1, 1), (0, 1)])]
+            "geometry": [Polygon([(0, 0), (1, 0), (1, 1), (0, 1)])],
         }, crs=sample_crs)
         nodes, edges = private_to_private_graph(single_poly)
         assert len(nodes) == 1
@@ -817,8 +817,8 @@ class TestComprehensiveCoverage:
             "private_id": [0, 1],
             "geometry": [
                 Polygon([(0, 0), (1, 0), (1, 1), (0, 1)]),
-                Polygon([(1, 0), (2, 0), (2, 1), (1, 1)])
-            ]
+                Polygon([(1, 0), (2, 0), (2, 1), (1, 1)]),
+            ],
         }, crs=sample_crs)
         nodes, edges = private_to_private_graph(adjacent_polys)
         assert len(nodes) == 2
@@ -831,7 +831,7 @@ class TestComprehensiveCoverage:
         empty_private = gpd.GeoDataFrame(columns=["private_id", "geometry"], crs=sample_crs)
         public_gdf = gpd.GeoDataFrame({
             "public_id": [0],
-            "geometry": [LineString([(0, 0), (1, 1)])]
+            "geometry": [LineString([(0, 0), (1, 1)])],
         }, crs=sample_crs)
         edges = private_to_public_graph(empty_private, public_gdf)
         assert edges.empty
@@ -839,7 +839,7 @@ class TestComprehensiveCoverage:
         # Test with empty public GDF
         private_gdf = gpd.GeoDataFrame({
             "private_id": [0],
-            "geometry": [Polygon([(0, 0), (1, 0), (1, 1), (0, 1)])]
+            "geometry": [Polygon([(0, 0), (1, 0), (1, 1), (0, 1)])],
         }, crs=sample_crs)
         empty_public = gpd.GeoDataFrame(columns=["public_id", "geometry"], crs=sample_crs)
         edges = private_to_public_graph(private_gdf, empty_public)
@@ -852,7 +852,7 @@ class TestComprehensiveCoverage:
         # Test with intersecting geometries
         intersecting_public = gpd.GeoDataFrame({
             "public_id": [0],
-            "geometry": [LineString([(0.5, 0), (0.5, 1)])]  # Line through polygon
+            "geometry": [LineString([(0.5, 0), (0.5, 1)])],  # Line through polygon
         }, crs=sample_crs)
         edges = private_to_public_graph(private_gdf, intersecting_public)
         assert isinstance(edges, gpd.GeoDataFrame)
@@ -867,7 +867,7 @@ class TestComprehensiveCoverage:
 
         # Test with single segment
         single_segment = gpd.GeoDataFrame({
-            "geometry": [LineString([(0, 0), (1, 1)])]
+            "geometry": [LineString([(0, 0), (1, 1)])],
         }, crs=sample_crs)
         nodes, edges = public_to_public_graph(single_segment)
         assert len(nodes) == 1
@@ -877,8 +877,8 @@ class TestComprehensiveCoverage:
         connected_segments = gpd.GeoDataFrame({
             "geometry": [
                 LineString([(0, 0), (1, 1)]),
-                LineString([(1, 1), (2, 2)])
-            ]
+                LineString([(1, 1), (2, 2)]),
+            ],
         }, crs=sample_crs)
         nodes, edges = public_to_public_graph(connected_segments)
         assert len(nodes) == 2
@@ -911,7 +911,7 @@ class TestComprehensiveCoverage:
         nodes, edges = morphological_graph(
             sample_buildings_gdf,
             sample_segments_gdf,
-            primary_barrier_col="nonexistent_column"
+            primary_barrier_col="nonexistent_column",
         )
         assert isinstance(nodes, dict)
         assert isinstance(edges, dict)
@@ -920,7 +920,7 @@ class TestComprehensiveCoverage:
         nodes, edges = morphological_graph(
             sample_buildings_gdf,
             sample_segments_gdf,
-            primary_barrier_col=None
+            primary_barrier_col=None,
         )
         assert isinstance(nodes, dict)
         assert isinstance(edges, dict)
@@ -931,7 +931,7 @@ class TestComprehensiveCoverage:
         nodes, edges = morphological_graph(
             sample_buildings_gdf,
             sample_segments_gdf,
-            keep_buildings=True
+            keep_buildings=True,
         )
 
         private_nodes = nodes["private"]
@@ -944,7 +944,7 @@ class TestComprehensiveCoverage:
         nodes, edges = morphological_graph(
             empty_buildings,
             sample_segments_gdf,
-            keep_buildings=True
+            keep_buildings=True,
         )
         assert nodes["private"].empty
 
@@ -956,7 +956,7 @@ class TestComprehensiveCoverage:
                 sample_buildings_gdf,
                 sample_segments_gdf,
                 center_point=custom_center_point,
-                distance=distance
+                distance=distance,
             )
             assert isinstance(nodes, dict)
             assert isinstance(edges, dict)
@@ -967,7 +967,7 @@ class TestComprehensiveCoverage:
             sample_segments_gdf,
             center_point=custom_center_point,
             distance=1000,
-            clipping_buffer=math.inf
+            clipping_buffer=math.inf,
         )
         assert isinstance(nodes, dict)
         assert isinstance(edges, dict)
@@ -978,11 +978,11 @@ class TestComprehensiveCoverage:
         segments_with_multiindex = gpd.GeoDataFrame({
             "geometry": [
                 LineString([(0, 0), (1, 1)]),
-                LineString([(1, 1), (2, 2)])
-            ]
+                LineString([(1, 1), (2, 2)]),
+            ],
         }, crs=sample_crs)
         segments_with_multiindex.index = pd.MultiIndex.from_tuples(
-            [("A", 1), ("B", 2)], names=["type", "id"]
+            [("A", 1), ("B", 2)], names=["type", "id"],
         )
 
         # Test public_to_public with MultiIndex
@@ -1000,14 +1000,14 @@ class TestComprehensiveCoverage:
 
         # Test invalid geometry types through morphological_graph
         invalid_buildings = gpd.GeoDataFrame({
-            "geometry": [LineString([(0, 0), (1, 1)])]  # Invalid: should be Polygon
+            "geometry": [LineString([(0, 0), (1, 1)])],  # Invalid: should be Polygon
         }, crs=sample_buildings_gdf.crs)
 
         with pytest.raises(ValueError, match="buildings_gdf must contain only Polygon"):
             morphological_graph(invalid_buildings, sample_segments_gdf)
 
         invalid_segments = gpd.GeoDataFrame({
-            "geometry": [Polygon([(0, 0), (1, 0), (1, 1), (0, 1)])]  # Invalid: should be LineString
+            "geometry": [Polygon([(0, 0), (1, 0), (1, 1), (0, 1)])],  # Invalid: should be LineString
         }, crs=sample_segments_gdf.crs)
 
         with pytest.raises(ValueError, match="segments_gdf must contain only LineString"):
@@ -1120,14 +1120,14 @@ class TestEdgeCasesAndErrorHandling:
     def test_private_to_private_different_contiguity_types(self, sample_tessellation_gdf, contiguity):
         """Test private_to_private_graph with different contiguity types."""
         nodes, edges = private_to_private_graph(sample_tessellation_gdf, contiguity=contiguity)
-        
+
         assert isinstance(nodes, gpd.GeoDataFrame)
         assert isinstance(edges, gpd.GeoDataFrame)
 
     def test_morphological_graph_center_point_as_geodataframe(self, sample_buildings_gdf, sample_segments_gdf):
         """Test morphological graph with center_point as GeoDataFrame."""
         center_point = gpd.GeoSeries([Point(0, 0)], crs=sample_buildings_gdf.crs)
-        
+
         nodes, edges = morphological_graph(
             sample_buildings_gdf,
             sample_segments_gdf,
@@ -1218,7 +1218,7 @@ class TestParameterValidation:
 
     @pytest.mark.parametrize("clipping_buffer", [-1, -100, -0.1])
     def test_morphological_graph_negative_clipping_buffer_values(
-        self, sample_buildings_gdf, sample_segments_gdf, clipping_buffer
+        self, sample_buildings_gdf, sample_segments_gdf, clipping_buffer,
     ):
         """Test morphological_graph with various negative clipping buffer values."""
         with pytest.raises(ValueError, match="clipping_buffer cannot be negative"):

@@ -582,7 +582,7 @@ def nx_hetero_graph_valid() -> nx.Graph:
         "is_hetero": True,
         "crs": "EPSG:27700",
         "node_types": ["building", "road"],
-        "edge_types": [("building", "connects_to", "road")]
+        "edge_types": [("building", "connects_to", "road")],
     }
     return graph
 
@@ -597,7 +597,7 @@ def nx_hetero_graph_missing_node_types() -> nx.Graph:
     graph.graph = {
         "is_hetero": True,
         "crs": "EPSG:27700",
-        "edge_types": [("building", "connects_to", "road")]
+        "edge_types": [("building", "connects_to", "road")],
         # Missing node_types
     }
     return graph
@@ -614,7 +614,7 @@ def nx_hetero_graph_empty_node_types() -> nx.Graph:
         "is_hetero": True,
         "crs": "EPSG:27700",
         "node_types": [],  # Empty list
-        "edge_types": [("building", "connects_to", "road")]
+        "edge_types": [("building", "connects_to", "road")],
     }
     return graph
 
@@ -646,7 +646,7 @@ def nx_hetero_graph_missing_node_type_attr() -> nx.Graph:
         "is_hetero": True,
         "crs": "EPSG:27700",
         "node_types": ["building", "road"],
-        "edge_types": [("building", "connects_to", "road")]
+        "edge_types": [("building", "connects_to", "road")],
     }
     return graph
 
@@ -662,7 +662,7 @@ def nx_hetero_graph_missing_edge_type_attr() -> nx.Graph:
         "is_hetero": True,
         "crs": "EPSG:27700",
         "node_types": ["building", "road"],
-        "edge_types": [("building", "connects_to", "road")]
+        "edge_types": [("building", "connects_to", "road")],
     }
     return graph
 
@@ -726,3 +726,85 @@ def segments_gdf_with_multiindex_public_id(sample_crs: str) -> gpd.GeoDataFrame:
     # Create a dummy MultiIndex for public_id
     gdf["public_id"] = pd.MultiIndex.from_tuples([("A", 1), ("B", 2), ("C", 3)], names=["type", "idx"])
     return gdf
+
+
+@pytest.fixture
+def empty_nodes_gdf(sample_crs: str) -> gpd.GeoDataFrame:
+    """Return an empty nodes GeoDataFrame for testing edge cases."""
+    return gpd.GeoDataFrame(columns=["geometry"], geometry="geometry", crs=sample_crs)
+
+
+@pytest.fixture
+def single_node_gdf(sample_crs: str) -> gpd.GeoDataFrame:
+    """Return a GeoDataFrame with a single node for testing edge cases."""
+    data = {
+        "node_id": [1],
+        "feature1": [10.0],
+        "geometry": [Point(0, 0)],
+    }
+    return gpd.GeoDataFrame(data, crs=sample_crs).set_index("node_id")
+
+
+@pytest.fixture
+def two_nodes_gdf(sample_crs: str) -> gpd.GeoDataFrame:
+    """Return a GeoDataFrame with two nodes for testing edge cases."""
+    data = {
+        "node_id": [1, 2],
+        "feature1": [10.0, 20.0],
+        "geometry": [Point(0, 0), Point(1, 1)],
+    }
+    return gpd.GeoDataFrame(data, crs=sample_crs).set_index("node_id")
+
+
+@pytest.fixture
+def coincident_nodes_gdf(sample_crs: str) -> gpd.GeoDataFrame:
+    """Return a GeoDataFrame with coincident nodes for testing edge cases."""
+    data = {
+        "node_id": [1, 2, 3],
+        "feature1": [10.0, 20.0, 30.0],
+        "geometry": [Point(0, 0), Point(0, 0), Point(1, 1)],  # Two coincident points
+    }
+    return gpd.GeoDataFrame(data, crs=sample_crs).set_index("node_id")
+
+
+@pytest.fixture
+def network_gdf_with_pos(sample_crs: str) -> gpd.GeoDataFrame:
+    """Return a network GeoDataFrame with proper pos attributes for testing."""
+    from city2graph.utils import gdf_to_nx
+    from city2graph.utils import nx_to_gdf
+
+    # Create a simple network
+    data = {
+        "edge_id": ["e1", "e2"],
+        "source_id": [1, 2],
+        "target_id": [2, 3],
+        "geometry": [
+            LineString([(0, 0), (1, 1)]),
+            LineString([(1, 1), (2, 2)]),
+        ],
+    }
+    multi_index = pd.MultiIndex.from_arrays(
+        [data["source_id"], data["target_id"]], names=("source_id", "target_id"),
+    )
+    edges_gdf = gpd.GeoDataFrame(data, index=multi_index, crs=sample_crs)
+
+    # Convert to NetworkX and back to ensure pos attributes are added
+    G = gdf_to_nx(edges=edges_gdf)
+    _, edges_with_pos = nx_to_gdf(G, nodes=True, edges=True)
+
+    return edges_with_pos
+
+
+@pytest.fixture
+def network_gdf_no_pos(sample_crs: str) -> gpd.GeoDataFrame:
+    """Return a network GeoDataFrame without pos attributes for testing error cases."""
+    data = {
+        "edge_id": ["e1"],
+        "source_id": [1],
+        "target_id": [2],
+        "geometry": [LineString([(0, 0), (1, 1)])],
+    }
+    multi_index = pd.MultiIndex.from_arrays(
+        [data["source_id"], data["target_id"]], names=("source_id", "target_id"),
+    )
+    return gpd.GeoDataFrame(data, index=multi_index, crs=sample_crs)

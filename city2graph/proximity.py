@@ -21,16 +21,16 @@ No classes are introduced everything is implemented with plain functions.
 
 from __future__ import annotations
 
+import logging
 from itertools import combinations
 from itertools import permutations
-from typing import TYPE_CHECKING
 from typing import Any
 
+import geopandas as gpd  # noqa: TC002
 import networkx as nx
 import numpy as np
 from scipy.spatial import Delaunay
 from scipy.spatial import distance as sdist
-from scipy.spatial import QhullError
 from shapely.geometry import LineString
 from sklearn.neighbors import NearestNeighbors
 
@@ -38,10 +38,7 @@ from .utils import gdf_to_nx
 from .utils import nx_to_gdf
 from .utils import validate_gdf
 
-if TYPE_CHECKING:
-    from collections.abc import Iterable
-
-    import geopandas as gpd
+logger = logging.getLogger(__name__)
 
 __all__ = [
     "bridge_nodes",
@@ -308,13 +305,19 @@ def delaunay_graph(
     >>> print(G_delaunay.nodes(data=True))
     >>> print(G_delaunay.edges(data=True))
     """
+    # ---- input validation ---------------------------------------------------
+    _assert_euclidean(distance_metric, "delaunay_graph")
+
+    # ---- node preparation ---------------------------------------------------
     G, coords, node_ids = _prepare_nodes(gdf)
     if len(coords) < 3:
         return G if as_nx else nx_to_gdf(G, nodes=True, edges=True)
 
+    # ---- candidate edges: Delaunay triangulation ------------------------
     tri = Delaunay(coords)
     edges = {(node_ids[i], node_ids[j]) for simplex in tri.simplices for i, j in combinations(simplex, 2)}
 
+    # ---- weights + geometries ----------------------------------------------
     dm = None
     if distance_metric == "network":
         dm = _distance_matrix(coords, "network", network_gdf, gdf.crs)
@@ -376,6 +379,9 @@ def gabriel_graph(
     >>> nodes, edges = gabriel_graph(points_gdf)
     >>> G = gabriel_graph(points_gdf, as_nx=True)
     """
+    # ---- input validation ---------------------------------------------------
+    _assert_euclidean(distance_metric, "delaunay_graph")
+
     # ---- node preparation ---------------------------------------------------
     G, coords, node_ids = _prepare_nodes(gdf)
     n_points = len(coords)
@@ -400,8 +406,6 @@ def gabriel_graph(
     for i, j in delaunay_edges:
         mid = 0.5 * (coords[i] + coords[j])
         rad2 = np.sum((coords[i] - coords[j]) ** 2) * 0.25  # (|pi-pj|/2)^2
-        if rad2 == 0.0:   # coincident points – ignore
-            continue
         # squared distance of *all* points to the midpoint
         d2 = np.sum((coords - mid) ** 2, axis=1)
         mask = d2 <= rad2 + tol
@@ -480,6 +484,9 @@ def relative_neighborhood_graph(
     >>> nodes, edges = relative_neighborhood_graph(points_gdf)
     >>> G = relative_neighborhood_graph(points_gdf, as_nx=True)
     """
+    # ---- input validation ---------------------------------------------------
+    _assert_euclidean(distance_metric, "delaunay_graph")
+
     # ---- node preparation -------------------------------------------------
     G, coords, node_ids = _prepare_nodes(gdf)
     n_points = len(coords)
@@ -502,8 +509,6 @@ def relative_neighborhood_graph(
     # work with squared distances to avoid sqrt
     for i, j in cand_edges:
         dij2 = np.dot(coords[i] - coords[j], coords[i] - coords[j])
-        if dij2 == 0.0:  # coincident points → ignore
-            continue
         # vectorised test of the lune-emptiness predicate
         di2 = np.sum((coords - coords[i]) ** 2, axis=1) < dij2
         dj2 = np.sum((coords - coords[j]) ** 2, axis=1) < dij2
@@ -592,6 +597,9 @@ def euclidean_minimum_spanning_tree(
     •  All the usual spatial attributes (*weight*, *geometry*, CRS checks,
        etc.) are attached through the shared private helpers.
     """
+    # ---- input validation ---------------------------------------------------
+    _assert_euclidean(distance_metric, "delaunay_graph")
+
     # ---- node preparation -------------------------------------------------
     G, coords, node_ids = _prepare_nodes(gdf)
     n_points = len(coords)
@@ -1283,9 +1291,6 @@ def _network_dm(
 
     # Get node positions
     pos = nx.get_node_attributes(net_nx, "pos")
-    if not pos:
-        msg = "The supplied network lacks node 'pos' attributes"
-        raise ValueError(msg)
 
     net_coords = np.asarray(list(pos.values()))
     net_ids = list(pos.keys())
@@ -1337,7 +1342,7 @@ def _distance_matrix(
 
 def _add_edges(
     G: nx.Graph,
-    edges: Iterable[tuple[Any, Any]],
+    edges: tuple[Any, Any],
     coords: np.ndarray,
     node_ids: list,
     *,
@@ -1400,9 +1405,6 @@ def _add_edges(
 
         # All network nodes must expose coords in attribute 'pos'
         pos = nx.get_node_attributes(net_nx, "pos")
-        if not pos:
-            msg = "The supplied network lacks node 'pos' attributes"
-            raise ValueError(msg)
 
         net_coords = np.asarray(list(pos.values()))
         net_ids = list(pos.keys())
@@ -1434,10 +1436,12 @@ def _add_edges(
                            for i in range(len(path_coords))
                            if i == 0 or path_coords[i] != path_coords[i - 1]]
 
+            # Ensure we have at least 2 points for LineString
             if len(path_coords) < 2:
-                p_start = coords[idx_map[u]]
-                p_end   = coords[idx_map[v]]
-                path_coords = [p_start, p_end]
+                # Fallback: create a direct line between the original node coordinates
+                u_coord = coords[idx_map[u]]
+                v_coord = coords[idx_map[v]]
+                path_coords = [u_coord, v_coord]
 
             geom_attr[(u, v)] = LineString(path_coords)
 
@@ -1448,7 +1452,7 @@ def _add_edges(
             p2 = coords[idx_map[v]]
             if metric.lower() == "manhattan":
                 geom = LineString(
-                    [(p1[0], p1[1]), (p2[0], p1[1]), (p2[0], p2[1])]
+                    [(p1[0], p1[1]), (p2[0], p1[1]), (p2[0], p2[1])],
                 )
             else:  # euclidean
                 geom = LineString([p1, p2])
@@ -1533,3 +1537,11 @@ def _directed_graph(
     _add_edges(G, edges, combined_coords, combined_ids, metric=distance_metric, network_gdf=network_gdf)
 
     return G if as_nx else nx_to_gdf(G, nodes=True, edges=True)
+
+def _assert_euclidean(metric: str, func_name: str) -> None:
+    if metric.lower() != "euclidean":
+        msg = (
+            f"{func_name} supports only 'euclidean' distance for edge identification algorithm; "
+            f"'{metric}' will be used only for generating edge geometries."
+        )
+        logger.warning(msg)

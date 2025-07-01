@@ -110,12 +110,12 @@ def test_dual_graph(
     if error:
         with pytest.raises(error, match=match):
             utils.dual_graph(
-                gdf, edge_id_col=edge_id_col, keep_original_geom=keep_geom
+                gdf, edge_id_col=edge_id_col, keep_original_geom=keep_geom,
             )
     else:
         _primal_nodes, primal_edges = gdf
         dual_nodes, dual_edges = utils.dual_graph(
-            gdf, edge_id_col=edge_id_col, keep_original_geom=keep_geom
+            gdf, edge_id_col=edge_id_col, keep_original_geom=keep_geom,
         )
 
         if primal_edges.empty:
