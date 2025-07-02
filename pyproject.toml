@@ -151,6 +151,20 @@ dev = [
 [tool.hatch.build.targets.wheel]
 packages = ["city2graph"]
 
+[tool.coverage.report]
+exclude_also = ["@overload", "if TYPE_CHECKING:"]
+
+[tool.mypy]
+python_version = 3.12
+cache_dir = "~/.cache/pre-commit/mypy"
+ignore_missing_imports = true
+strict = true
+warn_no_return = true
+warn_unreachable = true
+warn_return_any = true
+warn_unused_configs = true
+disable_error_code = ["unreachable"]
+
 [tool.ruff]
 cache-dir = "~/.cache/pre-commit/ruff"
 exclude = [
@@ -203,9 +217,6 @@ extend-ignore = [
     ]
 extend-select = ["ALL"]
 
-[tool.mypy]
-python_version = 3.12
-
 [tool.ruff.lint.isort]
 force-single-line = true
 
@@ -213,7 +224,7 @@ force-single-line = true
 max-complexity = 14
 
 [tool.ruff.lint.pycodestyle]
-max-line-length = 110 # line length + 10% since it isn't a hard upper bound
+max-line-length = 140
 
 [tool.ruff.lint.pydocstyle]
 convention = "numpy"

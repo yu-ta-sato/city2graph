@@ -321,7 +321,7 @@ def morphological_graph(
         tessellation = _add_building_info(tessellation, buildings_gdf)
 
     # Determine group_col for private_to_private_graph
-    group_col_for_priv_priv = "enclosure_index"
+    group_col_for_priv_priv: str | None = "enclosure_index"
     if group_col_for_priv_priv not in tessellation.columns:
         if not tessellation.empty:
             logger.warning(
@@ -332,17 +332,17 @@ def morphological_graph(
         group_col_for_priv_priv = None
 
     # Create private-to-private graph (adjacency between tessellation cells)
-    priv_priv_nodes, priv_priv_edges = private_to_private_graph(
+    _, priv_priv_edges = private_to_private_graph(
         tessellation,
         group_col=group_col_for_priv_priv,
         contiguity=contiguity,
     )
 
     # Create public-to-public graph (connectivity between street segments)
-    pub_pub_nodes, pub_pub_edges = public_to_public_graph(segs) # Use 'segs' (final graph segments)
+    _, pub_pub_edges = public_to_public_graph(segs) # Use 'segs' (final graph segments)
 
     # Create private-to-public graph (interfaces between tessellation and streets)
-    priv_pub_edges = private_to_public_graph(
+    _, priv_pub_edges = private_to_public_graph(
         tessellation,
         segs, # Use 'segs' (final graph segments)
         primary_barrier_col=primary_barrier_col, # Optional alternative geometry for public spaces
@@ -369,9 +369,9 @@ def morphological_graph(
             priv_pub_edges, "private_id", "public_id", # Private-public edges
         ),
     }
-    if as_nx:
-        return gdf_to_nx(nodes=nodes, edges=edges)
-    return nodes, edges # Return the structured graph data
+
+    return (nodes, edges) if not as_nx else gdf_to_nx(nodes, edges)
+
 
 
 # ============================================================================
@@ -479,9 +479,8 @@ def private_to_private_graph(
         crs=private_gdf.crs, # Preserve original CRS
     )
 
-    if as_nx:
-        return gdf_to_nx(nodes=private_gdf, edges=edges_gdf)
-    return private_gdf, edges_gdf
+    return (private_gdf, edges_gdf) if not as_nx else gdf_to_nx(private_gdf, edges_gdf)
+
 
 
 # ============================================================================
@@ -494,7 +493,7 @@ def private_to_public_graph(
     primary_barrier_col: str | None = None,
     tolerance: float = 1e-6,
     as_nx: bool = False,
-) -> gpd.GeoDataFrame | nx.Graph:
+) -> tuple[gpd.GeoDataFrame, gpd.GeoDataFrame] | nx.Graph:
     """
     Create edges between private polygons and nearby public geometries.
 
@@ -520,8 +519,10 @@ def private_to_public_graph(
 
     Returns
     -------
-    geopandas.GeoDataFrame | networkx.Graph
-        A GeoDataFrame of edge geometries between private and public spaces.
+    tuple[geopandas.GeoDataFrame, geopandas.GeoDataFrame] | networkx.Graph
+        A tuple containing:
+        - Nodes of the private and public graphs (the input private_gdf and public_gdf).
+        - Edges of the private-public graph (connections between private polygons and public geometries).
         If as_nx is True, returns a NetworkX graph.
 
     Raises
@@ -548,10 +549,10 @@ def private_to_public_graph(
     # Handle empty data: return empty edges GeoDataFrame
     if private_gdf.empty or public_gdf.empty:
         empty_edges = _create_empty_edges_gdf(private_gdf.crs, _priv_id_col, _pub_id_col)
+        all_nodes = pd.concat([private_gdf, public_gdf], ignore_index=True)
         if as_nx:
-            all_nodes = pd.concat([private_gdf, public_gdf], ignore_index=True)
             return gdf_to_nx(nodes=all_nodes, edges=empty_edges)
-        return empty_edges
+        return all_nodes, empty_edges
 
     # Ensure required ID columns exist in the input GeoDataFrames
     if _priv_id_col not in private_gdf.columns:
@@ -604,10 +605,10 @@ def private_to_public_graph(
 
     if joined_with_geom.empty:
         edges_gdf = gpd.GeoDataFrame(joined_with_geom, geometry="geometry", crs=private_gdf.crs)
+        all_nodes = pd.concat([private_gdf, public_gdf], ignore_index=True)
         if as_nx:
-            all_nodes = pd.concat([private_gdf, public_gdf], ignore_index=True)
             return gdf_to_nx(nodes=all_nodes, edges=edges_gdf)
-        return edges_gdf
+        return all_nodes, edges_gdf
 
     # Get centroid geometries for each pair in the 'joined' DataFrame
     p1_geoms = private_centroids_map.loc[joined_with_geom[_priv_id_col]].reset_index(drop=True)
@@ -622,14 +623,15 @@ def private_to_public_graph(
         line_coords = np.stack((coords_p1, coords_p2), axis=1) # Stack coordinates for LineString creation
     joined_with_geom["geometry"] = list(sh_linestrings(line_coords)) # Create LineStrings
 
+
+    # Concatenate private and public GeoDataFrames to create a unified nodes GeoDataFrame
+    nodes_gdf = pd.concat([private_gdf, public_gdf], ignore_index=True)
+
     # Convert the DataFrame with edge geometries to a GeoDataFrame
-    # Columns are already named _priv_id_col ("private_id") and _pub_id_col ("public_id").
     edges_gdf = gpd.GeoDataFrame(joined_with_geom, geometry="geometry", crs=private_gdf.crs)
 
-    if as_nx:
-        all_nodes = pd.concat([private_gdf, public_gdf], ignore_index=True)
-        return gdf_to_nx(nodes=all_nodes, edges=edges_gdf)
-    return edges_gdf
+    return (nodes_gdf, edges_gdf) if not as_nx else gdf_to_nx(nodes_gdf, edges_gdf)
+
 
 
 # ============================================================================
@@ -658,7 +660,7 @@ def public_to_public_graph(
 
     Returns
     -------
-    tuple[geopandas.GeoDataFrame, geopandas.GeoDataFrame] | networkx.Graph
+    tuple[geopandas.GeoDataFrame, gpd.GeoDataFrame] | networkx.Graph
         A tuple containing:
         - Nodes of the public graph (the input public_gdf).
         - Edges of the public graph (connectivity).
@@ -712,7 +714,7 @@ def public_to_public_graph(
     nodes, edges = segments_to_graph(public_gdf_work)
 
     # Create dual graph (nodes are segments, edges are connections)
-    dual_nodes, dual_edges = dual_graph(
+    _, dual_edges = dual_graph(
         (nodes, edges), edge_id_col=edge_id_col, keep_original_geom=True,
     )
 
@@ -720,12 +722,10 @@ def public_to_public_graph(
     if isinstance(dual_edges.index, pd.MultiIndex):
         dual_edges.index.names = ["from_public_id", "to_public_id"]
 
-    # The nodes of the public graph are the original public segments
-    # The dual_nodes represent these segments, but we return the original public_gdf
-    # for consistency and to preserve all original attributes.
-    if as_nx:
-        return gdf_to_nx(nodes=public_gdf, edges=dual_edges.reset_index())
-    return public_gdf, dual_edges.reset_index()
+    # Reset index to ensure it is a regular DataFrame
+    dual_edges = dual_edges.reset_index()
+
+    return (public_gdf, dual_edges) if not as_nx else gdf_to_nx(public_gdf, dual_edges)
 
 
 # ============================================================================
@@ -1043,54 +1043,58 @@ def _connect_centroids_to_centroids(
 
 def _find_closest_node_to_center(
     graph: nx.Graph,
-    center_point_geom: Point, # Geographic center point (Shapely Point)
-) -> str | None:
-    """Find the graph node closest to the geographic center point, vectorized."""
-    # Get positions (coordinates) of all nodes in the graph
-    all_node_pos_dict = nx.get_node_attributes(graph, "pos")
+    center_point_geom: Point,
+) -> str:
+    """Find the graph node ID closest to the geometric center point."""
+    # Extract node positions from the graph
+    pos = nx.get_node_attributes(graph, "pos")
+    if not pos:
+        # Fallback for graphs without 'pos' attribute (e.g., from dual_graph)
+        # This part might be fragile if node names are not coordinate tuples
+        try:
+            # Ensure nodes are strings for eval, handle potential tuples
+            node_ids = list(graph.nodes)
+            node_coords = np.array([eval(str(node)) for node in node_ids])
+        except (SyntaxError, TypeError):
+            raise ValueError(
+                "Graph nodes must have 'pos' attribute or be coordinate strings."
+            )
+    else:
+        node_ids = list(pos.keys())
+        node_coords = np.array(list(pos.values()))
 
-    # Convert node positions to a NumPy array of coordinates
-    node_coords = np.array([list(pos) for pos in all_node_pos_dict.values() if pos is not None])
+    # Create a KDTree for efficient nearest neighbor search
+    kdtree = KDTree(node_coords)
 
-    # Filter node_ids to match the successfully converted and valid coordinates
-    # This ensures node_ids and node_coords are aligned.
-    valid_node_data = {
-        nid: pos for nid, pos in all_node_pos_dict.items()
-        if pos is not None and isinstance(pos, tuple) and len(pos) == 2 # Check for valid position tuple
-    }
+    # Query for the closest node to the center point
+    _, idx = kdtree.query([center_point_geom.x, center_point_geom.y])
 
-    # Extract valid node IDs and their coordinates
-    node_ids = list(valid_node_data.keys()) # List of node IDs with valid positions
-    node_coords = np.array(list(valid_node_data.values())) # NumPy array of valid coordinates
-
-    # Ensure center_point_geom is a Point and extract its coordinates
-    center_coord = np.array([center_point_geom.x, center_point_geom.y]) # Coordinates of the center point
-
-    # Calculate squared Euclidean distances from all nodes to the center point (avoids sqrt for comparison)
-    distances_sq = np.sum((node_coords - center_coord)**2, axis=1)
-
-    # Find the index of the minimum squared distance
-    closest_idx = np.argmin(distances_sq)
     # Return the ID of the closest node
-    return node_ids[closest_idx]
+    return node_ids[idx]
 
 
 def _filter_nodes_by_path_length(
     graph: nx.Graph,
-    source_node_id: str, # Starting node for path length calculation
-    max_distance: float, # Maximum allowed path length
-    centroid_iloc_to_node_id: dict[int, str], # Mapping from centroid iloc to graph node ID
-) -> list[int]: # Returns list of ilocs of centroids within max_distance
-    # Calculate shortest path lengths from source_node_id to all other nodes
-    lengths = nx.single_source_dijkstra_path_length(graph, source_node_id, weight="length")
+    source_node_id: str,
+    max_distance: float,
+    centroid_iloc_to_node_id: dict[int, str],
+) -> list[int]:
+    """Filter nodes by path length from a source node."""
+    if source_node_id not in graph:
+        # This can happen if the center point is very far from any graph node
+        logger.warning("Source node for distance filtering not found in graph.")
+        return []
 
-    # Filter centroid ilocs based on whether their corresponding node's path length is within max_distance
-    return [
-        iloc # Keep the iloc of the centroid
-        for iloc, node_id in centroid_iloc_to_node_id.items() # Iterate through centroid mappings
-        # Check if path length to centroid node is <= max_distance
-        if lengths.get(node_id, math.inf) <= max_distance
-    ]
+    lengths = nx.single_source_dijkstra_path_length(
+        graph, source_node_id, weight="length"
+    )
+
+    # Get the ilocs of tessellation centroids that are within the max_distance
+    keep_ilocs = []
+    for iloc, node_id in centroid_iloc_to_node_id.items():
+        if node_id in lengths and lengths[node_id] <= max_distance:
+            keep_ilocs.append(iloc)
+    return keep_ilocs
 
 
 def _filter_tessellation_by_network_distance(

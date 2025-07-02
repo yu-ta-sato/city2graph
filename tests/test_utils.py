@@ -69,7 +69,7 @@ def test_create_tessellation(
             False,
             None,
             TypeError,
-            "Input `gdf` must be a tuple of \\(nodes_gdf, edges_gdf\\)\\.",
+            "Input `graph` must be a tuple of \\(nodes_gdf, edges_gdf\\) or a NetworkX graph\\.",
         ),
         (
             "sample_nodes_gdf",

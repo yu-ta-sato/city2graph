@@ -24,11 +24,11 @@ from __future__ import annotations
 import logging
 from itertools import combinations
 from itertools import permutations
-from typing import Any
+from typing import TYPE_CHECKING
 
-import geopandas as gpd  # noqa: TC002
 import networkx as nx
 import numpy as np
+import numpy.typing as npt
 from scipy.spatial import Delaunay
 from scipy.spatial import distance as sdist
 from shapely.geometry import LineString
@@ -37,6 +37,9 @@ from sklearn.neighbors import NearestNeighbors
 from .utils import gdf_to_nx
 from .utils import nx_to_gdf
 from .utils import validate_gdf
+
+if TYPE_CHECKING:
+    import geopandas as gpd
 
 logger = logging.getLogger(__name__)
 
@@ -401,7 +404,7 @@ def gabriel_graph(
 
     # ---- Gabriel filtering --------------------------------------------------
     # Square distances for numerical stability
-    kept_edges: set[tuple[Any, Any]] = set()
+    kept_edges: set[tuple[int, int]] = set()
     tol = 1e-12
     for i, j in delaunay_edges:
         mid = 0.5 * (coords[i] + coords[j])
@@ -505,7 +508,7 @@ def relative_neighborhood_graph(
         }
 
     # ---- RNG filtering ----------------------------------------------------
-    kept_edges: set[tuple[Any, Any]] = set()
+    kept_edges: set[tuple[int, int]] = set()
     # work with squared distances to avoid sqrt
     for i, j in cand_edges:
         dij2 = np.dot(coords[i] - coords[j], coords[i] - coords[j])
@@ -610,7 +613,7 @@ def euclidean_minimum_spanning_tree(
     # ---- candidate edge set ----------------------------------------------
     # Fast O(n) candidate set via Delaunay when it is applicable
     use_complete_graph = False
-    cand_edges: set[tuple[Any, Any]]
+    cand_edges: set[tuple[int, int]]
 
     if distance_metric.lower() == "euclidean" and n_points >= 3:
         tri = Delaunay(coords)
@@ -1036,7 +1039,7 @@ def bridge_nodes(
     *,
     multigraph: bool = False,
     as_nx: bool = False,
-    **kwargs: Any,
+    **kwargs: float | str | bool,
 ) -> tuple[dict[str, gpd.GeoDataFrame], dict[tuple[str, str, str], gpd.GeoDataFrame]] | nx.Graph:
     r"""Build directed proximity edges between every ordered pair of node layers.
 
@@ -1223,7 +1226,7 @@ def bridge_nodes(
                 src_gdf,
                 k=k,
                 target_gdf=dst_gdf,
-                **{k_: v for k_, v in kwargs.items() if k_ not in {"k", "radius"}},
+                **{k_: v for k_, v in kwargs.items() if k_ not in {"k", "radius"} and isinstance(v, (str, bool))},  # type: ignore[arg-type]
             )
         else:  # fixed_radius
             radius = float(kwargs["radius"])
@@ -1231,7 +1234,7 @@ def bridge_nodes(
                 src_gdf,
                 radius=radius,
                 target_gdf=dst_gdf,
-                **{k_: v for k_, v in kwargs.items() if k_ != "radius"},
+                **{k_: v for k_, v in kwargs.items() if k_ != "radius" and isinstance(v, (str, bool))},  # type: ignore[arg-type]
             )
 
         edge_dict[(src_type, "is_nearby", dst_type)] = edges_gdf
@@ -1248,7 +1251,7 @@ def _prepare_nodes(
     gdf: gpd.GeoDataFrame,
     *,
     directed: bool = False,
-) -> tuple[nx.Graph, np.ndarray, list]:
+) -> tuple[nx.Graph, npt.NDArray[np.floating], list[int]]:
     """Return an empty graph with populated nodes plus coord cache."""
     validate_gdf(nodes_gdf=gdf)
 
@@ -1269,19 +1272,19 @@ def _prepare_nodes(
 # DISTANCE MATRIX
 # ============================================================================
 
-def _euclidean_dm(coords: np.ndarray) -> np.ndarray:
-    return sdist.squareform(sdist.pdist(coords))
+def _euclidean_dm(coords: npt.NDArray[np.floating]) -> npt.NDArray[np.floating]:
+    return sdist.squareform(sdist.pdist(coords))  # type: ignore[no-any-return]
 
 
-def _manhattan_dm(coords: np.ndarray) -> np.ndarray:
-    return sdist.squareform(sdist.pdist(coords, metric="cityblock"))
+def _manhattan_dm(coords: npt.NDArray[np.floating]) -> npt.NDArray[np.floating]:
+    return sdist.squareform(sdist.pdist(coords, metric="cityblock"))  # type: ignore[no-any-return]
 
 
 def _network_dm(
-    coords: np.ndarray,
+    coords: npt.NDArray[np.floating],
     network_gdf: gpd.GeoDataFrame,
     gdf_crs: gpd.crs.CRS | None = None,
-) -> np.ndarray:
+) -> npt.NDArray[np.floating]:
     if network_gdf.crs != gdf_crs:
         msg = f"CRS mismatch: {gdf_crs} != {network_gdf.crs}"
         raise ValueError(msg)
@@ -1292,7 +1295,7 @@ def _network_dm(
     # Get node positions
     pos = nx.get_node_attributes(net_nx, "pos")
 
-    net_coords = np.asarray(list(pos.values()))
+    net_coords: npt.NDArray[np.floating] = np.asarray(list(pos.values()))
     net_ids = list(pos.keys())
 
     # Map sample points to nearest network nodes
@@ -1302,7 +1305,7 @@ def _network_dm(
 
     # Pre-allocate matrix
     n = len(coords)
-    dm = np.full((n, n), np.inf)
+    dm: npt.NDArray[np.floating] = np.full((n, n), np.inf)
     np.fill_diagonal(dm, 0)
 
     use_weight = "length" if any("length" in d for _, _, d in net_nx.edges(data=True)) else None
@@ -1317,11 +1320,11 @@ def _network_dm(
 
 
 def _distance_matrix(
-    coords: np.ndarray,
+    coords: npt.NDArray[np.floating],
     metric: str,
     network_gdf: gpd.GeoDataFrame | None,
     gdf_crs: gpd.crs.CRS | None = None,
-) -> np.ndarray:
+) -> npt.NDArray[np.floating]:
     """Return a distance matrix for the given coordinates and metric."""
     metric = metric.lower()
     if metric == "euclidean":
@@ -1342,12 +1345,12 @@ def _distance_matrix(
 
 def _add_edges(
     G: nx.Graph,
-    edges: tuple[Any, Any],
-    coords: np.ndarray,
-    node_ids: list,
+    edges: list[tuple[int, int]] | set[tuple[int, int]],
+    coords: npt.NDArray[np.floating],
+    node_ids: list[int],
     *,
     metric: str,
-    dm: np.ndarray | None = None,
+    dm: npt.NDArray[np.floating] | None = None,
     network_gdf: gpd.GeoDataFrame | None = None,
 ) -> None:
     """
@@ -1387,7 +1390,7 @@ def _add_edges(
     nx.set_edge_attributes(G, weights, "weight")
 
     # ---- 3. geometries -----------------------------------------------------
-    geom_attr: dict[tuple[Any, Any], LineString] = {}
+    geom_attr: dict[tuple[int, int], LineString] = {}
 
     # 3-a: network metric  ..................................................
     if metric.lower() == "network":
@@ -1462,15 +1465,15 @@ def _add_edges(
 
 
 def _directed_edges(
-    src_coords: np.ndarray,
-    dst_coords: np.ndarray,
-    src_ids: list,
-    dst_ids: list,
+    src_coords: npt.NDArray[np.floating],
+    dst_coords: npt.NDArray[np.floating],
+    src_ids: list[int],
+    dst_ids: list[int],
     *,
     metric: str,
     k: int | None = None,
     radius: float | None = None,
-) -> list[tuple[Any, Any]]:
+) -> list[tuple[int, int]]:
     """Return edge tuples from *src* to *dst* according to KNN or radius."""
     if (k is None) == (radius is None):
         msg = "Specify exactly one of k or radius for directed graph"
@@ -1527,7 +1530,7 @@ def _directed_graph(
         src_ids,
         dst_ids,
         metric=distance_metric,
-        k=param if method == "knn" else None,
+        k=int(param) if method == "knn" else None,
         radius=param if method == "radius" else None,
     )
 

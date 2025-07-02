@@ -448,8 +448,9 @@ class TestPrivateToPublicGraph:
         self, sample_tessellation_gdf, sample_segments_gdf,
     ):
         """Test basic private-to-public graph creation."""
-        edges = private_to_public_graph(sample_tessellation_gdf, sample_segments_gdf)
+        nodes, edges = private_to_public_graph(sample_tessellation_gdf, sample_segments_gdf)
 
+        assert isinstance(nodes, gpd.GeoDataFrame)
         assert isinstance(edges, gpd.GeoDataFrame)
         if not edges.empty:
             assert "private_id" in edges.columns
@@ -470,51 +471,57 @@ class TestPrivateToPublicGraph:
         self, sample_tessellation_gdf, sample_segments_gdf, tolerance,
     ):
         """Test private-to-public with different tolerance values."""
-        edges = private_to_public_graph(
+        nodes, edges = private_to_public_graph(
             sample_tessellation_gdf, sample_segments_gdf, tolerance=tolerance,
         )
 
+        assert isinstance(nodes, gpd.GeoDataFrame)
         assert isinstance(edges, gpd.GeoDataFrame)
 
     def test_private_to_public_with_barrier_col(
         self, sample_tessellation_gdf, segments_gdf_alt_geom,
     ):
         """Test private-to-public with alternative barrier column."""
-        edges = private_to_public_graph(
+        nodes, edges = private_to_public_graph(
             sample_tessellation_gdf,
             segments_gdf_alt_geom,
             primary_barrier_col="barrier_geometry",
         )
 
+        assert isinstance(nodes, gpd.GeoDataFrame)
         assert isinstance(edges, gpd.GeoDataFrame)
 
     def test_private_to_public_empty_private(self, empty_gdf, sample_segments_gdf):
         """Test private-to-public with empty private input."""
-        edges = private_to_public_graph(empty_gdf, sample_segments_gdf)
+        nodes, edges = private_to_public_graph(empty_gdf, sample_segments_gdf)
 
+        assert nodes.empty or len(nodes) == len(sample_segments_gdf)  # Should contain only public nodes
         assert edges.empty
 
     def test_private_to_public_empty_public(self, sample_tessellation_gdf, empty_gdf):
         """Test private-to-public with empty public input."""
-        edges = private_to_public_graph(sample_tessellation_gdf, empty_gdf)
+        nodes, edges = private_to_public_graph(sample_tessellation_gdf, empty_gdf)
 
+        assert len(nodes) == len(sample_tessellation_gdf)  # Should contain only private nodes
         assert edges.empty
 
     def test_private_to_public_both_empty(self, empty_gdf):
         """Test private-to-public with both inputs empty."""
-        edges = private_to_public_graph(empty_gdf, empty_gdf)
+        nodes, edges = private_to_public_graph(empty_gdf, empty_gdf)
 
+        assert nodes.empty
         assert edges.empty
 
     def test_private_to_public_single_cell_single_segment(
         self, p2pub_private_single_cell, p2pub_public_single_segment,
     ):
         """Test private-to-public with single cell and segment."""
-        edges = private_to_public_graph(
+        nodes, edges = private_to_public_graph(
             p2pub_private_single_cell, p2pub_public_single_segment,
         )
 
         # Should have a connection due to proximity
+        assert len(nodes) == 2  # One private + one public node
         assert len(edges) == 1
         assert edges.iloc[0]["private_id"] == 0
         assert edges.iloc[0]["public_id"] == 10
@@ -523,10 +530,11 @@ class TestPrivateToPublicGraph:
         self, sample_tessellation_gdf, segments_gdf_far_away,
     ):
         """Test private-to-public with no possible connections."""
-        edges = private_to_public_graph(
+        nodes, edges = private_to_public_graph(
             sample_tessellation_gdf, segments_gdf_far_away,
         )
 
+        assert len(nodes) == len(sample_tessellation_gdf) + len(segments_gdf_far_away)
         assert edges.empty
 
     def test_private_to_public_crs_mismatch(
@@ -535,11 +543,12 @@ class TestPrivateToPublicGraph:
         """Test private-to-public with CRS mismatch."""
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
-            edges = private_to_public_graph(
+            nodes, edges = private_to_public_graph(
                 sample_tessellation_gdf, segments_gdf_alt_crs,
             )
 
         assert edges.crs == sample_tessellation_gdf.crs
+        assert nodes.crs == sample_tessellation_gdf.crs
 
     def test_private_to_public_invalid_private_type(
         self, not_a_gdf, sample_segments_gdf,
@@ -573,10 +582,12 @@ class TestPrivateToPublicGraph:
         self, sample_tessellation_gdf, sample_segments_gdf,
     ):
         """Test that edge geometries are LineStrings connecting centroids."""
-        edges = private_to_public_graph(
+        nodes, edges = private_to_public_graph(
             sample_tessellation_gdf, sample_segments_gdf,
         )
 
+        assert isinstance(nodes, gpd.GeoDataFrame)
+        assert isinstance(edges, gpd.GeoDataFrame)
         if not edges.empty:
             assert all(edges.geometry.geom_type == "LineString")
             # Each edge should have exactly 2 coordinates
@@ -833,7 +844,7 @@ class TestComprehensiveCoverage:
             "public_id": [0],
             "geometry": [LineString([(0, 0), (1, 1)])],
         }, crs=sample_crs)
-        edges = private_to_public_graph(empty_private, public_gdf)
+        nodes, edges = private_to_public_graph(empty_private, public_gdf)
         assert edges.empty
 
         # Test with empty public GDF
@@ -842,11 +853,11 @@ class TestComprehensiveCoverage:
             "geometry": [Polygon([(0, 0), (1, 0), (1, 1), (0, 1)])],
         }, crs=sample_crs)
         empty_public = gpd.GeoDataFrame(columns=["public_id", "geometry"], crs=sample_crs)
-        edges = private_to_public_graph(private_gdf, empty_public)
+        nodes, edges = private_to_public_graph(private_gdf, empty_public)
         assert edges.empty
 
         # Test with both empty
-        edges = private_to_public_graph(empty_private, empty_public)
+        nodes, edges = private_to_public_graph(empty_private, empty_public)
         assert edges.empty
 
         # Test with intersecting geometries
@@ -854,7 +865,7 @@ class TestComprehensiveCoverage:
             "public_id": [0],
             "geometry": [LineString([(0.5, 0), (0.5, 1)])],  # Line through polygon
         }, crs=sample_crs)
-        edges = private_to_public_graph(private_gdf, intersecting_public)
+        nodes, edges = private_to_public_graph(private_gdf, intersecting_public)
         assert isinstance(edges, gpd.GeoDataFrame)
 
     def test_public_to_public_comprehensive_scenarios(self, sample_crs):
@@ -1084,43 +1095,36 @@ class TestEdgeCasesAndErrorHandling:
 
     def test_private_to_public_very_small_tolerance(self, sample_tessellation_gdf, sample_segments_gdf):
         """Test private_to_public_graph with very small tolerance."""
-        edges = private_to_public_graph(
+        nodes, edges = private_to_public_graph(
             sample_tessellation_gdf,
             sample_segments_gdf,
             tolerance=1e-12,  # Very small tolerance
         )
 
+        assert isinstance(nodes, gpd.GeoDataFrame)
         assert isinstance(edges, gpd.GeoDataFrame)
 
     def test_private_to_public_very_large_tolerance(self, sample_tessellation_gdf, sample_segments_gdf):
-        """Test private_to_public_graph with very large tolerance."""
-        edges = private_to_public_graph(
-            sample_tessellation_gdf,
-            sample_segments_gdf,
-            tolerance=1000,  # Very large tolerance
+        """Test private-to-public with a very large tolerance."""
+        nodes, edges = private_to_public_graph(
+            sample_tessellation_gdf, sample_segments_gdf, tolerance=1000,
         )
-
+        assert isinstance(nodes, gpd.GeoDataFrame)
         assert isinstance(edges, gpd.GeoDataFrame)
-        # Should have many connections with large tolerance
-        if not sample_tessellation_gdf.empty and not sample_segments_gdf.empty:
-            assert len(edges) >= 0
+        assert not edges.empty
 
     def test_morphological_graph_missing_enclosure_index(self, sample_buildings_gdf, sample_segments_gdf):
-        """Test morphological graph when tessellation lacks enclosure_index."""
-        # This tests the warning path when enclosure_index is missing
-        with warnings.catch_warnings(record=True) as w:
-            warnings.simplefilter("always")
-            nodes, edges = morphological_graph(sample_buildings_gdf, sample_segments_gdf)
-
-            # Check if warning was issued (may or may not happen depending on tessellation result)
-            assert isinstance(nodes, dict)
-            assert isinstance(edges, dict)
+        """Test morphological graph when tessellation is missing enclosure_index."""
+        # This test simulates a scenario where tessellation somehow doesn't get the enclosure_index
+        # The function should handle this gracefully.
+        nodes, edges = morphological_graph(sample_buildings_gdf, sample_segments_gdf)
+        assert isinstance(nodes, dict)
+        assert isinstance(edges, dict)
 
     @pytest.mark.parametrize("contiguity", ["queen", "rook"])
     def test_private_to_private_different_contiguity_types(self, sample_tessellation_gdf, contiguity):
-        """Test private_to_private_graph with different contiguity types."""
+        """Test private-to-private with both contiguity types."""
         nodes, edges = private_to_private_graph(sample_tessellation_gdf, contiguity=contiguity)
-
         assert isinstance(nodes, gpd.GeoDataFrame)
         assert isinstance(edges, gpd.GeoDataFrame)
 
@@ -1134,31 +1138,27 @@ class TestEdgeCasesAndErrorHandling:
             center_point=center_point,
             distance=1000,
         )
-
         assert isinstance(nodes, dict)
         assert isinstance(edges, dict)
 
     def test_all_functions_return_correct_types(self, sample_buildings_gdf, sample_segments_gdf, sample_tessellation_gdf):
-        """Test that all main functions return correct types."""
-        # Test morphological_graph
+        """Test that all public functions return the correct types."""
+        # morphological_graph
         nodes, edges = morphological_graph(sample_buildings_gdf, sample_segments_gdf)
         assert isinstance(nodes, dict)
         assert isinstance(edges, dict)
 
-        # Test as NetworkX
-        nx_graph = morphological_graph(sample_buildings_gdf, sample_segments_gdf, as_nx=True)
-        assert isinstance(nx_graph, nx.Graph)
-
-        # Test private_to_private_graph
+        # private_to_private_graph
         p2p_nodes, p2p_edges = private_to_private_graph(sample_tessellation_gdf)
         assert isinstance(p2p_nodes, gpd.GeoDataFrame)
         assert isinstance(p2p_edges, gpd.GeoDataFrame)
 
-        # Test private_to_public_graph
-        p2pub_edges = private_to_public_graph(sample_tessellation_gdf, sample_segments_gdf)
+        # private_to_public_graph
+        p2pub_nodes, p2pub_edges = private_to_public_graph(sample_tessellation_gdf, sample_segments_gdf)
+        assert isinstance(p2pub_nodes, gpd.GeoDataFrame)
         assert isinstance(p2pub_edges, gpd.GeoDataFrame)
 
-        # Test public_to_public_graph
+        # public_to_public_graph
         pub2pub_nodes, pub2pub_edges = public_to_public_graph(sample_segments_gdf)
         assert isinstance(pub2pub_nodes, gpd.GeoDataFrame)
         assert isinstance(pub2pub_edges, gpd.GeoDataFrame)

@@ -374,13 +374,16 @@ def test_pyg_to_gdf_specific_types(sample_hetero_nodes_dict, sample_hetero_edges
     assert len(nodes_dict_specific) == 1
 
     # Test reconstructing only ('building', 'connects_to', 'road') edges
-    _nodes_dict_specific, edges_dict_specific = pyg_to_gdf(pyg_data, edge_types=[("building", "connects_to", "road")])
+    _nodes_dict_specific, edges_dict_specific = pyg_to_gdf(pyg_data,
+                                                           edge_types=[("building","connects_to", "road")])
     assert ("building", "connects_to", "road") in edges_dict_specific
     assert ("road", "links_to", "road") not in edges_dict_specific
     assert len(edges_dict_specific) == 1
 
     # Test reconstructing specific node and edge types together
-    nodes_dict_combo, edges_dict_combo = pyg_to_gdf(pyg_data, node_types=["road"], edge_types=[("road", "links_to", "road")])
+    nodes_dict_combo, edges_dict_combo = pyg_to_gdf(pyg_data,
+                                                    node_types=["road"],
+                                                    edge_types=[("road", "links_to", "road")])
     assert "road" in nodes_dict_combo
     assert "building" not in nodes_dict_combo
     assert ("road", "links_to", "road") in edges_dict_combo

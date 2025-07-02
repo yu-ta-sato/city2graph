@@ -252,33 +252,59 @@ def gdf_to_pyg(
     # Validate input GeoDataFrames
     is_hetero = isinstance(nodes, dict)
     if is_hetero:
-        [validate_gdf(nodes_gdf=node_gdf) for node_gdf in nodes.values()]
+        for node_type, node_gdf in nodes.items():
+            nodes[node_type], _ = validate_gdf(nodes_gdf=node_gdf)
         if edges:
             # Validate non-empty edge GeoDataFrames. Empty ones are handled downstream.
-            [validate_gdf(edges_gdf=edge_gdf) for edge_gdf in edges.values() if edge_gdf is not None and not edge_gdf.empty]
+            for edge_type, edge_gdf in edges.items():
+                _, edges[edge_type] = validate_gdf(edges_gdf=edge_gdf, allow_empty=True)
     else:
-        validate_gdf(nodes_gdf=nodes, edges_gdf=edges)
+        nodes, edges = validate_gdf(nodes_gdf=nodes, edges_gdf=edges)
 
     device = _get_device(device)
 
     is_hetero = isinstance(nodes, dict)
     if is_hetero:
+        # Ensure feature/label columns are dicts for heterogeneous graphs
+        if not (node_feature_cols is None or isinstance(node_feature_cols, dict)):
+            msg = "node_feature_cols must be a dict for heterogeneous graphs"
+            raise ValueError(msg)
+        if not (node_label_cols is None or isinstance(node_label_cols, dict)):
+            msg = "node_label_cols must be a dict for heterogeneous graphs"
+            raise ValueError(msg)
+        if not (edge_feature_cols is None or isinstance(edge_feature_cols, dict)):
+            msg = "edge_feature_cols must be a dict for heterogeneous graphs"
+            raise ValueError(msg)
+
+        assert node_feature_cols is None or isinstance(node_feature_cols, dict)
+        node_feature_cols_hetero: dict[str, list[str]] | None = node_feature_cols
+        assert node_label_cols is None or isinstance(node_label_cols, dict)
+        node_label_cols_hetero: dict[str, list[str]] | None = node_label_cols
+        assert edge_feature_cols is None or isinstance(edge_feature_cols, dict)
+        edge_feature_cols_hetero: dict[str, list[str]] | None = edge_feature_cols
+
         data = _build_heterogeneous_graph(
-            nodes, edges, node_feature_cols, node_label_cols,
-            edge_feature_cols, device, dtype,
+            nodes, edges, node_feature_cols_hetero, node_label_cols_hetero,
+            edge_feature_cols_hetero, device, dtype,
         )
     else:
         nodes_gdf: gpd.GeoDataFrame = nodes
         edges_gdf: gpd.GeoDataFrame | None = edges
-        node_feature_cols_list: list[str] | None = node_feature_cols
-        node_label_cols_list: list[str] | None = node_label_cols
-        edge_feature_cols_list: list[str] | None = edge_feature_cols
+        node_feature_cols_homo: list[str] | None = (
+            node_feature_cols if isinstance(node_feature_cols, list) else None
+            )
+        node_label_cols_homo: list[str] | None = (
+            node_label_cols if isinstance(node_label_cols, list) else None
+            )
+        edge_feature_cols_homo: list[str] | None = (
+            edge_feature_cols if isinstance(edge_feature_cols, list) else None
+            )
 
         # Create a homogeneous Data object
         data = _build_homogeneous_graph(
-            nodes_gdf, edges_gdf, node_feature_cols_list,
-            node_label_cols_list,
-            edge_feature_cols_list, device, dtype,
+            nodes_gdf, edges_gdf, node_feature_cols_homo,
+            node_label_cols_homo,
+            edge_feature_cols_homo, device, dtype,
         )
 
     # Validate the created PyG object
@@ -363,18 +389,18 @@ def pyg_to_gdf(
         edge_types_to_process = edge_types or metadata.edge_types
 
         node_gdfs = {
-            nt: _reconstruct_node_gdf(data, nt, metadata) for nt in node_types_to_process
+            nt: _reconstruct_node_gdf(data, metadata, node_type=nt) for nt in node_types_to_process
         }
         edge_gdfs = {
-            et: _reconstruct_edge_gdf(data, et, metadata) for et in edge_types_to_process
+            et: _reconstruct_edge_gdf(data, metadata, et) for et in edge_types_to_process
         }
         return node_gdfs, edge_gdfs
 
     # ------------------------------------------------------------------
     # Data → pandas
     # ------------------------------------------------------------------
-    nodes_gdf = _reconstruct_node_gdf(data, None, metadata)
-    edges_gdf = _reconstruct_edge_gdf(data, None, metadata)
+    nodes_gdf = _reconstruct_node_gdf(data, metadata, None)
+    edges_gdf = _reconstruct_edge_gdf(data, metadata, None)
     return nodes_gdf, edges_gdf
 
 
@@ -721,7 +747,9 @@ def _create_node_features(
     valid_cols = list(set(feature_cols) & set(node_gdf.columns))
     if valid_cols:
         # Convert to numpy array with consistent float32 type
-        features_array = node_gdf[valid_cols].to_numpy().astype(np.float32)
+        features_array: np.ndarray[tuple[int, ...], np.dtype[np.float32]] = (
+            node_gdf[valid_cols].to_numpy().astype(np.float32)
+        )
         return torch.from_numpy(features_array).to(device=device, dtype=dtype)
 
     # Return empty tensor if no valid columns found
@@ -763,7 +791,7 @@ def _create_node_positions(
 
     # Get centroids of geometries
     centroids = geom_series.centroid
-    pos_data = np.column_stack([
+    pos_data: np.ndarray[tuple[int, ...], np.dtype[np.float64]] = np.column_stack([
         centroids.x.to_numpy(),
         centroids.y.to_numpy(),
     ])
@@ -816,7 +844,9 @@ def _create_edge_features(
     numeric_cols = edge_gdf[valid_cols].select_dtypes(include=np.number).columns.tolist()
 
     # Convert to numpy array with consistent float32 type
-    features_array = edge_gdf[numeric_cols].to_numpy().astype(np.float32)
+    features_array: np.ndarray[tuple[int, ...], np.dtype[np.float32]] = (
+        edge_gdf[numeric_cols].to_numpy().astype(np.float32)
+    )
     return torch.from_numpy(features_array).to(device=device, dtype=dtype)
 
 
@@ -861,14 +891,22 @@ def _map_edge_ids_to_indices(
     valid_targets = target_ids[valid_edges_mask]
 
     # Map original node IDs to integer indices
-    from_indices = valid_sources.map(source_mapping).to_numpy()
-    to_indices = valid_targets.map(target_mapping).to_numpy()
+    from_indices: np.ndarray[tuple[int, ...], np.dtype[np.int64]] = (
+        valid_sources.map(source_mapping).to_numpy(dtype=int)
+    )
+    to_indices: np.ndarray[tuple[int, ...], np.dtype[np.int64]] = (
+        valid_targets.map(target_mapping).to_numpy(dtype=int)
+    )
 
-    return np.column_stack([from_indices, to_indices]).tolist()
+    combined_array = np.column_stack([from_indices, to_indices]).astype(int)
+    result: list[list[int]] = combined_array.tolist()
+    return result
 
 
 def _create_linestring_geometries(
-    edge_index_array: np.ndarray, src_pos: np.ndarray, dst_pos: np.ndarray,
+    edge_index_array: np.ndarray[tuple[int, ...], np.dtype[np.int64]],
+    src_pos: np.ndarray[tuple[int, ...], np.dtype[np.float64]],
+    dst_pos: np.ndarray[tuple[int, ...], np.dtype[np.float64]],
 ) -> list[LineString | None]:
     """
     Generate LineString geometries from node positions and edge connectivity.
@@ -1081,9 +1119,9 @@ def _process_hetero_nodes(
     node_label_cols: dict[str, list[str]] | None,
     device: str | torch.device | None,
     dtype: torch.dtype | None,
-) -> dict[str, dict]:
+) -> dict[str, dict[str, dict[str | int, int] | str | list[str | int]]]:
     """Process all node types for heterogeneous graph."""
-    node_mappings = {}
+    node_mappings: dict[str, dict[str, dict[str | int, int] | str | list[str | int]]] = {}
     device = _get_device(device)
 
     for node_type, node_gdf in nodes_dict.items():
@@ -1114,7 +1152,7 @@ def _process_hetero_nodes(
 def _process_hetero_edges(
     data: HeteroData,
     edges_dict: dict[tuple[str, str, str], gpd.GeoDataFrame],
-    node_mappings: dict[str, dict],
+    node_mappings: dict[str, dict[str, dict[str | int, int] | str | list[str | int]]],
     edge_feature_cols: dict[str, list[str]] | None,
     device: str | torch.device | None,
     dtype: torch.dtype | None,
@@ -1127,8 +1165,21 @@ def _process_hetero_edges(
         src_type, rel_type, dst_type = edge_type
 
         # Get the mapping dictionaries (not the full metadata)
-        src_mapping = node_mappings[src_type]["mapping"]
-        dst_mapping = node_mappings[dst_type]["mapping"]
+        src_mapping_obj = node_mappings[src_type]["mapping"]
+        dst_mapping_obj = node_mappings[dst_type]["mapping"]
+
+        # Extract the actual mapping dictionaries
+        if isinstance(src_mapping_obj, dict):
+            src_mapping = src_mapping_obj
+        else:
+            msg = f"Expected mapping dict for {src_type}, got {type(src_mapping_obj)}"
+            raise TypeError(msg)
+
+        if isinstance(dst_mapping_obj, dict):
+            dst_mapping = dst_mapping_obj
+        else:
+            msg = f"Expected mapping dict for {dst_type}, got {type(dst_mapping_obj)}"
+            raise TypeError(msg)
 
         if edge_gdf is not None and not edge_gdf.empty:
             edge_pairs = _create_edge_indices(
@@ -1147,7 +1198,7 @@ def _process_hetero_edges(
 
 def _store_hetero_metadata(
     data: HeteroData,
-    node_mappings: dict[str, dict],
+    node_mappings: dict[str, dict[str, dict[str | int, int] | str | list[str | int]]],
     nodes_dict: dict[str, gpd.GeoDataFrame],
     edges_dict: dict[tuple[str, str, str], gpd.GeoDataFrame],
     node_feature_cols: dict[str, list[str]] | None,
@@ -1234,12 +1285,12 @@ def _validate_pyg(data: Data | HeteroData) -> GraphMetadata:
 
 def _extract_tensor_data(
     tensor: torch.Tensor | None, column_names: list[str] | None = None,
-) -> dict[str, np.ndarray]:
+) -> dict[str, np.ndarray[tuple[int, ...], np.dtype[np.float32]]]:
     """Extract data from tensor with proper column names."""
     if tensor is None or tensor.numel() == 0:
         return {}
 
-    features_array = tensor.detach().cpu().numpy()
+    features_array: np.ndarray[tuple[int, ...], np.dtype[np.float32]] = tensor.detach().cpu().numpy()
 
     if column_names is None:
         return {}
@@ -1250,7 +1301,7 @@ def _extract_tensor_data(
 
 def _get_node_data_info(
     data: Data | HeteroData, node_type: str | None, metadata: GraphMetadata,
-) -> tuple[Data, int]:
+) -> tuple[Data | HeteroData, int]:
     """Get node data and number of nodes."""
     node_data = data[node_type] if metadata.is_hetero and node_type else data
     return node_data, int(node_data.num_nodes)
@@ -1258,27 +1309,34 @@ def _get_node_data_info(
 
 def _get_mapping_info(
     node_type: str | None, metadata: GraphMetadata,
-) -> dict | None:
+) -> dict[str, dict[str | int, int] | str | list[str | int]] | None:
     """Get mapping info for the given node type."""
     mapping_key = "default" if not metadata.is_hetero or not node_type else node_type
     return metadata.node_mappings.get(mapping_key)
 
 
-def _extract_index_values(mapping_info: dict, num_nodes: int) -> list | None:
+def _extract_index_values(
+    mapping_info: dict[str, dict[str | int, int] | str | list[str | int]],
+    num_nodes: int,
+) -> list[str | int]:
     """Extract index values from mapping info."""
     original_ids = mapping_info.get("original_ids", list(range(num_nodes)))
-    return original_ids[:num_nodes]
+    if isinstance(original_ids, list):
+        return original_ids[:num_nodes]
+    return list(range(num_nodes))
 
 
-def _create_geometry_from_positions(node_data: Data) -> gpd.array.GeometryArray | None:
+def _create_geometry_from_positions(node_data: Data | HeteroData) -> gpd.array.GeometryArray | None:
     """Create geometry from node positions."""
-    pos_array = node_data.pos.detach().cpu().numpy()
+    if node_data.pos is None:
+        return None
+    pos_array: np.ndarray[tuple[int, ...], np.dtype[np.float32]] = node_data.pos.detach().cpu().numpy()
     return gpd.points_from_xy(pos_array[:, 0], pos_array[:, 1])
 
 
 def _extract_node_features_and_labels(
-    node_data: Data, node_type: str | None, metadata: GraphMetadata,
-) -> dict[str, np.ndarray]:
+    node_data: Data | HeteroData, node_type: str | None, metadata: GraphMetadata,
+) -> dict[str, np.ndarray[tuple[int, ...], np.dtype[np.float32]]]:
     """Extract features and labels from node data."""
     gdf_data = {}
     is_hetero = metadata.is_hetero
@@ -1286,15 +1344,23 @@ def _extract_node_features_and_labels(
     # Extract features
     if hasattr(node_data, "x") and node_data.x is not None and metadata.node_feature_cols:
         feature_cols = metadata.node_feature_cols
-        cols = feature_cols.get(node_type) if is_hetero and node_type else feature_cols
-        features_dict = _extract_tensor_data(node_data.x, cols)
+        feature_cols_list: list[str] | None = None
+        if is_hetero and node_type and isinstance(feature_cols, dict):
+            feature_cols_list = feature_cols.get(node_type)
+        elif not is_hetero and isinstance(feature_cols, list):
+            feature_cols_list = feature_cols
+        features_dict = _extract_tensor_data(node_data.x, feature_cols_list)
         gdf_data.update(features_dict)
 
     # Extract labels
     if hasattr(node_data, "y") and node_data.y is not None and metadata.node_label_cols:
         label_cols = metadata.node_label_cols
-        cols = label_cols.get(node_type) if is_hetero and node_type else label_cols
-        labels_dict = _extract_tensor_data(node_data.y, cols)
+        label_cols_list: list[str] | None = None
+        if is_hetero and node_type and isinstance(label_cols, dict):
+            label_cols_list = label_cols.get(node_type)
+        elif not is_hetero and isinstance(label_cols, list):
+            label_cols_list = label_cols
+        labels_dict = _extract_tensor_data(node_data.y, label_cols_list)
         gdf_data.update(labels_dict)
 
     return gdf_data
@@ -1306,11 +1372,11 @@ def _set_gdf_index_and_crs(
     """Set index names and CRS on GeoDataFrame."""
     # Set index names
     if metadata.node_index_names:
-        index_names = None
+        index_names: list[str] | None = None
         # Get index names based on heterogeneity and node type
         if metadata.is_hetero and node_type and isinstance(metadata.node_index_names, dict):
             index_names = metadata.node_index_names.get(node_type)
-        elif not metadata.is_hetero:
+        elif not metadata.is_hetero and isinstance(metadata.node_index_names, list):
             index_names = metadata.node_index_names
 
         # Set index name if available
@@ -1324,7 +1390,7 @@ def _set_gdf_index_and_crs(
 
 
 def _reconstruct_node_gdf(
-    data: Data | HeteroData, node_type: str | None = None, metadata: GraphMetadata | None = None,
+    data: Data | HeteroData, metadata: GraphMetadata, node_type: str | None = None,
 ) -> gpd.GeoDataFrame:
     """Reconstruct node GeoDataFrame from PyTorch Geometric data."""
     node_data, num_nodes = _get_node_data_info(data, node_type, metadata)
@@ -1349,14 +1415,15 @@ def _reconstruct_node_gdf(
 def _reconstruct_edge_index(
     edge_type: str | tuple[str, str, str] | None,
     is_hetero: bool,
-    edge_data_dict: dict[str, list | np.ndarray],
+    edge_data_dict: dict[str, np.ndarray[tuple[int, ...], np.dtype[np.float32]]],
     metadata: GraphMetadata,
 ) -> pd.Index | pd.MultiIndex | None:
     """Reconstruct edge index from stored values."""
-    stored_values = None
+    stored_values: list[list[str | int]] | None = None
     if is_hetero and edge_type and isinstance(metadata.edge_index_values, dict):
-        stored_values = metadata.edge_index_values.get(edge_type)
-    elif not is_hetero and metadata.edge_index_values:
+        if isinstance(edge_type, tuple):
+            stored_values = metadata.edge_index_values.get(edge_type)
+    elif not is_hetero and isinstance(metadata.edge_index_values, list):
         stored_values = metadata.edge_index_values
 
     if not stored_values:
@@ -1371,20 +1438,22 @@ def _reconstruct_edge_index(
 
 
 def _extract_edge_features(
-    edge_data: Data,
-    edge_type: str | tuple | None,
+    edge_data: Data | HeteroData,
+    edge_type: str | tuple[str, str, str] | None,
     is_hetero: bool,
     metadata: GraphMetadata,
-) -> dict[str, np.ndarray]:
+) -> dict[str, np.ndarray[tuple[int, ...], np.dtype[np.float32]]]:
     """Extract edge features from edge data."""
     edge_data_dict = {}
     if hasattr(edge_data, "edge_attr") and edge_data.edge_attr is not None:
         feature_cols = metadata.edge_feature_cols
-        if is_hetero and edge_type:
-                rel_type = edge_type[1]
-                cols = feature_cols.get(rel_type)
-        else:
+        if is_hetero and edge_type and isinstance(edge_type, tuple) and isinstance(feature_cols, dict):
+            rel_type = edge_type[1]
+            cols = feature_cols.get(rel_type)
+        elif not is_hetero and isinstance(feature_cols, list):
             cols = feature_cols
+        else:
+            cols = None
         features_dict = _extract_tensor_data(edge_data.edge_attr, cols)
         edge_data_dict.update(features_dict)
     return edge_data_dict
@@ -1392,7 +1461,7 @@ def _extract_edge_features(
 
 def _create_edge_geometries(
     edge_data: Data,
-    edge_type: str | tuple | None,
+    edge_type: str | tuple[str, str, str] | None,
     is_hetero: bool,
     data: Data | HeteroData,
 ) -> gpd.array.GeometryArray | None:
@@ -1401,36 +1470,42 @@ def _create_edge_geometries(
     edge_index_array = edge_data.edge_index.detach().cpu().numpy()
 
     # Set default positions as None
-    src_pos = dst_pos = None
+    src_pos_array: np.ndarray[tuple[int, ...], np.dtype[np.float64]] | None = None
+    dst_pos_array: np.ndarray[tuple[int, ...], np.dtype[np.float64]] | None = None
 
     # If hetero and specific edge type, get source and destination positions
     if is_hetero and isinstance(edge_type, tuple) and len(edge_type) == 3:
         src_type, _, dst_type = edge_type
         if hasattr(data[src_type], "pos") and data[src_type].pos is not None:
-            src_pos = data[src_type].pos.detach().cpu().numpy()
+            src_pos_array = data[src_type].pos.detach().cpu().numpy()
         if hasattr(data[dst_type], "pos") and data[dst_type].pos is not None:
-            dst_pos = data[dst_type].pos.detach().cpu().numpy()
+            dst_pos_array = data[dst_type].pos.detach().cpu().numpy()
 
     # If not hetero or no specific edge type, use default positions
     elif hasattr(data, "pos") and data.pos is not None:
-        pos = data.pos.detach().cpu().numpy()
-        src_pos = dst_pos = pos
+        pos_array: np.ndarray[tuple[int, ...], np.dtype[np.float64]] = data.pos.detach().cpu().numpy()
+        src_pos_array = pos_array
+        dst_pos_array = pos_array
 
-    geometries = _create_linestring_geometries(edge_index_array, src_pos, dst_pos)
+    if src_pos_array is None or dst_pos_array is None:
+        return None
+
+    geometries = _create_linestring_geometries(edge_index_array, src_pos_array, dst_pos_array)
     return gpd.array.from_shapely(geometries)
 
 
 def _set_edge_index_names(
     gdf: gpd.GeoDataFrame,
-    edge_type: str | tuple | None,
+    edge_type: str | tuple[str, str, str] | None,
     is_hetero: bool,
     metadata: GraphMetadata,
 ) -> None:
     """Set index names on edge GeoDataFrame."""
-    index_names = None
+    index_names: list[str] | None = None
     if is_hetero and edge_type and isinstance(metadata.edge_index_names, dict):
-        index_names = metadata.edge_index_names.get(edge_type)
-    elif not is_hetero and metadata.edge_index_names:
+        if isinstance(edge_type, tuple):
+            index_names = metadata.edge_index_names.get(edge_type)
+    elif not is_hetero and isinstance(metadata.edge_index_names, list):
         index_names = metadata.edge_index_names
 
     if (hasattr(gdf.index, "names") and isinstance(index_names, list) and
@@ -1439,9 +1514,7 @@ def _set_edge_index_names(
 
 
 def _reconstruct_edge_gdf(
-    data: Data | HeteroData,
-    edge_type: str | tuple[str, str, str] | None = None,
-    metadata: GraphMetadata | None = None,
+    data: Data | HeteroData, metadata: GraphMetadata, edge_type: str | tuple[str, str, str] | None = None,
 ) -> gpd.GeoDataFrame:
     """Reconstruct edge GeoDataFrame from PyTorch Geometric data."""
     is_hetero = metadata.is_hetero
@@ -1488,19 +1561,19 @@ def _add_homo_nodes_to_graph(graph: nx.Graph, data: Data) -> None:
 
     # Add positions using vectorized operations
     if hasattr(data, "pos") and data.pos is not None:
-        pos_np = data.pos.detach().cpu().numpy()
+        pos_np: np.ndarray[tuple[int, ...], np.dtype[np.float64]] = data.pos.detach().cpu().numpy()
         attrs_df["pos"] = [tuple(pos_np[i]) for i in range(min(num_nodes, len(pos_np)))]
 
     # Add features using vectorized operations
     if hasattr(data, "x") and data.x is not None:
-        x_np = data.x.detach().cpu().numpy()
+        x_np: np.ndarray[tuple[int, ...], np.dtype[np.float32]] = data.x.detach().cpu().numpy()
         feature_cols = metadata.node_feature_cols or [f"feat_{j}" for j in range(x_np.shape[1])]
         for j, col_name in enumerate(feature_cols[:x_np.shape[1]]):
             attrs_df[col_name] = x_np[:, j]
 
     # Add labels using vectorized operations
     if hasattr(data, "y") and data.y is not None:
-        y_np = data.y.detach().cpu().numpy()
+        y_np: np.ndarray[tuple[int, ...], np.dtype[np.float32]] = data.y.detach().cpu().numpy()
         label_cols = metadata.node_label_cols or [f"label_{j}" for j in range(y_np.shape[1])]
         for j, col_name in enumerate(label_cols[:y_np.shape[1]]):
             attrs_df[col_name] = y_np[:, j]
@@ -1573,14 +1646,28 @@ def _add_hetero_nodes_to_graph(graph: nx.Graph, data: HeteroData) -> dict[str, i
         # Add features using vectorized operations
         if hasattr(node_data, "x") and node_data.x is not None:
             x_np = node_data.x.detach().cpu().numpy()
-            feature_cols = metadata.node_feature_cols.get(node_type) or [f"feat_{j}" for j in range(x_np.shape[1])]
+            # Handle the type union for node_feature_cols
+            if isinstance(metadata.node_feature_cols, dict):
+                feature_cols = (
+                    metadata.node_feature_cols.get(node_type)
+                    or [f"feat_{j}" for j in range(x_np.shape[1])]
+                )
+            else:
+                feature_cols = [f"feat_{j}" for j in range(x_np.shape[1])]
             for j, col_name in enumerate(feature_cols[:x_np.shape[1]]):
                 attrs_df[col_name] = x_np[:, j]
 
         # Add labels using vectorized operations
         if hasattr(node_data, "y") and node_data.y is not None:
             y_np = node_data.y.detach().cpu().numpy()
-            label_cols = metadata.node_label_cols.get(node_type) or [f"label_{j}" for j in range(y_np.shape[1])]
+            # Handle the type union for node_label_cols
+            if isinstance(metadata.node_label_cols, dict):
+                label_cols = (
+                    metadata.node_label_cols.get(node_type)
+                    or [f"label_{j}" for j in range(y_np.shape[1])]
+                )
+            else:
+                label_cols = [f"label_{j}" for j in range(y_np.shape[1])]
             for j, col_name in enumerate(label_cols[:y_np.shape[1]]):
                 attrs_df[col_name] = y_np[:, j]
 
