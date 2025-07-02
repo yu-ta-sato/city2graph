@@ -7,7 +7,9 @@ from pathlib import Path
 
 import geopandas as gpd
 import pandas as pd
-from shapely.geometry import LineString, MultiLineString, Polygon
+from shapely.geometry import LineString
+from shapely.geometry import MultiLineString
+from shapely.geometry import Polygon
 from shapely.ops import substring
 
 __all__ = ["load_overture_data", "process_overture_segments"]
@@ -20,78 +22,6 @@ VALID_OVERTURE_TYPES = {
 
 logger = logging.getLogger(__name__)
 WGS84_CRS = "EPSG:4326"
-
-
-def _download_overture_data(data_type, area, output_dir, prefix, save_to_file, return_data):
-    """Download and process a single overture data type."""
-    if data_type not in VALID_OVERTURE_TYPES:
-        raise ValueError(f"Invalid data type: {data_type}")
-
-    # Handle area input - convert to bbox
-    if isinstance(area, Polygon):
-        if hasattr(area, "crs") and area.crs and area.crs != WGS84_CRS:
-            area = area.to_crs(WGS84_CRS)
-            logger.info("Transformed polygon from %s to WGS84", area.crs)
-        bbox = [round(c, 10) for c in area.bounds]
-        clip_polygon = area
-    else:
-        bbox = area
-        clip_polygon = None
-
-    # Validate and format bbox
-    try:
-        bbox_str = ",".join(str(float(b)) for b in bbox)
-        if len(bbox) != 4:
-            raise ValueError("Bbox must have 4 coordinates")
-    except (ValueError, TypeError) as e:
-        raise ValueError(f"Invalid bbox format: {e}") from e
-
-    # Setup output path
-    output_dir = Path(output_dir).resolve()
-    filename = f"{prefix}{data_type}.geojson" if prefix else f"{data_type}.geojson"
-    output_path = output_dir / filename
-
-    # Execute download command
-    cmd = ["overturemaps", "download", f"--bbox={bbox_str}", "-f", "geojson", f"--type={data_type}"]
-    if save_to_file:
-        cmd.extend(["-o", str(output_path)])
-
-    try:
-        result = subprocess.run(cmd, check=True, capture_output=not save_to_file, text=True)
-        
-        if not return_data:
-            return None
-
-        # Load data from file or stdout
-        gdf = gpd.GeoDataFrame(geometry=[], crs=WGS84_CRS)
-        if save_to_file and output_path.exists() and output_path.stat().st_size > 0:
-            gdf = gpd.read_file(output_path)
-        elif result.stdout and result.stdout.strip():
-            try:
-                gdf = gpd.read_file(result.stdout)
-            except Exception as e:
-                logger.warning("Could not parse GeoJSON for %s: %s", data_type, e)
-
-        # Clip to polygon if provided
-        if clip_polygon is not None and not gdf.empty:
-            try:
-                mask = gpd.GeoDataFrame(geometry=[clip_polygon], crs=WGS84_CRS)
-                if gdf.crs != mask.crs:
-                    mask = mask.to_crs(gdf.crs)
-                gdf = gpd.clip(gdf, mask)
-            except Exception as e:
-                logger.warning("Error clipping %s to polygon: %s", data_type, e)
-
-        if not gdf.empty:
-            logger.info("Successfully processed %s", data_type)
-        return gdf
-
-    except subprocess.CalledProcessError as e:
-        logger.warning("Error downloading %s: %s", data_type, e)
-        return gpd.GeoDataFrame(geometry=[], crs=WGS84_CRS) if return_data else None
-    except Exception as e:
-        logger.warning("Error processing %s: %s", data_type, e)
-        return gpd.GeoDataFrame(geometry=[], crs=WGS84_CRS) if return_data else None
 
 
 def load_overture_data(
@@ -132,219 +62,34 @@ def load_overture_data(
     ValueError
         If any of the provided types are not valid Overture Maps data types
     """
-    # Validate and set default types
-    if types is None:
-        types = list(VALID_OVERTURE_TYPES)
-    else:
-        invalid_types = [t for t in types if t not in VALID_OVERTURE_TYPES]
-        if invalid_types:
-            raise ValueError(f"Invalid Overture Maps data type(s): {invalid_types}. "
-                           f"Valid types are: {sorted(VALID_OVERTURE_TYPES)}")
+    # Validate types and set defaults
+    types = types or list(VALID_OVERTURE_TYPES)
+    invalid_types = [t for t in types if t not in VALID_OVERTURE_TYPES]
+    assert not invalid_types, f"Invalid types: {invalid_types}"
+
+    # Convert area to bbox string and prepare clipping geometry
+    bbox_str = (",".join(str(round(c, 10)) for c in area.to_crs(WGS84_CRS).bounds)
+               if isinstance(area, Polygon) else ",".join(str(float(b)) for b in area))
+    clip_geom = area.to_crs(WGS84_CRS) if isinstance(area, Polygon) and hasattr(area, "crs") and area.crs != WGS84_CRS else area if isinstance(area, Polygon) else None
 
     # Create output directory
-    if save_to_file:
-        Path(output_dir).mkdir(parents=True, exist_ok=True)
+    Path(output_dir).mkdir(parents=True, exist_ok=True) if save_to_file else None
 
-    # Download each data type
+    # Process each data type
     result = {}
     for data_type in types:
-        gdf = _download_overture_data(data_type, area, output_dir, prefix, save_to_file, return_data)
-        if return_data and gdf is not None:
-            result[data_type] = gdf
+        output_path = Path(output_dir) / f"{prefix}{data_type}.geojson"
+        cmd = ["overturemaps", "download", f"--bbox={bbox_str}", "-f", "geojson", f"--type={data_type}"]
+        save_to_file and cmd.extend(["-o", str(output_path)])
+
+        subprocess.run(cmd, check=True, capture_output=not save_to_file, text=True)
+
+        # Load and clip data if requested
+        gdf = gpd.read_file(output_path) if return_data and save_to_file and output_path.exists() else gpd.GeoDataFrame(geometry=[], crs=WGS84_CRS)
+        gdf = gpd.clip(gdf, gpd.GeoDataFrame(geometry=[clip_geom], crs=WGS84_CRS).to_crs(gdf.crs)) if return_data and clip_geom is not None and not gdf.empty else gdf
+        return_data and result.update({data_type: gdf})
 
     return result
-
-
-def _parse_level_rules(level_rules_str):
-    """Parse level rules JSON string safely."""
-    if not level_rules_str or not isinstance(level_rules_str, str):
-        return []
-    try:
-        rules = json.loads(level_rules_str.replace("'", '"').replace("None", "null"))
-        return rules if isinstance(rules, list) else [rules] if rules else []
-    except (json.JSONDecodeError, TypeError):
-        return []
-
-
-def _extract_barrier_intervals(level_rules_str):
-    """Extract barrier intervals from level rules where value != 0."""
-    rules = _parse_level_rules(level_rules_str)
-    barrier_intervals = []
-    
-    for rule in rules:
-        if isinstance(rule, dict) and rule.get("value") != 0:
-            between = rule.get("between")
-            if between is None:
-                return "full_barrier"  # Entire segment is a barrier
-            if isinstance(between, list) and len(between) == 2:
-                barrier_intervals.append((float(between[0]), float(between[1])))
-    
-    return sorted(barrier_intervals)
-
-
-def _compute_passable_mask(barrier_intervals):
-    """Compute passable (non-barrier) intervals from barrier intervals."""
-    if barrier_intervals == "full_barrier":
-        return []
-    if not barrier_intervals:
-        return [(0.0, 1.0)]
-    
-    # Compute complement of barrier intervals
-    mask = []
-    current = 0.0
-    
-    for start, end in barrier_intervals:
-        if start > current:
-            mask.append((current, start))
-        current = max(current, end)
-    
-    if current < 1.0:
-        mask.append((current, 1.0))
-    
-    return mask
-
-
-def _create_barrier_geometry(geometry, passable_mask):
-    """Create barrier geometry from passable mask."""
-    if not passable_mask or not geometry or geometry.is_empty:
-        return None
-    
-    if passable_mask == [(0.0, 1.0)]:
-        return geometry
-    
-    def extract_line_parts(line):
-        parts = []
-        for start_pct, end_pct in passable_mask:
-            try:
-                if start_pct < 1e-9 and end_pct > 1 - 1e-9:
-                    part = line
-                else:
-                    part = substring(line, start_pct, end_pct, normalized=True)
-                if part and not part.is_empty:
-                    parts.append(part)
-            except Exception:
-                continue
-        return parts
-    
-    try:
-        if isinstance(geometry, MultiLineString):
-            all_parts = []
-            for geom in geometry.geoms:
-                all_parts.extend(extract_line_parts(geom))
-        else:
-            all_parts = extract_line_parts(geometry)
-        
-        if not all_parts:
-            return None
-        return all_parts[0] if len(all_parts) == 1 else MultiLineString(all_parts)
-    except Exception:
-        return None
-
-
-def _split_segments_by_connectors(segments_gdf, connectors_gdf):
-    """Split segments at connector positions."""
-    if connectors_gdf is None or connectors_gdf.empty:
-        return segments_gdf
-    
-    valid_connector_ids = set(connectors_gdf["id"])
-    split_segments = []
-    
-    for _, segment in segments_gdf.iterrows():
-        # Parse connectors from segment
-        connectors_str = segment.get("connectors", "")
-        connectors = _parse_level_rules(connectors_str) if connectors_str else []
-        
-        # Extract valid connector positions
-        positions = []
-        for connector in connectors:
-            if (isinstance(connector, dict) and 
-                connector.get("connector_id") in valid_connector_ids and
-                "at" in connector):
-                try:
-                    positions.append(float(connector["at"]))
-                except (ValueError, TypeError):
-                    continue
-        
-        if not positions:
-            # No valid connectors, keep original segment
-            segment_copy = segment.copy()
-            segment_copy["split_from"] = 0.0
-            segment_copy["split_to"] = 1.0
-            split_segments.append(segment_copy)
-            continue
-        
-        # Split segment at connector positions
-        positions = sorted(set([0.0] + positions + [1.0]))
-        original_id = segment.get("id", segment.name)
-        
-        for i in range(len(positions) - 1):
-            start_pct, end_pct = positions[i], positions[i + 1]
-            if end_pct > start_pct:
-                try:
-                    if start_pct < 1e-9 and end_pct > 1 - 1e-9:
-                        part_geom = segment.geometry
-                    else:
-                        part_geom = substring(segment.geometry, start_pct, end_pct, normalized=True)
-                    
-                    if part_geom and not part_geom.is_empty:
-                        new_segment = segment.copy()
-                        new_segment.geometry = part_geom
-                        new_segment["split_from"] = start_pct
-                        new_segment["split_to"] = end_pct
-                        new_segment["id"] = f"{original_id}_{i+1}" if len(positions) > 2 else original_id
-                        split_segments.append(new_segment)
-                except Exception as e:
-                    logger.warning("Error splitting segment: %s", e)
-                    continue
-    
-    return gpd.GeoDataFrame(split_segments, crs=segments_gdf.crs).reset_index(drop=True)
-
-
-def _adjust_segment_endpoints(segments_gdf, threshold):
-    """Adjust segment endpoints by clustering nearby points."""
-    if segments_gdf.empty:
-        return segments_gdf
-    
-    # Extract all endpoints
-    endpoints = []
-    for idx, geom in segments_gdf.geometry.items():
-        if isinstance(geom, LineString) and len(geom.coords) >= 2:
-            coords = list(geom.coords)
-            endpoints.extend([
-                {"seg_id": idx, "pos": "start", "x": coords[0][0], "y": coords[0][1]},
-                {"seg_id": idx, "pos": "end", "x": coords[-1][0], "y": coords[-1][1]}
-            ])
-    
-    if not endpoints:
-        return segments_gdf
-    
-    # Cluster endpoints and compute centroids
-    endpoints_df = pd.DataFrame(endpoints)
-    endpoints_df["bin_x"] = (endpoints_df["x"] / threshold).round().astype(int)
-    endpoints_df["bin_y"] = (endpoints_df["y"] / threshold).round().astype(int)
-    
-    centroids = endpoints_df.groupby(["bin_x", "bin_y"])[["x", "y"]].mean()
-    endpoints_df = endpoints_df.merge(centroids, on=["bin_x", "bin_y"], suffixes=("", "_new"))
-    
-    # Create lookup for new coordinates
-    coord_lookup = {(row["seg_id"], row["pos"]): (row["x_new"], row["y_new"]) 
-                   for _, row in endpoints_df.iterrows()}
-    
-    # Update geometries with adjusted endpoints
-    def adjust_geometry(row):
-        geom = row.geometry
-        if not isinstance(geom, LineString) or len(geom.coords) < 2:
-            return geom
-        
-        coords = list(geom.coords)
-        start_coord = coord_lookup.get((row.name, "start"), coords[0])
-        end_coord = coord_lookup.get((row.name, "end"), coords[-1])
-        
-        return LineString([start_coord] + coords[1:-1] + [end_coord])
-    
-    segments_gdf = segments_gdf.copy()
-    segments_gdf.geometry = segments_gdf.apply(adjust_geometry, axis=1)
-    return segments_gdf
 
 
 def process_overture_segments(
@@ -372,35 +117,119 @@ def process_overture_segments(
     gpd.GeoDataFrame
         Processed road segments, including 'length' and optional 'barrier_geometry'.
     """
-    if segments_gdf.empty:
-        return segments_gdf
-    
-    # Ensure required columns exist
-    if "level_rules" not in segments_gdf.columns:
-        segments_gdf["level_rules"] = ""
-    
-    # Make a copy to avoid modifying the original
-    result_gdf = segments_gdf.copy()
-    
-    # Split segments by connectors if provided
-    if connectors_gdf is not None and not connectors_gdf.empty:
-        result_gdf = _split_segments_by_connectors(result_gdf, connectors_gdf)
-        result_gdf = _adjust_segment_endpoints(result_gdf, threshold)
-    
+    # Early return for empty input
+    result_gdf = segments_gdf.copy() if not segments_gdf.empty else segments_gdf
+    result_gdf["level_rules"] = result_gdf.get("level_rules", "").fillna("") if not segments_gdf.empty else None
+
+    # Connector processing
+    valid_connector_ids = set(connectors_gdf["id"]) if connectors_gdf is not None and not connectors_gdf.empty else set()
+    split_segments = []
+
+    # Process each segment for splitting
+    for _, segment in result_gdf.iterrows():
+        connectors_str = segment.get("connectors", "")
+        connectors_data = json.loads(connectors_str.replace("'", '"').replace("None", "null")) if connectors_str else []
+        connectors_data = connectors_data if isinstance(connectors_data, list) else [connectors_data] if connectors_data else []
+
+        positions = [float(conn["at"]) for conn in connectors_data
+                    if isinstance(conn, dict) and conn.get("connector_id") in valid_connector_ids and "at" in conn]
+        positions = sorted({0.0, *positions, 1.0}) if positions else [0.0, 1.0]
+        original_id = segment.get("id", segment.name)
+
+        # Create segments from positions
+        for i in range(len(positions) - 1):
+            start_pct, end_pct = positions[i], positions[i + 1]
+            part_geom = (segment.geometry if abs(start_pct) < 1e-9 and abs(end_pct - 1.0) < 1e-9
+                        else substring(segment.geometry, start_pct, end_pct, normalized=True)) if end_pct > start_pct else None
+
+            if part_geom and not part_geom.is_empty:
+                new_segment = segment.copy()
+                new_segment.geometry = part_geom
+                new_segment["split_from"] = start_pct
+                new_segment["split_to"] = end_pct
+                new_segment["id"] = f"{original_id}_{i+1}" if len(positions) > 2 else original_id
+                split_segments.append(new_segment)
+
+    # Update result with split segments
+    result_gdf = gpd.GeoDataFrame(split_segments, crs=result_gdf.crs).reset_index(drop=True) if split_segments else result_gdf
+
+    # Endpoint adjustment
+    endpoints_data = []
+    for idx, geom in result_gdf.geometry.items():
+        if isinstance(geom, LineString) and len(geom.coords) >= 2:
+            coords = list(geom.coords)
+            endpoints_data.extend([
+                {"seg_id": idx, "pos": "start", "x": coords[0][0], "y": coords[0][1]},
+                {"seg_id": idx, "pos": "end", "x": coords[-1][0], "y": coords[-1][1]},
+            ])
+
+    # Apply endpoint clustering
+    if endpoints_data and valid_connector_ids:
+        endpoints_df = pd.DataFrame(endpoints_data)
+        endpoints_df["bin_x"] = (endpoints_df["x"] / threshold).round().astype(int)
+        endpoints_df["bin_y"] = (endpoints_df["y"] / threshold).round().astype(int)
+        centroids = endpoints_df.groupby(["bin_x", "bin_y"])[["x", "y"]].mean()
+        endpoints_df = endpoints_df.merge(centroids, on=["bin_x", "bin_y"], suffixes=("", "_new"))
+        coord_lookup = {(row["seg_id"], row["pos"]): (row["x_new"], row["y_new"]) for _, row in endpoints_df.iterrows()}
+
+        # Update geometries with adjusted coordinates
+        for idx, row in result_gdf.iterrows():
+            geom = row.geometry
+            if isinstance(geom, LineString) and len(geom.coords) >= 2:
+                coords = list(geom.coords)
+                start_coord = coord_lookup.get((idx, "start"), coords[0])
+                end_coord = coord_lookup.get((idx, "end"), coords[-1])
+                result_gdf.at[idx, "geometry"] = LineString([start_coord] + coords[1:-1] + [end_coord])
+
     # Add length column
     result_gdf["length"] = result_gdf.geometry.length
-    
-    # Generate barrier geometries if requested
+
+    # Barrier geometry generation
+    barrier_geometries = []
+    for _, row in result_gdf.iterrows():
+        level_rules_str = row.get("level_rules", "")
+        geometry = row.geometry
+
+        # Parse level rules
+        rules_data = json.loads(level_rules_str.replace("'", '"').replace("None", "null")) if level_rules_str else []
+        rules_data = rules_data if isinstance(rules_data, list) else [rules_data] if rules_data else []
+
+        # Extract barrier intervals
+        barrier_intervals = []
+        for rule in rules_data:
+            if isinstance(rule, dict) and rule.get("value") != 0:
+                between = rule.get("between")
+                if between is None:
+                    barrier_intervals = "full_barrier"
+                    break
+                if isinstance(between, list) and len(between) == 2:
+                    barrier_intervals.append((float(between[0]), float(between[1])))
+
+        # Compute passable mask
+        passable_mask = ([] if barrier_intervals == "full_barrier" else
+                        [(0.0, 1.0)] if not barrier_intervals else
+                        [(current, start) for current in [0.0] for start, end in sorted(barrier_intervals) if start > current] +
+                        [(max([end for _, end in sorted(barrier_intervals)], default=0.0), 1.0)]
+                        if max([end for _, end in sorted(barrier_intervals)], default=0.0) < 1.0 else [])
+
+        # Create barrier geometry
+        barrier_geom = None
+        if passable_mask and geometry and not geometry.is_empty:
+            if passable_mask == [(0.0, 1.0)]:
+                barrier_geom = geometry
+            else:
+                parts = []
+                for start_pct, end_pct in passable_mask:
+                    part = (geometry if abs(start_pct) < 1e-9 and abs(end_pct - 1.0) < 1e-9
+                           else substring(geometry, start_pct, end_pct, normalized=True))
+                    if part and not part.is_empty:
+                        parts.append(part)
+                barrier_geom = parts[0] if len(parts) == 1 else MultiLineString(parts) if parts else None
+
+        barrier_geometries.append(barrier_geom)
+
+    # Add barrier geometry column
     if get_barriers:
-        def compute_barrier_geometry(level_rules_str, geometry):
-            barrier_intervals = _extract_barrier_intervals(level_rules_str)
-            passable_mask = _compute_passable_mask(barrier_intervals)
-            return _create_barrier_geometry(geometry, passable_mask)
-        
-        barrier_geometries = [
-            compute_barrier_geometry(row.get("level_rules", ""), row.geometry)
-            for _, row in result_gdf.iterrows()
-        ]
         result_gdf["barrier_geometry"] = gpd.GeoSeries(barrier_geometries, crs=result_gdf.crs)
-    
+
     return result_gdf
