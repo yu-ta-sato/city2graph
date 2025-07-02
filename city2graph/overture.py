@@ -115,7 +115,7 @@ def _download_and_process_data(data_type, bbox_str, output_dir, prefix, save_to_
     except subprocess.CalledProcessError as e:
         logger.warning("Error downloading %s: %s", data_type, e)
         return gpd.GeoDataFrame(geometry=[], crs=WGS84_CRS) if return_data else None
-    except Exception as e:
+    except (OSError, ValueError) as e:
         logger.warning("Error processing %s data: %s", data_type, e)
         return gpd.GeoDataFrame(geometry=[], crs=WGS84_CRS) if return_data else None
 
