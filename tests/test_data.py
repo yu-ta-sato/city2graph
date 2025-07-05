@@ -1,18 +1,22 @@
-"""Tests for the data module."""
+"""Tests for the data module - refactored version focusing on public API only."""
 
 import subprocess
-from unittest.mock import Mock
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import geopandas as gpd
 import pytest
-from shapely.geometry import LineString
-from shapely.geometry import Point
+from shapely.geometry import LineString, Point
 
-from city2graph.data import VALID_OVERTURE_TYPES
-from city2graph.data import WGS84_CRS
-from city2graph.data import load_overture_data
-from city2graph.data import process_overture_segments
+# Import directly from data module to avoid torch import issues
+import sys
+import importlib.util
+spec = importlib.util.spec_from_file_location("data_module", "city2graph/data.py")
+data_module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(data_module)
+VALID_OVERTURE_TYPES = data_module.VALID_OVERTURE_TYPES
+WGS84_CRS = data_module.WGS84_CRS
+load_overture_data = data_module.load_overture_data
+process_overture_segments = data_module.process_overture_segments
 
 
 # Tests for constants and basic functionality
@@ -241,11 +245,10 @@ def test_process_overture_segments_missing_level_rules():
         "geometry": geometries,
     }, crs=WGS84_CRS)
 
-    # This test should fail due to the implementation bug, but let's test the workaround
-    # The actual implementation has a bug where it tries to call fillna() on a string
-    # when the column doesn't exist. This is a known issue.
-    with pytest.raises(AttributeError, match="'str' object has no attribute 'fillna'"):
-        process_overture_segments(segments_gdf)
+    # This should work - the function should handle missing level_rules gracefully
+    result = process_overture_segments(segments_gdf)
+    assert "level_rules" in result.columns
+    assert result["level_rules"].iloc[0] == ""
 
 
 def test_process_overture_segments_with_threshold(data_sample_segments_gdf, data_sample_connectors_gdf):
@@ -434,12 +437,22 @@ def test_process_overture_segments_endpoint_clustering():
     assert len(result) >= len(segments_gdf)
 
 
+def test_process_overture_segments_level_rules_handling():
+    """Test process_overture_segments level_rules column handling."""
+    # Test with None values in level_rules
+    segments_gdf = gpd.GeoDataFrame({
+        "id": ["seg1"],
+        "level_rules": [None],
+        "geometry": [LineString([(0, 0), (1, 1)])]
+    }, crs=WGS84_CRS)
+    
+    result = process_overture_segments(segments_gdf)
+    assert result["level_rules"].iloc[0] == ""
+
+
 # Integration tests
 def test_load_and_process_integration():
     """Test integration between load_overture_data and process_overture_segments."""
-    # This would be a more complex integration test
-    # For now, just test that the functions can work together
-
     # Create mock data that resembles real Overture data
     segments_data = {
         "id": ["seg1", "seg2"],
@@ -487,3 +500,202 @@ def test_real_world_scenario_simulation(mock_exists, mock_read_file, mock_subpro
     assert not processed_segments.empty
     assert "barrier_geometry" in processed_segments.columns
     assert "length" in processed_segments.columns
+
+
+# Additional edge case tests for comprehensive coverage
+def test_process_overture_segments_with_non_dict_connector():
+    """Test process_overture_segments with non-dict connector data."""
+    geometries = [LineString([(0, 0), (1, 1)])]
+    segments_gdf = gpd.GeoDataFrame({
+        "id": ["seg1"],
+        "connectors": ['["not_a_dict"]'],
+        "level_rules": [""],
+        "geometry": geometries
+    }, crs=WGS84_CRS)
+
+    result = process_overture_segments(segments_gdf)
+    # Should handle non-dict data gracefully
+    assert len(result) == 1
+
+
+def test_process_overture_segments_with_non_dict_level_rule():
+    """Test process_overture_segments with non-dict level rule data."""
+    geometries = [LineString([(0, 0), (1, 1)])]
+    segments_gdf = gpd.GeoDataFrame({
+        "id": ["seg1"],
+        "level_rules": ['["not_a_dict"]'],
+        "geometry": geometries,
+    }, crs=WGS84_CRS)
+
+    result = process_overture_segments(segments_gdf, get_barriers=True)
+    # Should handle non-dict data gracefully
+    assert "barrier_geometry" in result.columns
+
+
+def test_process_overture_segments_with_short_between_array():
+    """Test process_overture_segments with short between array in level rules."""
+    geometries = [LineString([(0, 0), (1, 1)])]
+    level_rules = '[{"value": 1, "between": [0.5]}]'  # Only one element
+
+    segments_gdf = gpd.GeoDataFrame({
+        "id": ["seg1"],
+        "level_rules": [level_rules],
+        "geometry": geometries,
+    }, crs=WGS84_CRS)
+
+    result = process_overture_segments(segments_gdf, get_barriers=True)
+    # Should handle short between array gracefully
+    assert "barrier_geometry" in result.columns
+
+
+def test_process_overture_segments_with_empty_geometry():
+    """Test process_overture_segments with empty geometry."""
+    from shapely.geometry import LineString
+    
+    # Create an empty LineString
+    empty_geom = LineString()
+    segments_gdf = gpd.GeoDataFrame({
+        "id": ["seg1"],
+        "level_rules": [""],
+        "geometry": [empty_geom],
+    }, crs=WGS84_CRS)
+
+    result = process_overture_segments(segments_gdf, get_barriers=True)
+    # Should handle empty geometry gracefully
+    assert "barrier_geometry" in result.columns
+
+
+def test_process_overture_segments_with_overlapping_barriers():
+    """Test process_overture_segments with overlapping barrier intervals."""
+    geometries = [LineString([(0, 0), (4, 4)])]
+    level_rules = '[{"value": 1, "between": [0.1, 0.5]}, {"value": 1, "between": [0.3, 0.7]}]'
+
+    segments_gdf = gpd.GeoDataFrame({
+        "id": ["seg1"],
+        "level_rules": [level_rules],
+        "geometry": geometries,
+    }, crs=WGS84_CRS)
+
+    result = process_overture_segments(segments_gdf, get_barriers=True)
+    # Should handle overlapping barriers correctly
+    assert "barrier_geometry" in result.columns
+
+
+def test_process_overture_segments_with_touching_barriers():
+    """Test process_overture_segments with touching barrier intervals."""
+    geometries = [LineString([(0, 0), (4, 4)])]
+    level_rules = '[{"value": 1, "between": [0.0, 0.3]}, {"value": 1, "between": [0.3, 0.6]}]'
+
+    segments_gdf = gpd.GeoDataFrame({
+        "id": ["seg1"],
+        "level_rules": [level_rules],
+        "geometry": geometries,
+    }, crs=WGS84_CRS)
+
+    result = process_overture_segments(segments_gdf, get_barriers=True)
+    # Should handle touching barriers correctly
+    assert "barrier_geometry" in result.columns
+
+
+def test_process_overture_segments_with_full_coverage_barriers():
+    """Test process_overture_segments with barriers covering full segment."""
+    geometries = [LineString([(0, 0), (4, 4)])]
+    level_rules = '[{"value": 1, "between": [0.0, 1.0]}]'
+
+    segments_gdf = gpd.GeoDataFrame({
+        "id": ["seg1"],
+        "level_rules": [level_rules],
+        "geometry": geometries,
+    }, crs=WGS84_CRS)
+
+    result = process_overture_segments(segments_gdf, get_barriers=True)
+    # Should return None for full coverage barriers
+    assert "barrier_geometry" in result.columns
+    assert result["barrier_geometry"].iloc[0] is None
+
+
+@patch("city2graph.data.subprocess.run")
+@patch("city2graph.data.gpd.read_file")
+@patch("city2graph.data.Path.mkdir")
+def test_load_overture_data_comprehensive_all_types(mock_mkdir, mock_read_file, mock_subprocess):
+    """Test load_overture_data with all types (types=None)."""
+    # Mock GeoDataFrame
+    mock_gdf = Mock(spec=gpd.GeoDataFrame)
+    mock_gdf.empty = False
+    mock_read_file.return_value = mock_gdf
+    
+    # Test with all types (types=None)
+    bbox = [-74.01, 40.70, -73.99, 40.72]
+    result = load_overture_data(bbox, types=None, save_to_file=False)
+    
+    # Should call subprocess for all valid types
+    assert mock_subprocess.call_count == len(VALID_OVERTURE_TYPES)
+    assert len(result) == len(VALID_OVERTURE_TYPES)
+
+
+def test_process_overture_segments_with_non_linestring_endpoints():
+    """Test endpoint clustering with non-LineString geometries."""
+    from shapely.geometry import Point
+    
+    # Mix LineString and Point geometries
+    geometries = [
+        LineString([(0, 0), (1, 1)]),
+        Point(2, 2),  # This should be ignored in endpoint clustering
+    ]
+
+    segments_gdf = gpd.GeoDataFrame({
+        "id": ["seg1", "seg2"],
+        "level_rules": ["", ""],
+        "geometry": geometries,
+    }, crs=WGS84_CRS)
+
+    connectors_gdf = gpd.GeoDataFrame({
+        "id": ["conn1"],
+        "geometry": [Point(1, 1)],
+    }, crs=WGS84_CRS)
+
+    result = process_overture_segments(
+        segments_gdf,
+        connectors_gdf=connectors_gdf,
+        threshold=1.0,
+    )
+
+    # Should process without errors
+    assert len(result) == len(segments_gdf)
+
+
+def test_process_overture_segments_with_short_linestring():
+    """Test endpoint clustering with LineString having insufficient coordinates."""
+    from shapely.geometry import LineString
+    
+    # Create a LineString with only one coordinate (invalid but possible edge case)
+    try:
+        invalid_geom = LineString([(0, 0)])  # This might raise an error
+    except:
+        # If invalid geometry creation fails, use a valid minimal LineString
+        invalid_geom = LineString([(0, 0), (0, 0)])  # Degenerate but valid
+    
+    geometries = [
+        LineString([(0, 0), (1, 1)]),
+        invalid_geom,
+    ]
+
+    segments_gdf = gpd.GeoDataFrame({
+        "id": ["seg1", "seg2"],
+        "level_rules": ["", ""],
+        "geometry": geometries,
+    }, crs=WGS84_CRS)
+
+    connectors_gdf = gpd.GeoDataFrame({
+        "id": ["conn1"],
+        "geometry": [Point(1, 1)],
+    }, crs=WGS84_CRS)
+
+    result = process_overture_segments(
+        segments_gdf,
+        connectors_gdf=connectors_gdf,
+        threshold=1.0,
+    )
+
+    # Should process without errors
+    assert len(result) == len(segments_gdf)

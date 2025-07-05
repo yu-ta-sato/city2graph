@@ -148,7 +148,10 @@ def process_overture_segments(
 
     # Initialize result and ensure required columns exist
     result_gdf = segments_gdf.copy()
-    result_gdf["level_rules"] = result_gdf.get("level_rules", "").fillna("")
+    if "level_rules" not in result_gdf.columns:
+        result_gdf["level_rules"] = ""
+    else:
+        result_gdf["level_rules"] = result_gdf["level_rules"].fillna("")
 
     # Split segments at connector positions
     result_gdf = _split_segments_at_connectors(result_gdf, connectors_gdf)
@@ -240,9 +243,7 @@ def _split_segments_at_connectors(
         split_parts = _create_segment_splits(segment, positions)
         split_segments.extend(split_parts)
 
-    if split_segments:
-        return gpd.GeoDataFrame(split_segments, crs=segments_gdf.crs).reset_index(drop=True)
-    return segments_gdf
+    return gpd.GeoDataFrame(split_segments, crs=segments_gdf.crs).reset_index(drop=True)
 
 
 def _extract_connector_positions(segment: pd.Series, valid_connector_ids: set[str]) -> list[float]:
@@ -252,29 +253,25 @@ def _extract_connector_positions(segment: pd.Series, valid_connector_ids: set[st
         return [0.0, 1.0]
 
     # Parse connector data safely
-    try:
-        connectors_data = json.loads(connectors_str.replace("'", '"').replace("None", "null"))
-    except (json.JSONDecodeError, AttributeError):
-        return [0.0, 1.0]
+    connectors_data = json.loads(connectors_str.replace("'", '"').replace("None", "null"))
 
     # Ensure connectors_data is a list
     if not isinstance(connectors_data, list):
         connectors_data = [connectors_data] if connectors_data else []
 
     # Extract positions from valid connectors
-    positions = []
-    for conn in connectors_data:
-        if (isinstance(conn, dict) and
-            conn.get("connector_id") in valid_connector_ids and
-            "at" in conn):
-            try:
-                positions.append(float(conn["at"]))
-            except (ValueError, TypeError):
-                continue
+    positions = [
+        float(conn["at"])
+        for conn in connectors_data
+        if (
+            isinstance(conn, dict)
+            and conn.get("connector_id") in valid_connector_ids
+            and "at" in conn
+        )
+    ]
 
     # Return sorted unique positions with start and end
-    unique_positions = sorted(set([0.0] + positions + [1.0]))
-    return unique_positions
+    return sorted(set([0.0] + positions + [1.0]))
 
 
 def _create_segment_splits(segment: pd.Series, positions: list[float]) -> list[pd.Series]:
@@ -288,14 +285,7 @@ def _create_segment_splits(segment: pd.Series, positions: list[float]) -> list[p
     for i in range(len(positions) - 1):
         start_pct, end_pct = positions[i], positions[i + 1]
 
-        if end_pct <= start_pct:
-            continue
-
-        # Create geometry for this split
-        if abs(start_pct) < 1e-9 and abs(end_pct - 1.0) < 1e-9:
-            part_geom = segment.geometry
-        else:
-            part_geom = substring(segment.geometry, start_pct, end_pct, normalized=True)
+        part_geom = substring(segment.geometry, start_pct, end_pct, normalized=True)
 
         if part_geom and not part_geom.is_empty:
             new_segment = segment.copy()
@@ -317,9 +307,6 @@ def _cluster_segment_endpoints(segments_gdf: gpd.GeoDataFrame, threshold: float)
             coords = list(geom.coords)
             endpoints_data.append((idx, "start", coords[0]))
             endpoints_data.append((idx, "end", coords[-1]))
-
-    if not endpoints_data:
-        return segments_gdf
 
     # Create DataFrame for clustering
     endpoints_df = pd.DataFrame([
@@ -381,10 +368,6 @@ def _parse_level_rules(level_rules_str: str) -> list[tuple[float, float]] | str:
     except (json.JSONDecodeError, AttributeError):
         return []
 
-    # Ensure rules_data is a list
-    if not isinstance(rules_data, list):
-        rules_data = [rules_data] if rules_data else []
-
     barrier_intervals = []
     for rule in rules_data:
         if not isinstance(rule, dict) or rule.get("value") == 0:
@@ -395,11 +378,8 @@ def _parse_level_rules(level_rules_str: str) -> list[tuple[float, float]] | str:
             return "full_barrier"
 
         if isinstance(between, list) and len(between) == 2:
-            try:
-                start, end = float(between[0]), float(between[1])
-                barrier_intervals.append((start, end))
-            except (ValueError, TypeError):
-                continue
+            start, end = float(between[0]), float(between[1])
+            barrier_intervals.append((start, end))
 
     return barrier_intervals
 
@@ -415,34 +395,24 @@ def _create_barrier_geometry(
     if not barrier_intervals:
         return geometry
 
-    if not geometry or geometry.is_empty:
-        return None
-
     # Calculate passable intervals (complement of barrier intervals)
     passable_intervals = _calculate_passable_intervals(barrier_intervals)
 
     if not passable_intervals:
         return None
 
-    if passable_intervals == [(0.0, 1.0)]:
-        return geometry
-
     # Create geometry parts from passable intervals
     parts = []
     for start_pct, end_pct in passable_intervals:
-        if abs(start_pct) < 1e-9 and abs(end_pct - 1.0) < 1e-9:
-            part = geometry
-        else:
-            part = substring(geometry, start_pct, end_pct, normalized=True)
+
+        part = substring(geometry, start_pct, end_pct, normalized=True)
 
         if part and not part.is_empty:
             parts.append(part)
 
     if len(parts) == 1:
         return parts[0]
-    if len(parts) > 1:
-        return MultiLineString(parts)
-    return None
+    return MultiLineString(parts)
 
 
 def _calculate_passable_intervals(barrier_intervals: list[tuple[float, float]]) -> list[tuple[float, float]]:

@@ -9,7 +9,8 @@ from shapely.geometry import LineString
 from shapely.geometry import Point
 from shapely.geometry import Polygon
 
-from city2graph.data import WGS84_CRS
+# Import WGS84_CRS directly to avoid torch import issues
+WGS84_CRS = "EPSG:4326"
 
 # Try to import torch, skip tests if not available
 try:
