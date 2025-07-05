@@ -1,12 +1,12 @@
-========
-Overture
-========
+====
+Data
+====
 
-The overture module provides functionality for loading and processing geospatial data from Overture Maps.
+The data module provides functionality for loading and processing geospatial data from sources like Overture Maps.
 It supports data extraction, filtering, and processing of various geographic features including buildings,
 transportation networks, and other urban infrastructure.
 
-.. currentmodule:: city2graph.overture
+.. currentmodule:: city2graph.data
 
 .. autofunction:: load_overture_data
 

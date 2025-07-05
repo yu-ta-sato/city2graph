@@ -2799,7 +2799,7 @@ wheels = [
 
 [[package]]
 name = "overturemaps"
-version = "0.14.0"
+version = "0.15.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "click" },
@@ -2807,9 +2807,9 @@ dependencies = [
     { name = "pyarrow" },
     { name = "shapely" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/57/0b/5bd624b78b6743131f74bccc31fdab6831a7b9945f625fc41e33dcba27b1/overturemaps-0.14.0.tar.gz", hash = "sha256:52d612e4570d053f48222c9b2945cafa3c069d743ea11fc7408de7b5f57c3588", size = 8202, upload-time = "2025-03-20T00:47:49.62Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/67/45/12e3dc8e3a2dae98f7816ca3179f63e34d987362d7ab2c66b9d4ee6516a1/overturemaps-0.15.0.tar.gz", hash = "sha256:5f30fe1bc111e806e6249a57e6fab6df92b80c087f879396587b6e9b9b15f4c6", size = 8197, upload-time = "2025-06-25T15:32:30.533Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/94/f1/860f2437095c2671158d98669c2e0cf53ac34a6b732f1e424b01e7ccc072/overturemaps-0.14.0-py3-none-any.whl", hash = "sha256:5a72b257d656fb04ad2712232f72bd3850e7a4af8897360b0cf0e31fa8ca48ec", size = 9938, upload-time = "2025-03-20T00:47:48.298Z" },
+    { url = "https://files.pythonhosted.org/packages/56/cb/15c5acd4999d35f22e002143596cc62d1cec5b8748ef93362f64536076ae/overturemaps-0.15.0-py3-none-any.whl", hash = "sha256:fc1fbcca283e7fb489981c8f95334e359d41249c562f7b332bfe797c95dc3bb9", size = 9935, upload-time = "2025-06-25T15:32:29.428Z" },
 ]
 
 [[package]]
