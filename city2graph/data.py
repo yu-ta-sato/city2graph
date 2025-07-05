@@ -78,7 +78,8 @@ def load_overture_data(
     types = types or list(VALID_OVERTURE_TYPES)
     invalid_types = [t for t in types if t not in VALID_OVERTURE_TYPES]
     if invalid_types:
-        raise ValueError(f"Invalid types: {invalid_types}")
+        msg = f"Invalid types: {invalid_types}"
+        raise ValueError(msg)
 
     # Prepare area and bounding box
     bbox_str, clip_geom = _prepare_area_and_bbox(area)
@@ -136,7 +137,7 @@ def process_overture_segments(
     --------
     >>> # Process segments with connector splitting
     >>> processed = process_overture_segments(
-    ...     segments_gdf, 
+    ...     segments_gdf,
     ...     connectors_gdf=connectors_gdf,
     ...     threshold=1.0
     ... )
@@ -269,7 +270,7 @@ def _extract_connector_positions(segment: pd.Series, valid_connector_ids: set[st
     ]
 
     # Return sorted unique positions with start and end
-    return sorted(set([0.0] + positions + [1.0]))
+    return sorted({0.0, *positions, 1.0})
 
 
 def _create_segment_splits(segment: pd.Series, positions: list[float]) -> list[pd.Series]:
@@ -333,7 +334,7 @@ def _cluster_segment_endpoints(segments_gdf: gpd.GeoDataFrame, threshold: float)
             coords = list(row.geometry.coords)
             start_coord = coord_lookup.get((idx, "start"), coords[0])
             end_coord = coord_lookup.get((idx, "end"), coords[-1])
-            result_gdf.at[idx, "geometry"] = LineString([start_coord, *coords[1:-1], end_coord])
+            result_gdf.loc[idx, "geometry"] = LineString([start_coord, *coords[1:-1], end_coord])
 
     return result_gdf
 

@@ -32,7 +32,6 @@ from datetime import timedelta
 from typing import TYPE_CHECKING
 
 import geopandas as gpd
-import numpy as np
 import pandas as pd
 from shapely.geometry import LineString
 from shapely.geometry import Point

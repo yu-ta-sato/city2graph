@@ -4,9 +4,9 @@ import contextlib
 from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version
 
+from .data import *  # noqa: F403
 from .graph import *  # noqa: F403
 from .morphology import *  # noqa: F403
-from .data import *  # noqa: F403
 from .proximity import *  # noqa: F403
 from .transportation import *  # noqa: F403
 from .utils import *  # noqa: F403

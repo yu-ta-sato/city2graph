@@ -119,7 +119,7 @@ logger = logging.getLogger(__name__)
 # ============================================================================
 
 
-def morphological_graph(
+def morphological_graph(  # noqa: PLR0912, PLR0915
     buildings_gdf: gpd.GeoDataFrame,
     segments_gdf: gpd.GeoDataFrame,
     center_point: gpd.GeoSeries | gpd.GeoDataFrame | None = None,
@@ -1086,7 +1086,7 @@ def _filter_nodes_by_path_length(
         return []
 
     lengths = nx.single_source_dijkstra_path_length(
-        graph, source_node_id, weight="length"
+        graph, source_node_id, weight="length",
     )
 
     # Get the ilocs of tessellation centroids that are within the max_distance
