@@ -84,6 +84,7 @@ import itertools
 import logging
 import math
 import warnings
+from ast import literal_eval
 
 import geopandas as gpd
 import libpysal
@@ -1054,11 +1055,10 @@ def _find_closest_node_to_center(
         try:
             # Ensure nodes are strings for eval, handle potential tuples
             node_ids = list(graph.nodes)
-            node_coords = np.array([eval(str(node)) for node in node_ids])
-        except (SyntaxError, TypeError):
-            raise ValueError(
-                "Graph nodes must have 'pos' attribute or be coordinate strings."
-            )
+            node_coords = np.array([literal_eval(str(node)) for node in node_ids])
+        except (SyntaxError, TypeError, ValueError) as exc:
+            msg = "Graph nodes must have 'pos' attribute or be coordinate strings."
+            raise ValueError(msg) from exc
     else:
         node_ids = list(pos.keys())
         node_coords = np.array(list(pos.values()))
@@ -1070,7 +1070,7 @@ def _find_closest_node_to_center(
     _, idx = kdtree.query([center_point_geom.x, center_point_geom.y])
 
     # Return the ID of the closest node
-    return node_ids[idx]
+    return str(node_ids[idx])
 
 
 def _filter_nodes_by_path_length(

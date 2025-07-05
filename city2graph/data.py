@@ -172,9 +172,7 @@ def process_overture_segments(
 
 def _prepare_area_and_bbox(area: list[float] | Polygon) -> tuple[str, Polygon | None]:
     """Prepare area input and convert to bbox string and clipping geometry."""
-    is_polygon = isinstance(area, Polygon)
-
-    if is_polygon:
+    if isinstance(area, Polygon):
         # Convert to WGS84 if needed
         area_wgs84 = area.to_crs(WGS84_CRS) if hasattr(area, "crs") and area.crs != WGS84_CRS else area
         bbox_str = ",".join(str(round(c, 10)) for c in area_wgs84.bounds)
@@ -396,6 +394,9 @@ def _create_barrier_geometry(
         return geometry
 
     # Calculate passable intervals (complement of barrier intervals)
+    # Type guard to ensure we have the right type
+    if isinstance(barrier_intervals, str):
+        return None
     passable_intervals = _calculate_passable_intervals(barrier_intervals)
 
     if not passable_intervals:

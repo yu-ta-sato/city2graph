@@ -68,6 +68,11 @@ def _read_csv_bytes(buf: bytes) -> pd.DataFrame:
 
 def _time_to_seconds(value: str | float | None) -> float:
     """Convert a GTFS ``HH:MM:SS`` string (24 h+ supported) into seconds."""
+    if value is None:
+        return 0.0
+    if isinstance(value, (int, float)):
+        return float(value)
+    # At this point, value must be a string
     h, m, s = map(int, value.split(":"))
     return h * 3600 + m * 60 + s
 
