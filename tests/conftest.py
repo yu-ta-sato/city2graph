@@ -9,6 +9,8 @@ from shapely.geometry import LineString
 from shapely.geometry import Point
 from shapely.geometry import Polygon
 
+from city2graph.data import WGS84_CRS
+
 # Try to import torch, skip tests if not available
 try:
     import importlib.util
@@ -808,3 +810,103 @@ def network_gdf_no_pos(sample_crs: str) -> gpd.GeoDataFrame:
         [data["source_id"], data["target_id"]], names=("source_id", "target_id"),
     )
     return gpd.GeoDataFrame(data, index=multi_index, crs=sample_crs)
+
+
+# Data module fixtures
+@pytest.fixture
+def data_sample_segments_gdf() -> gpd.GeoDataFrame:
+    """Create a sample segments GeoDataFrame for testing."""
+    geometries = [
+        LineString([(0, 0), (1, 1)]),
+        LineString([(1, 1), (2, 2)]),
+        LineString([(2, 2), (3, 3)])
+    ]
+
+    data = {
+        "id": ["seg1", "seg2", "seg3"],
+        "connectors": [
+            '[{"connector_id": "conn1", "at": 0.0}, {"connector_id": "conn2", "at": 1.0}]',
+            '[{"connector_id": "conn2", "at": 0.0}, {"connector_id": "conn3", "at": 0.5}, {"connector_id": "conn4", "at": 1.0}]',
+            "[]"
+        ],
+        "level_rules": [
+            '[{"value": 1, "between": [0.2, 0.8]}]',
+            '[{"value": 0}]',
+            "",
+        ],
+        "geometry": geometries,
+    }
+
+    return gpd.GeoDataFrame(data, crs=WGS84_CRS)
+
+
+@pytest.fixture
+def data_sample_connectors_gdf():
+    """Create a sample connectors GeoDataFrame for testing."""
+    geometries = [
+        Point(0, 0),
+        Point(1, 1),
+        Point(2, 2),
+        Point(3, 3)
+    ]
+
+    data = {
+        "id": ["conn1", "conn2", "conn3", "conn4"],
+        "geometry": geometries,
+    }
+
+    return gpd.GeoDataFrame(data, crs=WGS84_CRS)
+
+
+@pytest.fixture
+def realistic_segments_gdf():
+    """Create a realistic segments GeoDataFrame."""
+    return gpd.GeoDataFrame({
+        "id": ["seg1", "seg2", "seg3"],
+        "connectors": [
+            '[{"connector_id": "conn1", "at": 0.0}, {"connector_id": "conn2", "at": 1.0}]',
+            '[{"connector_id": "conn2", "at": 0.0}, {"connector_id": "conn3", "at": 0.5}]',
+            "[]"
+        ],
+        "level_rules": [
+            '[{"value": 1, "between": [0.2, 0.8]}]',
+            "",
+            '[{"value": 0}]',
+        ],
+        "geometry": [
+            LineString([(-74.01, 40.70), (-74.005, 40.705)]),
+            LineString([(-74.005, 40.705), (-73.99, 40.72)]),
+            LineString([(-73.99, 40.72), (-73.985, 40.715)])
+        ]
+    }, crs=WGS84_CRS)
+
+
+@pytest.fixture
+def realistic_connectors_gdf():
+    """Create a realistic connectors GeoDataFrame."""
+    return gpd.GeoDataFrame({
+        "id": ["conn1", "conn2", "conn3"],
+        "geometry": [
+            Point(-74.01, 40.70),
+            Point(-74.005, 40.705),
+            Point(-73.99, 40.72)
+        ]
+    }, crs=WGS84_CRS)
+
+
+@pytest.fixture
+def data_empty_gdf():
+    """Create an empty GeoDataFrame for data testing."""
+    return gpd.GeoDataFrame(geometry=[], crs=WGS84_CRS)
+
+
+@pytest.fixture
+def test_bbox():
+    """Standard test bounding box."""
+    return [-74.01, 40.70, -73.99, 40.72]
+
+
+@pytest.fixture
+def test_polygon():
+    """Standard test polygon."""
+    return Polygon([(-74.01, 40.70), (-73.99, 40.70), (-73.99, 40.72), (-74.01, 40.72)])
