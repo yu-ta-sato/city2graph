@@ -911,3 +911,245 @@ def test_bbox():
 def test_polygon():
     """Standard test polygon."""
     return Polygon([(-74.01, 40.70), (-73.99, 40.70), (-73.99, 40.72), (-74.01, 40.72)])
+
+
+# Transportation module fixtures
+@pytest.fixture
+def sample_gtfs_zip():
+    """Create a sample GTFS zip file for testing."""
+    import tempfile
+    import zipfile
+    
+    # Create temporary zip file
+    temp_file = tempfile.NamedTemporaryFile(suffix=".zip", delete=False)
+    
+    with zipfile.ZipFile(temp_file.name, 'w') as zf:
+        # agency.txt
+        agency_data = "agency_id,agency_name,agency_url,agency_timezone\n1,Test Agency,http://test.com,America/New_York\n"
+        zf.writestr("agency.txt", agency_data)
+        
+        # stops.txt
+        stops_data = """stop_id,stop_name,stop_lat,stop_lon
+stop1,Stop 1,40.7128,-74.0060
+stop2,Stop 2,40.7589,-73.9851
+stop3,Stop 3,40.7505,-73.9934
+"""
+        zf.writestr("stops.txt", stops_data)
+        
+        # routes.txt
+        routes_data = """route_id,agency_id,route_short_name,route_long_name,route_type
+route1,1,1,Test Route 1,3
+"""
+        zf.writestr("routes.txt", routes_data)
+        
+        # trips.txt
+        trips_data = """route_id,service_id,trip_id
+route1,service1,trip1
+route1,service1,trip2
+"""
+        zf.writestr("trips.txt", trips_data)
+        
+        # stop_times.txt
+        stop_times_data = """trip_id,arrival_time,departure_time,stop_id,stop_sequence
+trip1,08:00:00,08:00:00,stop1,1
+trip1,08:05:00,08:05:00,stop2,2
+trip1,08:10:00,08:10:00,stop3,3
+trip2,09:00:00,09:00:00,stop1,1
+trip2,09:05:00,09:05:00,stop2,2
+trip2,09:10:00,09:10:00,stop3,3
+"""
+        zf.writestr("stop_times.txt", stop_times_data)
+        
+        # calendar.txt
+        calendar_data = """service_id,monday,tuesday,wednesday,thursday,friday,saturday,sunday,start_date,end_date
+service1,1,1,1,1,1,0,0,20240101,20241231
+"""
+        zf.writestr("calendar.txt", calendar_data)
+    
+    yield temp_file.name
+    
+    # Cleanup
+    import os
+    os.unlink(temp_file.name)
+
+
+@pytest.fixture
+def sample_gtfs_zip_with_shapes():
+    """Create a sample GTFS zip file with shapes for testing."""
+    import tempfile
+    import zipfile
+    
+    temp_file = tempfile.NamedTemporaryFile(suffix=".zip", delete=False)
+    
+    with zipfile.ZipFile(temp_file.name, 'w') as zf:
+        # Basic files (reuse from sample_gtfs_zip)
+        agency_data = "agency_id,agency_name,agency_url,agency_timezone\n1,Test Agency,http://test.com,America/New_York\n"
+        zf.writestr("agency.txt", agency_data)
+        
+        stops_data = """stop_id,stop_name,stop_lat,stop_lon
+stop1,Stop 1,40.7128,-74.0060
+stop2,Stop 2,40.7589,-73.9851
+"""
+        zf.writestr("stops.txt", stops_data)
+        
+        routes_data = """route_id,agency_id,route_short_name,route_long_name,route_type
+route1,1,1,Test Route 1,3
+"""
+        zf.writestr("routes.txt", routes_data)
+        
+        trips_data = """route_id,service_id,trip_id,shape_id
+route1,service1,trip1,shape1
+"""
+        zf.writestr("trips.txt", trips_data)
+        
+        stop_times_data = """trip_id,arrival_time,departure_time,stop_id,stop_sequence
+trip1,08:00:00,08:00:00,stop1,1
+trip1,08:05:00,08:05:00,stop2,2
+"""
+        zf.writestr("stop_times.txt", stop_times_data)
+        
+        calendar_data = """service_id,monday,tuesday,wednesday,thursday,friday,saturday,sunday,start_date,end_date
+service1,1,1,1,1,1,0,0,20240101,20241231
+"""
+        zf.writestr("calendar.txt", calendar_data)
+        
+        # shapes.txt
+        shapes_data = """shape_id,shape_pt_lat,shape_pt_lon,shape_pt_sequence
+shape1,40.7128,-74.0060,1
+shape1,40.7300,-74.0000,2
+shape1,40.7589,-73.9851,3
+"""
+        zf.writestr("shapes.txt", shapes_data)
+    
+    yield temp_file.name
+    
+    import os
+    os.unlink(temp_file.name)
+
+
+@pytest.fixture
+def empty_gtfs_zip():
+    """Create an empty GTFS zip file for testing."""
+    import tempfile
+    import zipfile
+    
+    temp_file = tempfile.NamedTemporaryFile(suffix=".zip", delete=False)
+    
+    with zipfile.ZipFile(temp_file.name, 'w') as zf:
+        # Create empty zip
+        pass
+    
+    yield temp_file.name
+    
+    import os
+    os.unlink(temp_file.name)
+
+
+@pytest.fixture
+def gtfs_zip_invalid_coords():
+    """Create a GTFS zip file with invalid coordinates for testing."""
+    import tempfile
+    import zipfile
+    
+    temp_file = tempfile.NamedTemporaryFile(suffix=".zip", delete=False)
+    
+    with zipfile.ZipFile(temp_file.name, 'w') as zf:
+        # stops.txt with some invalid coordinates
+        stops_data = """stop_id,stop_name,stop_lat,stop_lon
+stop1,Stop 1,40.7128,-74.0060
+stop2,Stop 2,invalid,invalid
+stop3,Stop 3,,
+"""
+        zf.writestr("stops.txt", stops_data)
+        
+        # Minimal other files
+        agency_data = "agency_id,agency_name,agency_url,agency_timezone\n1,Test Agency,http://test.com,America/New_York\n"
+        zf.writestr("agency.txt", agency_data)
+        
+        calendar_data = """service_id,monday,tuesday,wednesday,thursday,friday,saturday,sunday,start_date,end_date
+service1,1,1,1,1,1,0,0,20240101,20241231
+"""
+        zf.writestr("calendar.txt", calendar_data)
+    
+    yield temp_file.name
+    
+    import os
+    os.unlink(temp_file.name)
+
+
+@pytest.fixture
+def sample_gtfs_dict():
+    """Create a sample GTFS dictionary for testing."""
+    # Create stops GeoDataFrame
+    stops_data = {
+        "stop_id": ["stop1", "stop2", "stop3"],
+        "stop_name": ["Stop 1", "Stop 2", "Stop 3"],
+        "stop_lat": [40.7128, 40.7589, 40.7505],
+        "stop_lon": [-74.0060, -73.9851, -73.9934],
+        "geometry": [
+            Point(-74.0060, 40.7128),
+            Point(-73.9851, 40.7589),
+            Point(-73.9934, 40.7505)
+        ]
+    }
+    stops_gdf = gpd.GeoDataFrame(stops_data, crs="EPSG:4326")
+    
+    # Create other DataFrames
+    routes_df = pd.DataFrame({
+        "route_id": ["route1"],
+        "agency_id": ["1"],
+        "route_short_name": ["1"],
+        "route_long_name": ["Test Route 1"],
+        "route_type": [3]
+    })
+    
+    trips_df = pd.DataFrame({
+        "route_id": ["route1", "route1"],
+        "service_id": ["service1", "service1"],
+        "trip_id": ["trip1", "trip2"]
+    })
+    
+    stop_times_df = pd.DataFrame({
+        "trip_id": ["trip1", "trip1", "trip1", "trip2", "trip2", "trip2"],
+        "arrival_time": ["08:00:00", "08:05:00", "08:10:00", "09:00:00", "09:05:00", "09:10:00"],
+        "departure_time": ["08:00:00", "08:05:00", "08:10:00", "09:00:00", "09:05:00", "09:10:00"],
+        "stop_id": ["stop1", "stop2", "stop3", "stop1", "stop2", "stop3"],
+        "stop_sequence": [1, 2, 3, 1, 2, 3]
+    })
+    
+    calendar_df = pd.DataFrame({
+        "service_id": ["service1"],
+        "monday": [True],
+        "tuesday": [True],
+        "wednesday": [True],
+        "thursday": [True],
+        "friday": [True],
+        "saturday": [False],
+        "sunday": [False],
+        "start_date": ["20240101"],
+        "end_date": ["20241231"]
+    })
+    
+    return {
+        "stops": stops_gdf,
+        "routes": routes_df,
+        "trips": trips_df,
+        "stop_times": stop_times_df,
+        "calendar": calendar_df
+    }
+
+
+@pytest.fixture
+def sample_gtfs_dict_with_exceptions(sample_gtfs_dict):
+    """Create a sample GTFS dictionary with calendar exceptions."""
+    gtfs_dict = sample_gtfs_dict.copy()
+    
+    # Add calendar_dates for exceptions
+    calendar_dates_df = pd.DataFrame({
+        "service_id": ["service1", "service1"],
+        "date": ["20240101", "20240102"],
+        "exception_type": [2, 1]  # 2 = remove service, 1 = add service
+    })
+    
+    gtfs_dict["calendar_dates"] = calendar_dates_df
+    return gtfs_dict

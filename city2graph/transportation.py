@@ -68,11 +68,6 @@ def _read_csv_bytes(buf: bytes) -> pd.DataFrame:
 
 def _time_to_seconds(value: str | float | None) -> float:
     """Convert a GTFS ``HH:MM:SS`` string (24 h+ supported) into seconds."""
-    if pd.isna(value):
-        return np.nan
-    if isinstance(value, (int, float)):
-        return float(value)
-
     h, m, s = map(int, value.split(":"))
     return h * 3600 + m * 60 + s
 
@@ -82,17 +77,9 @@ def _timestamp(gtfs_time: str, service_date: datetime) -> datetime | None:
 
     Times beyond 24 : 00 : 00 are correctly rolled over to the next day.
     """
-    if pd.isna(gtfs_time):
-        return None
-
     h, m, s = map(int, gtfs_time.split(":"))
     day_offset, h = divmod(h, 24)
-    try:
-        ts = service_date.replace(hour=h, minute=m, second=s) + timedelta(days=day_offset)
-    except ValueError:
-        # The calendar day may be outside the valid range (e.g. 9999-12-31).
-        return None
-    return ts
+    return service_date.replace(hour=h, minute=m, second=s) + timedelta(days=day_offset)
 
 
 # ---------------------------------------------------------------------------
@@ -244,12 +231,12 @@ def _create_basic_od(stop_times: pd.DataFrame) -> pd.DataFrame:
     st = st.dropna(subset=["stop_sequence"]).sort_values(["trip_id", "stop_sequence"])
 
     lead = st.groupby("trip_id").shift(1)
-    mask = lead["trip_id"].notna()
+    mask = lead["stop_id"].notna()
 
     od = pd.DataFrame(
         {
             "trip_id": st.loc[mask, "trip_id"],
-            "service_id": st.loc[mask, "trip_id"].map(stop_times.set_index("trip_id")["service_id"]),
+            "service_id": st.loc[mask, "service_id"],
             "orig_stop_id": st.loc[mask, "stop_id"],
             "dest_stop_id": lead.loc[mask, "stop_id"],
             "departure_time": st.loc[mask, "departure_time"],
