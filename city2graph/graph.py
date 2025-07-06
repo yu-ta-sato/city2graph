@@ -249,38 +249,20 @@ def gdf_to_pyg(
     if not TORCH_AVAILABLE:
         raise ImportError(TORCH_ERROR_MSG)
 
-    # Validate input GeoDataFrames
-    is_hetero = isinstance(nodes, dict)
-    if is_hetero:
-        for node_type, node_gdf in nodes.items():
-            nodes[node_type], _ = validate_gdf(nodes_gdf=node_gdf)
-        if edges:
-            # Validate non-empty edge GeoDataFrames. Empty ones are handled downstream.
-            for edge_type, edge_gdf in edges.items():
-                _, edges[edge_type] = validate_gdf(edges_gdf=edge_gdf, allow_empty=True)
-    else:
-        nodes, edges = validate_gdf(nodes_gdf=nodes, edges_gdf=edges)
+    # Validate input GeoDataFrames and get type information
+    nodes, edges, is_hetero = validate_gdf(nodes_gdf=nodes, edges_gdf=edges)
+
+    # Validate feature column specifications
+    _validate_feature_columns(node_feature_cols, node_label_cols, edge_feature_cols, is_hetero)
 
     device = _get_device(device)
 
-    is_hetero = isinstance(nodes, dict)
     if is_hetero:
-        # Ensure feature/label columns are dicts for heterogeneous graphs
-        if not (node_feature_cols is None or isinstance(node_feature_cols, dict)):
-            msg = "node_feature_cols must be a dict for heterogeneous graphs"
-            raise ValueError(msg)
-        if not (node_label_cols is None or isinstance(node_label_cols, dict)):
-            msg = "node_label_cols must be a dict for heterogeneous graphs"
-            raise ValueError(msg)
-        if not (edge_feature_cols is None or isinstance(edge_feature_cols, dict)):
-            msg = "edge_feature_cols must be a dict for heterogeneous graphs"
-            raise ValueError(msg)
-
-        assert node_feature_cols is None or isinstance(node_feature_cols, dict)
+        # Type assertions for heterogeneous graphs
+        assert isinstance(nodes, dict)
+        assert edges is None or isinstance(edges, dict)
         node_feature_cols_hetero: dict[str, list[str]] | None = node_feature_cols
-        assert node_label_cols is None or isinstance(node_label_cols, dict)
         node_label_cols_hetero: dict[str, list[str]] | None = node_label_cols
-        assert edge_feature_cols is None or isinstance(edge_feature_cols, dict)
         edge_feature_cols_hetero: dict[str, list[str]] | None = edge_feature_cols
 
         data = _build_heterogeneous_graph(
@@ -288,21 +270,16 @@ def gdf_to_pyg(
             edge_feature_cols_hetero, device, dtype,
         )
     else:
-        nodes_gdf: gpd.GeoDataFrame = nodes
-        edges_gdf: gpd.GeoDataFrame | None = edges
-        node_feature_cols_homo: list[str] | None = (
-            node_feature_cols if isinstance(node_feature_cols, list) else None
-            )
-        node_label_cols_homo: list[str] | None = (
-            node_label_cols if isinstance(node_label_cols, list) else None
-            )
-        edge_feature_cols_homo: list[str] | None = (
-            edge_feature_cols if isinstance(edge_feature_cols, list) else None
-            )
+        # Type assertions for homogeneous graphs
+        assert isinstance(nodes, gpd.GeoDataFrame) or nodes is None
+        assert isinstance(edges, gpd.GeoDataFrame) or edges is None
+        node_feature_cols_homo: list[str] | None = node_feature_cols
+        node_label_cols_homo: list[str] | None = node_label_cols
+        edge_feature_cols_homo: list[str] | None = edge_feature_cols
 
         # Create a homogeneous Data object
         data = _build_homogeneous_graph(
-            nodes_gdf, edges_gdf, node_feature_cols_homo,
+            nodes, edges, node_feature_cols_homo,
             node_label_cols_homo,
             edge_feature_cols_homo, device, dtype,
         )
@@ -564,7 +541,7 @@ def nx_to_pyg(
     if not TORCH_AVAILABLE:
         raise ImportError(TORCH_ERROR_MSG)
 
-    # Validate NetworkX graph
+    # Validate NetworkX graph (includes type checking)
     validate_nx(graph)
 
     # Get nodes and edges GeoDataFrames
@@ -1252,12 +1229,35 @@ def _validate_pyg(data: Data | HeteroData) -> GraphMetadata:
     """
     Validate PyTorch Geometric Data or HeteroData objects and return metadata.
 
-    This centralized validation function checks for the `metadata` attribute
+    This centralized validation function checks for type consistency, the `metadata` attribute,
     and returns it, ensuring the object was created by `city2graph`.
+
+    Parameters
+    ----------
+    data : torch_geometric.data.Data or torch_geometric.data.HeteroData
+        PyTorch Geometric data object to validate.
+
+    Returns
+    -------
+    GraphMetadata
+        Metadata object containing graph information for reconstruction.
+
+    Raises
+    ------
+    ImportError
+        If PyTorch Geometric is not installed.
+    TypeError
+        If data is not a valid PyTorch Geometric object.
+    ValueError
+        If the data object is missing required metadata or is inconsistent.
     """
     if not TORCH_AVAILABLE:
-        msg = "PyTorch required. Install with: pip install city2graph[torch]"
-        raise ImportError(msg)
+        raise ImportError(TORCH_ERROR_MSG)
+
+    # Type checking
+    if not isinstance(data, (Data, HeteroData)):
+        msg = "Input must be a PyTorch Geometric Data or HeteroData object"
+        raise TypeError(msg)
 
     if not hasattr(data, "graph_metadata") or not isinstance(data.graph_metadata, GraphMetadata):
         msg = (
@@ -1277,6 +1277,55 @@ def _validate_pyg(data: Data | HeteroData) -> GraphMetadata:
         raise ValueError(msg)
 
     return metadata
+
+
+def _validate_feature_columns(
+    feature_cols: dict[str, list[str]] | list[str] | None,
+    label_cols: dict[str, list[str]] | list[str] | None,
+    edge_cols: dict[str, list[str]] | list[str] | None,
+    is_hetero: bool,
+) -> None:
+    """
+    Validate feature column specifications for homo/heterogeneous graphs.
+
+    Parameters
+    ----------
+    feature_cols : dict[str, list[str]] or list[str], optional
+        Node feature column specifications
+    label_cols : dict[str, list[str]] or list[str], optional
+        Node label column specifications
+    edge_cols : dict[str, list[str]] or list[str], optional
+        Edge feature column specifications
+    is_hetero : bool
+        Whether this is a heterogeneous graph
+
+    Raises
+    ------
+    ValueError
+        If column specifications are inconsistent with graph type
+    """
+    if is_hetero:
+        # For heterogeneous graphs, columns must be dicts or None
+        if feature_cols is not None and not isinstance(feature_cols, dict):
+            msg = "node_feature_cols must be a dict for heterogeneous graphs"
+            raise ValueError(msg)
+        if label_cols is not None and not isinstance(label_cols, dict):
+            msg = "node_label_cols must be a dict for heterogeneous graphs"
+            raise ValueError(msg)
+        if edge_cols is not None and not isinstance(edge_cols, dict):
+            msg = "edge_feature_cols must be a dict for heterogeneous graphs"
+            raise ValueError(msg)
+    else:
+        # For homogeneous graphs, columns must be lists or None
+        if feature_cols is not None and not isinstance(feature_cols, list):
+            msg = "node_feature_cols must be a list for homogeneous graphs"
+            raise ValueError(msg)
+        if label_cols is not None and not isinstance(label_cols, list):
+            msg = "node_label_cols must be a list for homogeneous graphs"
+            raise ValueError(msg)
+        if edge_cols is not None and not isinstance(edge_cols, list):
+            msg = "edge_feature_cols must be a list for homogeneous graphs"
+            raise ValueError(msg)
 
 
 # ============================================================================

@@ -1012,7 +1012,7 @@ class GraphAnalyzer:
 
 def dual_graph(
     graph: tuple[gpd.GeoDataFrame, gpd.GeoDataFrame] | nx.Graph | nx.MultiGraph,
-    edge_id_col: str | None = None,
+    edge_id_col: str | None,
     keep_original_geom: bool = False,
     as_nx: bool = False,
 ) -> tuple[gpd.GeoDataFrame, gpd.GeoDataFrame] | nx.Graph | nx.MultiGraph:
@@ -1405,8 +1405,13 @@ def gdf_to_nx(
     ...          'full_edge_type': ('building', 'connects_to', 'street'),
     ...          '_original_edge_index': ('b1', 's1')})]
     """
+    # Validate inputs using enhanced validation with type detection
+    validated_nodes, validated_edges, _ = validate_gdf(
+        nodes_gdf=nodes, edges_gdf=edges, allow_empty=True,
+    )
+
     converter = GraphConverter(keep_geom=keep_geom, multigraph=multigraph, directed=directed)
-    return converter.gdf_to_nx(nodes, edges)
+    return converter.gdf_to_nx(validated_nodes, validated_edges)
 
 def nx_to_gdf(
     G: nx.Graph | nx.MultiGraph, nodes: bool = True, edges: bool = True,
@@ -1731,36 +1736,47 @@ def create_tessellation(
 # ============================================================================
 
 def validate_gdf(
-    nodes_gdf: gpd.GeoDataFrame | None = None,
-    edges_gdf: gpd.GeoDataFrame | None = None,
-    allow_empty: bool = False,
-) -> tuple[gpd.GeoDataFrame | None, gpd.GeoDataFrame | None]:
-    """Validate node and edge GeoDataFrames.
+    nodes_gdf: gpd.GeoDataFrame | dict[str, gpd.GeoDataFrame] | None = None,
+    edges_gdf: gpd.GeoDataFrame | dict[tuple[str, str, str], gpd.GeoDataFrame] | None = None,
+    allow_empty: bool = True,
+) -> tuple[
+    gpd.GeoDataFrame | dict[str, gpd.GeoDataFrame] | None,
+    gpd.GeoDataFrame | dict[tuple[str, str, str], gpd.GeoDataFrame] | None,
+    bool,
+]:
+    """Validate node and edge GeoDataFrames with type detection.
 
-    This function is a wrapper around the validation logic
-    in `GeoDataProcessor`. It checks if inputs are GeoDataFrames, removes
-    invalid geometries, and ensures edge geometries are LineStrings.
+    This function validates both homogeneous and heterogeneous GeoDataFrame inputs,
+    performs type checking, and determines whether the input represents a
+    heterogeneous graph structure.
 
     Parameters
     ----------
-    nodes_gdf : geopandas.GeoDataFrame, optional
-        The GeoDataFrame containing node data to validate.
-    edges_gdf : geopandas.GeoDataFrame, optional
-        The GeoDataFrame containing edge data to validate.
-    allow_empty : bool, default False
-        If True, allows the nodes GeoDataFrame to be empty. If False, raises
+    nodes_gdf : geopandas.GeoDataFrame or dict[str, geopandas.GeoDataFrame], optional
+        The GeoDataFrame containing node data to validate, or a dictionary mapping
+        node type names to GeoDataFrames for heterogeneous graphs.
+    edges_gdf : geopandas.GeoDataFrame or dict[tuple[str, str, str], geopandas.GeoDataFrame], optional
+        The GeoDataFrame containing edge data to validate, or a dictionary mapping
+        edge type tuples to GeoDataFrames for heterogeneous graphs.
+    allow_empty : bool, default True
+        If True, allows the GeoDataFrames to be empty. If False, raises an error.
 
     Returns
     -------
-    tuple[geopandas.GeoDataFrame | None, geopandas.GeoDataFrame | None]
-        A tuple containing the validated nodes_gdf and edges_gdf.
+    tuple[geopandas.GeoDataFrame | dict[str, geopandas.GeoDataFrame] | None,
+          geopandas.GeoDataFrame | dict[tuple[str, str, str], geopandas.GeoDataFrame] | None,
+          bool]
+        A tuple containing:
+        - validated nodes_gdf (same type as input)
+        - validated edges_gdf (same type as input)
+        - is_hetero: boolean indicating if this is a heterogeneous graph
 
     Raises
     ------
     TypeError
-        If an input is not a GeoDataFrame.
+        If an input is not a GeoDataFrame or appropriate dictionary type.
     ValueError
-        If the edges GeoDataFrame is empty.
+        If the input types are inconsistent or invalid.
 
     Examples
     --------
@@ -1769,31 +1785,93 @@ def validate_gdf(
     >>> nodes = gpd.GeoDataFrame(geometry=[Point(0, 0)])
     >>> edges = gpd.GeoDataFrame(geometry=[LineString([(0, 0), (1, 1)])])
     >>> try:
-    ...     validated_nodes, validated_edges = validate_gdf(nodes, edges)
-    ...     print("Validation successful.")
+    ...     validated_nodes, validated_edges, is_hetero = validate_gdf(nodes, edges)
+    ...     print(f"Validation successful. Heterogeneous: {is_hetero}")
     ... except (TypeError, ValueError) as e:
     ...     print(f"Validation failed: {e}")
-    Validation successful.
+    Validation successful. Heterogeneous: False
     """
     processor = GeoDataProcessor()
 
-    validated_nodes_gdf = None
-    if nodes_gdf is not None:
-        validated_nodes_gdf = processor.validate_gdf(nodes_gdf,
-                                                     allow_empty=True)
+    # Type detection and validation
+    is_nodes_dict = isinstance(nodes_gdf, dict)
+    is_edges_dict = isinstance(edges_gdf, dict)
 
-    validated_edges_gdf = None
-    if edges_gdf is not None:
-        validated_edges_gdf = processor.validate_gdf(edges_gdf,
-                                                     ["LineString", "MultiLineString"],
-                                                     allow_empty=allow_empty)
+    # Check for type consistency
+    if is_nodes_dict and edges_gdf is not None and not is_edges_dict:
+        msg = "If nodes is a dict, edges must also be a dict or None."
+        raise TypeError(msg)
+    if not is_nodes_dict and is_edges_dict and nodes_gdf is not None:
+        msg = "If edges is a dict, nodes must also be a dict or None."
+        raise TypeError(msg)
 
-    processor.ensure_crs_consistency(validated_nodes_gdf, validated_edges_gdf)
+    is_hetero = is_nodes_dict or is_edges_dict
 
-    return validated_nodes_gdf, validated_edges_gdf
+    validated_nodes = None
+    validated_edges = None
+
+    if is_hetero:
+        # Validate heterogeneous inputs
+        if nodes_gdf is not None:
+            if not isinstance(nodes_gdf, dict):
+                msg = "nodes_gdf must be a dictionary for heterogeneous graphs"
+                raise TypeError(msg)
+            validated_nodes = {}
+            for node_type, node_gdf in nodes_gdf.items():
+                if not isinstance(node_type, str):
+                    msg = "Node type keys must be strings"
+                    raise TypeError(msg)
+                validated_nodes[node_type] = processor.validate_gdf(node_gdf, allow_empty=True)
+
+        if edges_gdf is not None:
+            if not isinstance(edges_gdf, dict):
+                msg = "edges_gdf must be a dictionary for heterogeneous graphs"
+                raise TypeError(msg)
+            validated_edges = {}
+            for edge_type, edge_gdf in edges_gdf.items():
+                if not isinstance(edge_type, tuple) or len(edge_type) != 3:
+                    msg = "Edge type keys must be tuples of (source_type, relation_type, target_type)"
+                    raise TypeError(msg)
+                if not all(isinstance(t, str) for t in edge_type):
+                    msg = "All elements in edge type tuples must be strings"
+                    raise TypeError(msg)
+                validated_edges[edge_type] = processor.validate_gdf(
+                    edge_gdf, ["LineString", "MultiLineString"], allow_empty=allow_empty,
+                )
+    else:
+        # Validate homogeneous inputs
+        if nodes_gdf is not None:
+            if not isinstance(nodes_gdf, gpd.GeoDataFrame):
+                msg = "Input must be a GeoDataFrame"
+                raise TypeError(msg)
+            validated_nodes = processor.validate_gdf(nodes_gdf, allow_empty=True)
+
+        if edges_gdf is not None:
+            if not isinstance(edges_gdf, gpd.GeoDataFrame):
+                msg = "Input must be a GeoDataFrame"
+                raise TypeError(msg)
+            validated_edges = processor.validate_gdf(
+                edges_gdf, ["LineString", "MultiLineString"], allow_empty=allow_empty,
+            )
+
+    # Ensure CRS consistency
+    all_gdfs_to_check = []
+    if validated_nodes is not None:
+        all_gdfs_to_check.extend(
+            validated_nodes.values() if is_hetero else [validated_nodes],
+        )
+    if validated_edges is not None:
+        all_gdfs_to_check.extend(
+            validated_edges.values() if is_hetero else [validated_edges],
+        )
+
+    processor.ensure_crs_consistency(*all_gdfs_to_check)
+
+    return validated_nodes, validated_edges, is_hetero
+
 
 def validate_nx(graph: nx.Graph | nx.MultiGraph) -> None:
-    """Validate a NetworkX graph.
+    """Validate a NetworkX graph with comprehensive type checking.
 
     Checks if the input is a NetworkX graph, ensures it is not empty
     (i.e., it has both nodes and edges), and verifies that it contains the
@@ -1826,5 +1904,10 @@ def validate_nx(graph: nx.Graph | nx.MultiGraph) -> None:
     ...     print(f"Validation failed: {e}")
     Validation successful.
     """
+    # Type validation
+    if not isinstance(graph, (nx.Graph, nx.MultiGraph)):
+        msg = "Input must be a NetworkX Graph or MultiGraph"
+        raise TypeError(msg)
+
     processor = GeoDataProcessor()
     processor.validate_nx(graph)
