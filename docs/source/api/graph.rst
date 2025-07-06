@@ -17,3 +17,5 @@ It handles bidirectional conversion between GeoDataFrames, NetworkX graphs, and 
 .. autofunction:: pyg_to_nx
 
 .. autofunction:: is_torch_available
+
+.. autofunction:: validate_pyg

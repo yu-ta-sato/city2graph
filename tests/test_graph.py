@@ -563,3 +563,515 @@ def test_nx_to_pyg_with_dtype(sample_nx_graph: nx.Graph) -> None:
     # Note: pos tensor dtype may not always match the specified dtype
     # depending on the implementation, so we don't assert it here
 
+
+@requires_torch
+def test_gdf_to_pyg_invalid_homogeneous_feature_cols(sample_nodes_gdf: gpd.GeoDataFrame) -> None:
+    """Test that invalid feature column types raise ValueError for homogeneous graphs."""
+    # Test invalid node_feature_cols type (dict instead of list)
+    with pytest.raises(ValueError, match="node_feature_cols must be a list for homogeneous graphs"):
+        gdf_to_pyg(sample_nodes_gdf, node_feature_cols={"invalid": ["col"]})
+
+    # Test invalid node_label_cols type (dict instead of list)
+    with pytest.raises(ValueError, match="node_label_cols must be a list for homogeneous graphs"):
+        gdf_to_pyg(sample_nodes_gdf, node_label_cols={"invalid": ["col"]})
+
+    # Test invalid edge_feature_cols type (dict instead of list)
+    with pytest.raises(ValueError, match="edge_feature_cols must be a list for homogeneous graphs"):
+        gdf_to_pyg(sample_nodes_gdf, edge_feature_cols={"invalid": ["col"]})
+
+
+@requires_torch
+def test_pyg_validation_errors() -> None:
+    """Test various validation errors in validate_pyg function."""
+    from city2graph.graph import validate_pyg
+
+    # Test with non-PyG object
+    with pytest.raises(TypeError, match="Input must be a PyTorch Geometric Data or HeteroData object"):
+        validate_pyg("not_a_pyg_object")
+
+    # Test with PyG object missing graph_metadata
+    data = Data()
+    with pytest.raises(ValueError, match="PyG object is missing 'graph_metadata' attribute"):
+        validate_pyg(data)
+
+    # Test with PyG object having wrong metadata type
+    data.graph_metadata = "wrong_type"
+    with pytest.raises(ValueError, match="PyG object has 'graph_metadata' of incorrect type"):
+        validate_pyg(data)
+
+
+@requires_torch
+def test_pyg_validation_hetero_inconsistencies() -> None:
+    """Test validation errors for heterogeneous graph inconsistencies."""
+    from city2graph.graph import validate_pyg
+    from city2graph.utils import GraphMetadata
+
+    # Test HeteroData with metadata.is_hetero = False
+    hetero_data = HeteroData()
+    hetero_data.graph_metadata = GraphMetadata(is_hetero=False)
+    with pytest.raises(ValueError, match="Inconsistency detected: PyG object is HeteroData but metadata.is_hetero is False"):
+        validate_pyg(hetero_data)
+
+    # Test Data with metadata.is_hetero = True
+    homo_data = Data()
+    homo_data.graph_metadata = GraphMetadata(is_hetero=True)
+    with pytest.raises(ValueError, match="Inconsistency detected: PyG object is Data but metadata.is_hetero is True"):
+        validate_pyg(homo_data)
+
+
+@requires_torch
+def test_pyg_validation_node_edge_type_mismatches() -> None:
+    """Test validation errors for node/edge type mismatches."""
+    from city2graph.graph import validate_pyg
+    from city2graph.utils import GraphMetadata
+
+    # Create HeteroData with mismatched node types
+    hetero_data = HeteroData()
+    hetero_data["building"].x = torch.randn(5, 3)
+    metadata = GraphMetadata(is_hetero=True)
+    metadata.node_types = ["building", "road"]  # metadata expects 'road' but it's not in data
+    metadata.edge_types = []
+    hetero_data.graph_metadata = metadata
+    with pytest.raises(ValueError, match="Node types mismatch"):
+        validate_pyg(hetero_data)
+
+    # Create HeteroData with mismatched edge types
+    hetero_data2 = HeteroData()
+    hetero_data2["building"].x = torch.randn(5, 3)
+    hetero_data2["road"].x = torch.randn(3, 2)
+    hetero_data2[("building", "connects", "road")].edge_index = torch.tensor([[0, 1], [0, 1]])
+    metadata2 = GraphMetadata(is_hetero=True)
+    metadata2.node_types = ["building", "road"]
+    metadata2.edge_types = [("building", "connects", "road"), ("road", "links", "building")]  # extra edge type
+    hetero_data2.graph_metadata = metadata2
+    with pytest.raises(ValueError, match="Edge types mismatch"):
+        validate_pyg(hetero_data2)
+
+
+@requires_torch
+def test_device_validation_with_torch_device(sample_nodes_gdf: gpd.GeoDataFrame) -> None:
+    """Test device validation with torch.device objects."""
+    # Test with torch.device object - this tests the public interface
+    device_obj = torch.device("cpu")
+    pyg_data = gdf_to_pyg(sample_nodes_gdf, device=device_obj)
+    assert pyg_data.x.device == device_obj
+
+    if torch.cuda.is_available():
+        cuda_device = torch.device("cuda:0")
+        try:
+            pyg_data_cuda = gdf_to_pyg(sample_nodes_gdf, device=cuda_device)
+            assert pyg_data_cuda.x.device == cuda_device
+        except (RuntimeError, ValueError):
+            # Skip if CUDA not properly configured
+            pass
+
+
+@requires_torch
+def test_gdf_to_pyg_with_torch_device_object(sample_nodes_gdf: gpd.GeoDataFrame) -> None:
+    """Test gdf_to_pyg with torch.device object."""
+    device_obj = torch.device("cpu")
+    pyg_data = gdf_to_pyg(sample_nodes_gdf, device=device_obj)
+    assert pyg_data.x.device == device_obj
+
+
+@requires_torch
+def test_pyg_to_gdf_with_missing_node_features() -> None:
+    """Test pyg_to_gdf when node data has no features but has labels."""
+    from city2graph.utils import GraphMetadata
+
+    # Create data with only labels, no features
+    data = Data()
+    data.y = torch.randn(5, 2)
+    data.pos = torch.randn(5, 2)
+    data.edge_index = torch.tensor([[0, 1], [1, 2]], dtype=torch.long)
+    data.edge_attr = torch.randn(2, 1)
+    metadata = GraphMetadata(is_hetero=False, crs="EPSG:4326")
+    metadata.node_label_cols = ["label1", "label2"]
+    data.graph_metadata = metadata
+
+    nodes_gdf, edges_gdf = pyg_to_gdf(data)
+    assert "label1" in nodes_gdf.columns
+    assert "label2" in nodes_gdf.columns
+
+
+@requires_torch
+def test_pyg_to_gdf_hetero_with_missing_features() -> None:
+    """Test pyg_to_gdf with heterogeneous data missing some features."""
+    from city2graph.utils import GraphMetadata
+
+    data = HeteroData()
+    # Node type with only labels, no features
+    data["building"].y = torch.randn(3, 1)
+    data["building"].pos = torch.randn(3, 2)
+    # Node type with only features, no labels
+    data["road"].x = torch.randn(2, 2)
+    data["road"].pos = torch.randn(2, 2)
+
+    metadata = GraphMetadata(is_hetero=True, crs="EPSG:4326")
+    metadata.node_types = ["building", "road"]
+    metadata.node_label_cols = {"building": ["b_label"]}
+    metadata.node_feature_cols = {"road": ["r_feat1", "r_feat2"]}
+    data.graph_metadata = metadata
+
+    nodes_dict, edges_dict = pyg_to_gdf(data)
+    assert "b_label" in nodes_dict["building"].columns
+    assert "r_feat1" in nodes_dict["road"].columns
+    assert "r_feat2" in nodes_dict["road"].columns
+
+
+@requires_torch
+def test_pyg_to_nx_with_no_edges() -> None:
+    """Test pyg_to_nx conversion with no edges."""
+    from city2graph.utils import GraphMetadata
+
+    # Create data with nodes but no edges
+    data = Data()
+    data.x = torch.randn(5, 2)
+    data.pos = torch.randn(5, 2)
+    data.edge_index = torch.tensor([[], []], dtype=torch.long)  # Empty edges
+    metadata = GraphMetadata(is_hetero=False, crs="EPSG:4326")
+    data.graph_metadata = metadata
+
+    nx_graph = pyg_to_nx(data)
+    assert nx_graph.number_of_nodes() == 5
+    assert nx_graph.number_of_edges() == 0
+
+
+@requires_torch
+def test_pyg_to_nx_hetero_with_no_edges() -> None:
+    """Test pyg_to_nx conversion with heterogeneous data but no edges."""
+    from city2graph.utils import GraphMetadata
+
+    data = HeteroData()
+    data["building"].x = torch.randn(3, 2)
+    data["building"].pos = torch.randn(3, 2)
+    data["road"].x = torch.randn(2, 2)
+    data["road"].pos = torch.randn(2, 2)
+    # No edge data
+
+    metadata = GraphMetadata(is_hetero=True, crs="EPSG:4326")
+    metadata.node_types = ["building", "road"]
+    data.graph_metadata = metadata
+
+    nx_graph = pyg_to_nx(data)
+    assert nx_graph.number_of_nodes() == 5
+    assert nx_graph.number_of_edges() == 0
+
+
+@requires_torch
+def test_pyg_to_nx_hetero_with_empty_edge_tensors() -> None:
+    """Test pyg_to_nx conversion with heterogeneous data with empty edge tensors."""
+    from city2graph.utils import GraphMetadata
+
+    data = HeteroData()
+    data["building"].x = torch.randn(3, 2)
+    data["building"].pos = torch.randn(3, 2)
+    data["road"].x = torch.randn(2, 2)
+    data["road"].pos = torch.randn(2, 2)
+    # Empty edge tensor
+    data[("building", "connects", "road")].edge_index = torch.tensor([[], []], dtype=torch.long)
+
+    metadata = GraphMetadata(is_hetero=True, crs="EPSG:4326")
+    metadata.node_types = ["building", "road"]
+    metadata.edge_types = [("building", "connects", "road")]
+    data.graph_metadata = metadata
+
+    nx_graph = pyg_to_nx(data)
+    assert nx_graph.number_of_nodes() == 5
+    assert nx_graph.number_of_edges() == 0
+
+
+@requires_torch
+def test_pyg_to_gdf_hetero_with_feature_columns() -> None:
+    """Test pyg_to_gdf with heterogeneous data and feature column metadata."""
+    from city2graph.utils import GraphMetadata
+
+    data = HeteroData()
+    data["building"].x = torch.randn(3, 2)
+    data["building"].pos = torch.randn(3, 2)
+
+    metadata = GraphMetadata(is_hetero=True, crs="EPSG:4326")
+    metadata.node_types = ["building"]
+    metadata.node_feature_cols = {"building": ["height", "area"]}
+    data.graph_metadata = metadata
+
+    nodes_dict, edges_dict = pyg_to_gdf(data)
+    # Should use the specified feature column names
+    assert "height" in nodes_dict["building"].columns
+    assert "area" in nodes_dict["building"].columns
+
+
+# ============================================================================
+# ENHANCED TEST CASES FOR BETTER COVERAGE
+# ============================================================================
+
+@requires_torch
+def test_gdf_to_pyg_invalid_feature_cols_type_error(sample_crs: str) -> None:
+    """Test TypeError for invalid feature column types in heterogeneous graphs."""
+    # Create sample data
+    nodes_dict = {
+        "building": gpd.GeoDataFrame({
+            "height": [10, 20],
+            "geometry": [gpd.points_from_xy([0, 1], [0, 1])[0], gpd.points_from_xy([0, 1], [0, 1])[1]],
+        }, index=[0, 1], crs=sample_crs),
+    }
+
+    # Test node_feature_cols type error for heterogeneous graphs
+    with pytest.raises(ValueError, match="node_feature_cols must be a dict for heterogeneous graphs"):
+        gdf_to_pyg(nodes_dict, node_feature_cols=["height"])
+
+    # Test node_label_cols type error for heterogeneous graphs
+    with pytest.raises(ValueError, match="node_label_cols must be a dict for heterogeneous graphs"):
+        gdf_to_pyg(nodes_dict, node_label_cols=["height"])
+
+    # Test edge_feature_cols type error for heterogeneous graphs
+    with pytest.raises(ValueError, match="edge_feature_cols must be a dict for heterogeneous graphs"):
+        gdf_to_pyg(nodes_dict, edge_feature_cols=["weight"])
+
+
+@requires_torch
+def test_gdf_to_pyg_invalid_feature_cols_value_error(sample_crs: str) -> None:
+    """Test ValueError for invalid feature column types in homogeneous graphs."""
+    # Create sample data
+    nodes_gdf = gpd.GeoDataFrame({
+        "height": [10, 20],
+        "geometry": gpd.points_from_xy([0, 1], [0, 1]),
+    }, index=[0, 1], crs=sample_crs)
+
+    # Test node_label_cols value error for homogeneous graphs
+    with pytest.raises(ValueError, match="node_label_cols must be a list for homogeneous graphs"):
+        gdf_to_pyg(nodes_gdf, node_label_cols={"building": ["height"]})
+
+    # Test edge_feature_cols value error for homogeneous graphs
+    with pytest.raises(ValueError, match="edge_feature_cols must be a list for homogeneous graphs"):
+        gdf_to_pyg(nodes_gdf, edge_feature_cols={"road": ["weight"]})
+
+
+@requires_torch
+def test_validation_errors_hetero_structure() -> None:
+    """Test validation errors for heterogeneous structure inconsistencies."""
+    from city2graph.utils import GraphMetadata
+
+    # Create a HeteroData object with inconsistent metadata
+    data = HeteroData()
+    data["building"].x = torch.randn(3, 2)
+    data["building"].pos = torch.randn(2, 2)  # Inconsistent size
+
+    metadata = GraphMetadata(is_hetero=True, crs="EPSG:4326")
+    metadata.node_types = ["building"]
+    data.graph_metadata = metadata
+
+    # Test position tensor size mismatch
+    with pytest.raises(ValueError, match="position tensor size.*doesn't match node feature tensor size"):
+        from city2graph.graph import validate_pyg
+        validate_pyg(data)
+
+
+@requires_torch
+def test_validation_errors_hetero_label_mismatch() -> None:
+    """Test validation errors for heterogeneous label tensor mismatches."""
+    from city2graph.utils import GraphMetadata
+
+    # Create a HeteroData object with inconsistent label tensor
+    data = HeteroData()
+    data["building"].x = torch.randn(3, 2)
+    data["building"].y = torch.randn(2, 1)  # Inconsistent size
+    data["building"].pos = torch.randn(3, 2)
+
+    metadata = GraphMetadata(is_hetero=True, crs="EPSG:4326")
+    metadata.node_types = ["building"]
+    data.graph_metadata = metadata
+
+    # Test label tensor size mismatch
+    with pytest.raises(ValueError, match="label tensor size.*doesn't match node feature tensor size"):
+        from city2graph.graph import validate_pyg
+        validate_pyg(data)
+
+
+@requires_torch
+def test_validation_errors_homo_structure() -> None:
+    """Test validation errors for homogeneous structure inconsistencies."""
+    from city2graph.utils import GraphMetadata
+
+    # Test metadata indicating hetero but Data object is homo
+    data = Data()
+    data.x = torch.randn(3, 2)
+
+    metadata = GraphMetadata(is_hetero=True, crs="EPSG:4326")  # Wrong flag
+    data.graph_metadata = metadata
+
+    with pytest.raises(ValueError, match="Inconsistency detected: PyG object is Data but metadata.is_hetero is True"):
+        from city2graph.graph import validate_pyg
+        validate_pyg(data)
+
+
+@requires_torch
+def test_validation_errors_homo_metadata_structure() -> None:
+    """Test validation errors for homogeneous metadata structure."""
+    from city2graph.utils import GraphMetadata
+
+    # Test homogeneous graph with node_types specified
+    data = Data()
+    data.x = torch.randn(3, 2)
+
+    metadata = GraphMetadata(is_hetero=False, crs="EPSG:4326")
+    metadata.node_types = ["building"]  # Should not be specified for homo
+    data.graph_metadata = metadata
+
+    with pytest.raises(ValueError, match="Homogeneous graph metadata should not have node_types specified"):
+        from city2graph.graph import validate_pyg
+        validate_pyg(data)
+
+
+@requires_torch
+def test_validation_errors_homo_edge_types() -> None:
+    """Test validation errors for homogeneous edge types."""
+    from city2graph.utils import GraphMetadata
+
+    # Test homogeneous graph with edge_types specified
+    data = Data()
+    data.x = torch.randn(3, 2)
+
+    metadata = GraphMetadata(is_hetero=False, crs="EPSG:4326")
+    metadata.edge_types = [("building", "connects", "road")]  # Should not be specified for homo
+    data.graph_metadata = metadata
+
+    with pytest.raises(ValueError, match="Homogeneous graph metadata should not have edge_types specified"):
+        from city2graph.graph import validate_pyg
+        validate_pyg(data)
+
+
+@requires_torch
+def test_validation_errors_homo_node_mappings() -> None:
+    """Test validation errors for homogeneous node mappings."""
+    from city2graph.utils import GraphMetadata
+
+    # Test homogeneous graph without 'default' key in node_mappings
+    data = Data()
+    data.x = torch.randn(3, 2)
+
+    metadata = GraphMetadata(is_hetero=False, crs="EPSG:4326")
+    metadata.node_mappings = {"building": {}}  # Should use 'default' key
+    data.graph_metadata = metadata
+
+    with pytest.raises(ValueError, match="Homogeneous graph metadata should use 'default' key in node_mappings"):
+        from city2graph.graph import validate_pyg
+        validate_pyg(data)
+
+
+@requires_torch
+def test_validation_errors_homo_feature_cols_dict() -> None:
+    """Test validation errors for homogeneous feature columns as dict."""
+    from city2graph.utils import GraphMetadata
+
+    # Test homogeneous graph with node_feature_cols as dict
+    data = Data()
+    data.x = torch.randn(3, 2)
+
+    metadata = GraphMetadata(is_hetero=False, crs="EPSG:4326")
+    metadata.node_feature_cols = {"building": ["height"]}  # Should be list for homo
+    data.graph_metadata = metadata
+
+    with pytest.raises(ValueError, match="Homogeneous graph metadata should have node_feature_cols as list, not dict"):
+        from city2graph.graph import validate_pyg
+        validate_pyg(data)
+
+
+@requires_torch
+def test_validation_errors_homo_label_cols_dict() -> None:
+    """Test validation errors for homogeneous label columns as dict."""
+    from city2graph.utils import GraphMetadata
+
+    # Test homogeneous graph with node_label_cols as dict
+    data = Data()
+    data.x = torch.randn(3, 2)
+
+    metadata = GraphMetadata(is_hetero=False, crs="EPSG:4326")
+    metadata.node_label_cols = {"building": ["type"]}  # Should be list for homo
+    data.graph_metadata = metadata
+
+    with pytest.raises(ValueError, match="Homogeneous graph metadata should have node_label_cols as list, not dict"):
+        from city2graph.graph import validate_pyg
+        validate_pyg(data)
+
+
+@requires_torch
+def test_validation_errors_homo_edge_cols_dict() -> None:
+    """Test validation errors for homogeneous edge feature columns as dict."""
+    from city2graph.utils import GraphMetadata
+
+    # Test homogeneous graph with edge_feature_cols as dict
+    data = Data()
+    data.x = torch.randn(3, 2)
+    data.edge_index = torch.tensor([[0, 1], [1, 2]], dtype=torch.long)
+    data.edge_attr = torch.randn(2, 1)
+
+    metadata = GraphMetadata(is_hetero=False, crs="EPSG:4326")
+    metadata.edge_feature_cols = {"connects": ["weight"]}  # Should be list for homo
+    data.graph_metadata = metadata
+
+    with pytest.raises(ValueError, match="Homogeneous graph metadata should have edge_feature_cols as list, not dict"):
+        from city2graph.graph import validate_pyg
+        validate_pyg(data)
+
+
+@requires_torch
+def test_validation_errors_homo_position_mismatch() -> None:
+    """Test validation errors for homogeneous position tensor mismatch."""
+    from city2graph.utils import GraphMetadata
+
+    # Test homogeneous graph with position tensor size mismatch
+    data = Data()
+    data.x = torch.randn(3, 2)
+    data.pos = torch.randn(2, 2)  # Inconsistent size
+
+    metadata = GraphMetadata(is_hetero=False, crs="EPSG:4326")
+    data.graph_metadata = metadata
+
+    with pytest.raises(ValueError, match="Node position tensor size.*doesn't match node feature tensor size"):
+        from city2graph.graph import validate_pyg
+        validate_pyg(data)
+
+
+@requires_torch
+def test_validation_errors_homo_label_mismatch() -> None:
+    """Test validation errors for homogeneous label tensor mismatch."""
+    from city2graph.utils import GraphMetadata
+
+    # Test homogeneous graph with label tensor size mismatch
+    data = Data()
+    data.x = torch.randn(3, 2)
+    data.y = torch.randn(2, 1)  # Inconsistent size
+
+    metadata = GraphMetadata(is_hetero=False, crs="EPSG:4326")
+    data.graph_metadata = metadata
+
+    with pytest.raises(ValueError, match="Node label tensor size.*doesn't match node feature tensor size"):
+        from city2graph.graph import validate_pyg
+        validate_pyg(data)
+
+
+@requires_torch
+def test_pyg_to_gdf_hetero_with_missing_label_cols() -> None:
+    """Test pyg_to_gdf with heterogeneous data and missing label columns in metadata."""
+    from city2graph.utils import GraphMetadata
+
+    data = HeteroData()
+    data["building"].x = torch.randn(3, 2)
+    data["building"].y = torch.randn(3, 1)  # Has labels but no metadata
+    data["building"].pos = torch.randn(3, 2)
+
+    metadata = GraphMetadata(is_hetero=True, crs="EPSG:4326")
+    metadata.node_types = ["building"]
+    # No node_label_cols specified in metadata
+    data.graph_metadata = metadata
+
+    nodes_dict, edges_dict = pyg_to_gdf(data)
+
+    # Should not create any label columns since they're not specified in metadata
+    assert "building" in nodes_dict
+    building_gdf = nodes_dict["building"]
+    # Check that no label columns were created since they weren't specified in metadata
+    label_cols = [col for col in building_gdf.columns if col.startswith("label_")]
+    assert len(label_cols) == 0
+

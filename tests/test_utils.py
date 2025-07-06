@@ -479,12 +479,19 @@ def test_validate_gdf(
     nodes_gdf = request.getfixturevalue(nodes_fixture) if nodes_fixture else None
     edges_gdf = request.getfixturevalue(edges_fixture) if edges_fixture else None
 
+    # Determine if we should disallow empty GDFs for this test case
+    allow_empty = error is None
+
     if error:
         with pytest.raises(error, match=match):
-            utils.validate_gdf(nodes_gdf=nodes_gdf, edges_gdf=edges_gdf)
+            utils.validate_gdf(
+                nodes_gdf=nodes_gdf, edges_gdf=edges_gdf, allow_empty=allow_empty,
+            )
     else:
         try:
-            utils.validate_gdf(nodes_gdf=nodes_gdf, edges_gdf=edges_gdf)
+            utils.validate_gdf(
+                nodes_gdf=nodes_gdf, edges_gdf=edges_gdf, allow_empty=allow_empty,
+            )
         except Exception as e:
             pytest.fail(f"validate_gdf raised an unexpected exception: {e}")
 

@@ -124,6 +124,7 @@ __all__ = [
     "nx_to_pyg",
     "pyg_to_gdf",
     "pyg_to_nx",
+    "validate_pyg",
 ]
 
 # Constants for error messages
@@ -261,9 +262,25 @@ def gdf_to_pyg(
         # Type assertions for heterogeneous graphs
         assert isinstance(nodes, dict)
         assert edges is None or isinstance(edges, dict)
-        node_feature_cols_hetero: dict[str, list[str]] | None = node_feature_cols
-        node_label_cols_hetero: dict[str, list[str]] | None = node_label_cols
-        edge_feature_cols_hetero: dict[str, list[str]] | None = edge_feature_cols
+
+        # Type narrowing for heterogeneous graphs
+        if isinstance(node_feature_cols, dict) or node_feature_cols is None:
+            node_feature_cols_hetero: dict[str, list[str]] | None = node_feature_cols
+        else:
+            msg = "node_feature_cols must be a dict for heterogeneous graphs"
+            raise TypeError(msg)
+
+        if isinstance(node_label_cols, dict) or node_label_cols is None:
+            node_label_cols_hetero: dict[str, list[str]] | None = node_label_cols
+        else:
+            msg = "node_label_cols must be a dict for heterogeneous graphs"
+            raise TypeError(msg)
+
+        if isinstance(edge_feature_cols, dict) or edge_feature_cols is None:
+            edge_feature_cols_hetero: dict[str, list[str]] | None = edge_feature_cols
+        else:
+            msg = "edge_feature_cols must be a dict for heterogeneous graphs"
+            raise TypeError(msg)
 
         data = _build_heterogeneous_graph(
             nodes, edges, node_feature_cols_hetero, node_label_cols_hetero,
@@ -273,9 +290,25 @@ def gdf_to_pyg(
         # Type assertions for homogeneous graphs
         assert isinstance(nodes, gpd.GeoDataFrame) or nodes is None
         assert isinstance(edges, gpd.GeoDataFrame) or edges is None
-        node_feature_cols_homo: list[str] | None = node_feature_cols
-        node_label_cols_homo: list[str] | None = node_label_cols
-        edge_feature_cols_homo: list[str] | None = edge_feature_cols
+
+        # Type narrowing for homogeneous graphs
+        if isinstance(node_feature_cols, list) or node_feature_cols is None:
+            node_feature_cols_homo: list[str] | None = node_feature_cols
+        else:
+            msg = "node_feature_cols must be a list for homogeneous graphs"
+            raise TypeError(msg)
+
+        if isinstance(node_label_cols, list) or node_label_cols is None:
+            node_label_cols_homo: list[str] | None = node_label_cols
+        else:
+            msg = "node_label_cols must be a list for homogeneous graphs"
+            raise ValueError(msg)
+
+        if isinstance(edge_feature_cols, list) or edge_feature_cols is None:
+            edge_feature_cols_homo: list[str] | None = edge_feature_cols
+        else:
+            msg = "edge_feature_cols must be a list for homogeneous graphs"
+            raise ValueError(msg)
 
         # Create a homogeneous Data object
         data = _build_homogeneous_graph(
@@ -285,7 +318,7 @@ def gdf_to_pyg(
         )
 
     # Validate the created PyG object
-    _validate_pyg(data)
+    validate_pyg(data)
     return data
 
 
@@ -295,7 +328,7 @@ def pyg_to_gdf(
     edge_types: str | list[tuple[str, str, str]] | None = None,
 ) -> (
     tuple[dict[str, gpd.GeoDataFrame], dict[tuple[str, str, str], gpd.GeoDataFrame]]
-    | tuple[gpd.GeoDataFrame, gpd.GeoDataFrame | None]
+    | tuple[gpd.GeoDataFrame | None, gpd.GeoDataFrame | None]
 ):
     """Convert PyTorch Geometric data to GeoDataFrames.
 
@@ -356,7 +389,7 @@ def pyg_to_gdf(
     >>> node_gdfs, edge_gdfs = pyg_to_gdf(hetero_data,
     ...                                   node_types=['building', 'road'])
     """
-    metadata = _validate_pyg(data)
+    metadata = validate_pyg(data)
 
     if metadata.is_hetero:
         # ------------------------------------------------------------------
@@ -435,10 +468,7 @@ def pyg_to_nx(data: Data | HeteroData) -> nx.Graph:
     >>> centrality = nx.betweenness_centrality(nx_graph)
     >>> communities = nx.community.greedy_modularity_communities(nx_graph)
     """
-    if not TORCH_AVAILABLE:
-        raise ImportError(TORCH_ERROR_MSG)
-
-    metadata = _validate_pyg(data)
+    metadata = validate_pyg(data)
 
     if metadata.is_hetero:
         return _convert_hetero_pyg_to_nx(data, metadata)
@@ -538,9 +568,6 @@ def nx_to_pyg(
     >>> # Convert with community labels
     >>> data = nx_to_pyg(G, node_label_cols=['community'])
     """
-    if not TORCH_AVAILABLE:
-        raise ImportError(TORCH_ERROR_MSG)
-
     # Validate NetworkX graph (includes type checking)
     validate_nx(graph)
 
@@ -625,24 +652,23 @@ def _get_device(device: str | torch.device | None) -> torch.device:
         If device is not a valid type
     """
     if device is None:
-        return torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    if isinstance(device, str):
-        device_lower = device.lower()
-        if device_lower not in {"cpu", "cuda"}:
-            raise ValueError(DEVICE_ERROR_MSG)
-        if device_lower == "cuda" and not torch.cuda.is_available():
-            # Raise ValueError consistent with the test's expectation
-            msg = f"CUDA selected, but not available. {DEVICE_ERROR_MSG}"
-            raise ValueError(msg)
-        return torch.device(device_lower)
-    if isinstance(device, torch.device):
-        if device.type == "cuda" and not torch.cuda.is_available():
-            # Also handle cases where a torch.device("cuda") object is passed
-            # when CUDA is not available.
-            msg = f"CUDA selected, but not available. {DEVICE_ERROR_MSG}"
-            raise ValueError(msg)
-        return device
-    raise TypeError(DEVICE_ERROR_MSG)
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+
+    # Check for invalid types first
+    if not isinstance(device, (str, torch.device)):
+        raise TypeError(DEVICE_ERROR_MSG)
+
+    try:
+        result_device = torch.device(device)
+    except RuntimeError as e:
+        # Convert RuntimeError from torch.device() to ValueError for consistency
+        raise ValueError(DEVICE_ERROR_MSG) from e
+
+    if result_device.type == "cuda" and not torch.cuda.is_available():
+        msg = f"CUDA selected, but not available. {DEVICE_ERROR_MSG}"
+        raise ValueError(msg)
+
+    return result_device
 
 
 # ============================================================================
@@ -1225,12 +1251,13 @@ def _store_hetero_metadata(
 # GRAPH VALIDATION FUNCTIONS
 # ============================================================================
 
-def _validate_pyg(data: Data | HeteroData) -> GraphMetadata:
+def validate_pyg(data: Data | HeteroData) -> GraphMetadata:
     """
     Validate PyTorch Geometric Data or HeteroData objects and return metadata.
 
-    This centralized validation function checks for type consistency, the `metadata` attribute,
-    and returns it, ensuring the object was created by `city2graph`.
+    This centralized validation function performs comprehensive validation of PyG objects,
+    including type checking, metadata validation, and structural consistency checks.
+    It serves as the single point of validation for all PyG objects in city2graph.
 
     Parameters
     ----------
@@ -1251,32 +1278,172 @@ def _validate_pyg(data: Data | HeteroData) -> GraphMetadata:
     ValueError
         If the data object is missing required metadata or is inconsistent.
     """
+    # Check PyTorch availability first
     if not TORCH_AVAILABLE:
         raise ImportError(TORCH_ERROR_MSG)
 
-    # Type checking
+    # Comprehensive type checking for PyG objects
     if not isinstance(data, (Data, HeteroData)):
-        msg = "Input must be a PyTorch Geometric Data or HeteroData object"
+        # Provide detailed error message based on the actual type
+        actual_type = type(data).__name__
+        msg = (
+            f"Input must be a PyTorch Geometric Data or HeteroData object, "
+            f"got {actual_type}. Ensure you have PyTorch Geometric installed "
+            f"and are passing a valid PyG object."
+        )
         raise TypeError(msg)
 
-    if not hasattr(data, "graph_metadata") or not isinstance(data.graph_metadata, GraphMetadata):
+    # Validate metadata presence and type
+    if not hasattr(data, "graph_metadata"):
         msg = (
-            "PyG object is missing 'graph_metadata' or it is of incorrect type. "
-            "It may not have been created by city2graph."
+            "PyG object is missing 'graph_metadata' attribute. "
+            "This object may not have been created by city2graph. "
+            "Use city2graph.graph.gdf_to_pyg() or city2graph.graph.nx_to_pyg() "
+            "to create compatible PyG objects."
+        )
+        raise ValueError(msg)
+
+    if not isinstance(data.graph_metadata, GraphMetadata):
+        actual_metadata_type = type(data.graph_metadata).__name__
+        msg = (
+            f"PyG object has 'graph_metadata' of incorrect type: {actual_metadata_type}. "
+            f"Expected GraphMetadata. This object may not have been created by city2graph."
         )
         raise ValueError(msg)
 
     metadata = data.graph_metadata
     is_hetero = isinstance(data, HeteroData)
 
+    # Validate consistency between PyG object type and metadata
     if is_hetero and not metadata.is_hetero:
-        msg = "Data is HeteroData but metadata.is_hetero is False."
+        msg = (
+            "Inconsistency detected: PyG object is HeteroData but metadata.is_hetero is False. "
+            "This indicates corrupted metadata or an incorrectly constructed object."
+        )
         raise ValueError(msg)
     if not is_hetero and metadata.is_hetero:
-        msg = "Data is Data but metadata.is_hetero is True."
+        msg = (
+            "Inconsistency detected: PyG object is Data but metadata.is_hetero is True. "
+            "This indicates corrupted metadata or an incorrectly constructed object."
+        )
         raise ValueError(msg)
 
+    # Additional structural validation for heterogeneous graphs
+    if is_hetero:
+        _validate_hetero_structure(data, metadata)
+    else:
+        _validate_homo_structure(data, metadata)
+
     return metadata
+
+
+def _validate_hetero_structure(data: HeteroData, metadata: GraphMetadata) -> None:
+    """Validate structural consistency of heterogeneous PyG data."""
+    # Check that node types in metadata match actual node types in data
+    if metadata.node_types:
+        actual_node_types = set(data.node_types)
+        expected_node_types = set(metadata.node_types)
+        if actual_node_types != expected_node_types:
+            msg = (
+                f"Node types mismatch: metadata expects {expected_node_types}, "
+                f"but PyG object has {actual_node_types}"
+            )
+            raise ValueError(msg)
+
+    # Check that edge types in metadata match actual edge types in data
+    if metadata.edge_types:
+        actual_edge_types = set(data.edge_types)
+        expected_edge_types = set(metadata.edge_types)
+        if actual_edge_types != expected_edge_types:
+            msg = (
+                f"Edge types mismatch: metadata expects {expected_edge_types}, "
+                f"but PyG object has {actual_edge_types}"
+            )
+            raise ValueError(msg)
+
+    # Validate tensor shape consistency for each node type
+    for node_type in data.node_types:
+        node_data = data[node_type]
+        if hasattr(node_data, "x") and node_data.x is not None:
+            num_nodes = node_data.x.size(0)
+
+            # Check position tensor consistency
+            if hasattr(node_data, "pos") and node_data.pos is not None and node_data.pos.size(0) != num_nodes:
+                msg = (
+                    f"Node type '{node_type}': position tensor size ({node_data.pos.size(0)}) "
+                    f"doesn't match node feature tensor size ({num_nodes})"
+                )
+                raise ValueError(msg)
+
+            # Check label tensor consistency
+            if hasattr(node_data, "y") and node_data.y is not None and node_data.y.size(0) != num_nodes:
+                msg = (
+                    f"Node type '{node_type}': label tensor size ({node_data.y.size(0)}) "
+                    f"doesn't match node feature tensor size ({num_nodes})"
+                )
+                raise ValueError(msg)
+
+
+def _validate_homo_structure(data: Data, metadata: GraphMetadata) -> None:
+    """Validate structural consistency of homogeneous PyG data."""
+    # Validate that metadata has the expected structure for homogeneous graphs
+    if metadata.node_types and len(metadata.node_types) > 0:
+        msg = "Homogeneous graph metadata should not have node_types specified"
+        raise ValueError(msg)
+
+    if metadata.edge_types and len(metadata.edge_types) > 0:
+        msg = "Homogeneous graph metadata should not have edge_types specified"
+        raise ValueError(msg)
+
+    # Validate that node mappings use the "default" key for homogeneous graphs
+    if metadata.node_mappings and "default" not in metadata.node_mappings:
+        msg = "Homogeneous graph metadata should use 'default' key in node_mappings"
+        raise ValueError(msg)
+
+    # Validate that feature/label columns are lists, not dicts
+    if metadata.node_feature_cols and not isinstance(metadata.node_feature_cols, list):
+        msg = "Homogeneous graph metadata should have node_feature_cols as list, not dict"
+        raise ValueError(msg)
+
+    if metadata.node_label_cols and not isinstance(metadata.node_label_cols, list):
+        msg = "Homogeneous graph metadata should have node_label_cols as list, not dict"
+        raise ValueError(msg)
+
+    if metadata.edge_feature_cols and not isinstance(metadata.edge_feature_cols, list):
+        msg = "Homogeneous graph metadata should have edge_feature_cols as list, not dict"
+        raise ValueError(msg)
+
+    # Validate tensor shape consistency
+    if hasattr(data, "x") and data.x is not None:
+        num_nodes = data.x.size(0)
+
+        # Check position tensor consistency
+        if hasattr(data, "pos") and data.pos is not None and data.pos.size(0) != num_nodes:
+            msg = (
+                f"Node position tensor size ({data.pos.size(0)}) "
+                f"doesn't match node feature tensor size ({num_nodes})"
+            )
+            raise ValueError(msg)
+
+        # Check label tensor consistency
+        if hasattr(data, "y") and data.y is not None and data.y.size(0) != num_nodes:
+            msg = (
+                f"Node label tensor size ({data.y.size(0)}) "
+                f"doesn't match node feature tensor size ({num_nodes})"
+            )
+            raise ValueError(msg)
+
+    # Validate edge tensor consistency
+    if hasattr(data, "edge_index") and data.edge_index is not None:
+        num_edges = data.edge_index.size(1)
+
+        # Check edge attribute tensor consistency
+        if hasattr(data, "edge_attr") and data.edge_attr is not None and data.edge_attr.size(0) != num_edges:
+            msg = (
+                f"Edge attribute tensor size ({data.edge_attr.size(0)}) "
+                f"doesn't match number of edges ({num_edges})"
+            )
+            raise ValueError(msg)
 
 
 def _validate_feature_columns(
@@ -1377,8 +1544,6 @@ def _extract_index_values(
 
 def _create_geometry_from_positions(node_data: Data | HeteroData) -> gpd.array.GeometryArray | None:
     """Create geometry from node positions."""
-    if node_data.pos is None:
-        return None
     pos_array: np.ndarray[tuple[int, ...], np.dtype[np.float32]] = node_data.pos.detach().cpu().numpy()
     return gpd.points_from_xy(pos_array[:, 0], pos_array[:, 1])
 
@@ -1577,6 +1742,12 @@ def _reconstruct_edge_gdf(
     geometry = _create_edge_geometries(edge_data, edge_type, is_hetero, data)
 
     # Reconstruct index from stored values
+    edge_data_dict = _extract_edge_features(edge_data, edge_type, is_hetero, metadata)
+
+    # Create geometries from edge indices and node positions
+    geometry = _create_edge_geometries(edge_data, edge_type, is_hetero, data)
+
+    # Reconstruct index from stored values
     index_values = _reconstruct_edge_index(edge_type, is_hetero, edge_data_dict, metadata)
 
     # Create GeoDataFrame
@@ -1636,9 +1807,6 @@ def _add_homo_edges_to_graph(graph: nx.Graph, data: Data) -> None:
     metadata = data.graph_metadata
     edge_feature_cols = metadata.edge_feature_cols
     original_edge_indices = metadata.edge_index_values
-
-    if not hasattr(data, "edge_index") or data.edge_index is None:
-        return
 
     edge_index = data.edge_index.detach().cpu().numpy()
     num_edges = edge_index.shape[1]
@@ -1733,9 +1901,6 @@ def _add_hetero_edges_to_graph(graph: nx.Graph, data: HeteroData, node_offset: d
     for edge_type in metadata.edge_types:
         src_type, rel_type, dst_type = edge_type
         edge_store = data[edge_type]
-
-        if not hasattr(edge_store, "edge_index") or edge_store.edge_index is None:
-            continue
 
         edge_index = edge_store.edge_index.detach().cpu().numpy()
         num_edges = edge_index.shape[1]

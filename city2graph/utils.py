@@ -1807,8 +1807,8 @@ def validate_gdf(
 
     is_hetero = is_nodes_dict or is_edges_dict
 
-    validated_nodes = None
-    validated_edges = None
+    validated_nodes: dict[str, gpd.GeoDataFrame] | gpd.GeoDataFrame | None = None
+    validated_edges: dict[tuple[str, str, str], gpd.GeoDataFrame] | gpd.GeoDataFrame | None = None
 
     if is_hetero:
         # Validate heterogeneous inputs
@@ -1841,21 +1841,19 @@ def validate_gdf(
     else:
         # Validate homogeneous inputs
         if nodes_gdf is not None:
-            if not isinstance(nodes_gdf, gpd.GeoDataFrame):
-                msg = "Input must be a GeoDataFrame"
-                raise TypeError(msg)
-            validated_nodes = processor.validate_gdf(nodes_gdf, allow_empty=True)
+            validated_nodes = processor.validate_gdf(
+                nodes_gdf, allow_empty=allow_empty,
+            )
 
         if edges_gdf is not None:
-            if not isinstance(edges_gdf, gpd.GeoDataFrame):
-                msg = "Input must be a GeoDataFrame"
-                raise TypeError(msg)
             validated_edges = processor.validate_gdf(
-                edges_gdf, ["LineString", "MultiLineString"], allow_empty=allow_empty,
+                edges_gdf,
+                ["LineString", "MultiLineString"],
+                allow_empty=allow_empty,
             )
 
     # Ensure CRS consistency
-    all_gdfs_to_check = []
+    all_gdfs_to_check: list[gpd.GeoDataFrame] = []
     if validated_nodes is not None:
         all_gdfs_to_check.extend(
             validated_nodes.values() if is_hetero else [validated_nodes],
