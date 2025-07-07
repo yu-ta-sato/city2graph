@@ -1,13 +1,11 @@
 import pathlib
-from typing import Any
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 import geopandas as gpd
 import networkx as nx
 import pandas as pd
 import pytest
-from shapely.geometry import LineString
-from shapely.geometry import Point
-from shapely.geometry import Polygon
+from shapely.geometry import LineString, Point, Polygon
 
 # Import WGS84_CRS directly to avoid torch import issues
 WGS84_CRS = "EPSG:4326"
@@ -15,10 +13,14 @@ WGS84_CRS = "EPSG:4326"
 # Try to import torch, skip tests if not available
 try:
     import importlib.util
-
     TORCH_AVAILABLE = importlib.util.find_spec("torch") is not None
 except ImportError:
     TORCH_AVAILABLE = False
+
+# Pytest skipif marker for tests requiring torch
+requires_torch = pytest.mark.skipif(
+    not TORCH_AVAILABLE, reason="PyTorch or PyTorch Geometric is not available."
+)
 
 
 @pytest.fixture(scope="session")
@@ -143,11 +145,56 @@ def sample_nx_graph() -> nx.Graph:
 
 
 @pytest.fixture
+def sample_pyg_data(sample_nodes_gdf: gpd.GeoDataFrame) -> "Data":
+    """Fixture for a sample PyG Data object."""
+    from city2graph.graph import gdf_to_pyg
+    return gdf_to_pyg(sample_nodes_gdf)
+
+
+@pytest.fixture
+def sample_pyg_hetero_data(
+    sample_hetero_nodes_dict: dict[str, gpd.GeoDataFrame],
+    sample_hetero_edges_dict: dict[tuple[str, str, str], gpd.GeoDataFrame],
+) -> "HeteroData":
+    """Fixture for a sample PyG HeteroData object."""
+    from city2graph.graph import gdf_to_pyg
+    # Ensure some edges exist for testing edge feature naming
+    if not sample_hetero_edges_dict:
+        # Create a dummy edge if the fixture is empty
+        from shapely.geometry import LineString
+        dummy_edge_gdf = gpd.GeoDataFrame(
+            {"source_id": ["b1"], "target_id": ["r1"], "geometry": [LineString([(0,0),(1,1)])]},
+            index=pd.MultiIndex.from_arrays([["b1"], ["r1"]], names=["source_id", "target_id"]),
+            crs=sample_hetero_nodes_dict["building"].crs
+        )
+        sample_hetero_edges_dict = {("building", "connects_to", "road"): dummy_edge_gdf}
+
+    return gdf_to_pyg(sample_hetero_nodes_dict, sample_hetero_edges_dict)
+
+
+@pytest.fixture
+def empty_edges_gdf(sample_crs: str) -> gpd.GeoDataFrame:
+    """Fixture for an empty edges GeoDataFrame."""
+    return gpd.GeoDataFrame(
+        columns=["source_id", "target_id", "geometry"],
+        crs=sample_crs
+    ).set_index(["source_id", "target_id"])
+
+
+@pytest.fixture
+def edges_dict_with_empty(sample_crs: str) -> dict[tuple[str, str, str], gpd.GeoDataFrame]:
+    """Fixture for an edges dictionary with an empty GeoDataFrame."""
+    empty_conn_gdf = gpd.GeoDataFrame(
+        columns=["b_id", "r_id", "geometry"],
+        crs=sample_crs
+    ).set_index(["b_id", "r_id"])
+    return {("building", "connects", "road"): empty_conn_gdf}
+
+
+@pytest.fixture
 def sample_nx_graph_no_crs(sample_nx_graph: nx.Graph) -> nx.Graph:
     """A NetworkX graph with no CRS information."""
-    graph = sample_nx_graph.copy()
-    del graph.graph["crs"]
-    return graph
+    return modify_nx_graph_remove_attr(sample_nx_graph, "crs")
 
 
 @pytest.fixture
@@ -169,31 +216,30 @@ def custom_center_point() -> Point:
     return gpd.GeoSeries([point], crs="EPSG:4326").to_crs(epsg=27700)
 
 
-# Helper function to create GeoDataFrames for testing
+# ============================================================================
+# Helper Functions for Creating and Modifying Test Data
+# ============================================================================
+
 def _create_gdf(
-    geometries: list[Any],
-    attributes_list: list[dict[str, Any]],
+    geometries: List[Any],
+    attributes_list: List[Dict[str, Any]],
     crs: str = "EPSG:27700",
 ) -> gpd.GeoDataFrame:
     """
-    Creates a GeoDataFrame.
-    geometries: list of shapely geometry objects
-    attributes_list: list of dictionaries, where each dict contains attributes for a geometry.
+    Creates a GeoDataFrame with proper handling of empty cases.
+    
+    Args:
+        geometries: list of shapely geometry objects
+        attributes_list: list of dictionaries with attributes for each geometry
+        crs: coordinate reference system
     """
     if not geometries:
         columns = ["geometry"]
-        # Ensure attributes_list[0] is a dict and has keys before extending
-        if (
-            attributes_list
-            and isinstance(attributes_list[0], dict)
-            and attributes_list[0]
-        ):
+        if attributes_list and isinstance(attributes_list[0], dict) and attributes_list[0]:
             columns.extend(attributes_list[0].keys())
-        # Remove duplicates while preserving order, ensure 'geometry' is present
+        # Remove duplicates while preserving order
         seen = set()
         unique_cols = []
-        if "geometry" not in columns:  # Ensure geometry is always an option
-            columns.append("geometry")
         for item in columns:
             if item not in seen:
                 seen.add(item)
@@ -201,6 +247,91 @@ def _create_gdf(
         return gpd.GeoDataFrame(columns=unique_cols, geometry="geometry", crs=crs)
 
     return gpd.GeoDataFrame(attributes_list, geometry=geometries, crs=crs)
+
+
+def modify_gdf_remove_column(gdf: gpd.GeoDataFrame, column: str) -> gpd.GeoDataFrame:
+    """Helper to remove a column from a GeoDataFrame copy."""
+    gdf_copy = gdf.copy()
+    if column in gdf_copy.columns:
+        del gdf_copy[column]
+    return gdf_copy
+
+
+def modify_gdf_remove_crs(gdf: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
+    """Helper to remove CRS from a GeoDataFrame copy."""
+    gdf_copy = gdf.copy()
+    gdf_copy.crs = None
+    return gdf_copy
+
+
+def modify_gdf_change_crs(gdf: gpd.GeoDataFrame, new_crs: str) -> gpd.GeoDataFrame:
+    """Helper to change CRS of a GeoDataFrame copy."""
+    gdf_copy = gdf.copy()
+    if not gdf_copy.empty:
+        gdf_copy = gdf_copy.to_crs(new_crs)
+    else:
+        gdf_copy.crs = new_crs
+    return gdf_copy
+
+
+def modify_nx_graph_remove_attr(graph: nx.Graph, attr: str) -> nx.Graph:
+    """Helper to remove an attribute from a NetworkX graph copy."""
+    graph_copy = graph.copy()
+    if hasattr(graph_copy, 'graph') and attr in graph_copy.graph:
+        del graph_copy.graph[attr]
+    return graph_copy
+
+
+def modify_gdf_single_item(gdf: gpd.GeoDataFrame, index: int = 0) -> gpd.GeoDataFrame:
+    """Helper to create a single-item GeoDataFrame from an existing one."""
+    if not gdf.empty and len(gdf) > index:
+        return gdf.iloc[[index]].copy()
+    return gdf.copy()
+
+
+def modify_gdf_translate(gdf: gpd.GeoDataFrame, xoff: float, yoff: float) -> gpd.GeoDataFrame:
+    """Helper to translate geometries in a GeoDataFrame copy."""
+    gdf_copy = gdf.copy()
+    if not gdf_copy.empty:
+        gdf_copy.geometry = gdf_copy.geometry.translate(xoff=xoff, yoff=yoff)
+    return gdf_copy
+
+
+def modify_gdf_add_column(gdf: gpd.GeoDataFrame, column: str, values: Any) -> gpd.GeoDataFrame:
+    """Helper to add a column to a GeoDataFrame copy."""
+    gdf_copy = gdf.copy()
+    gdf_copy[column] = values
+    return gdf_copy
+
+
+def create_coincident_nodes_gdf(base_gdf: gpd.GeoDataFrame, sample_crs: str) -> gpd.GeoDataFrame:
+    """Helper to create a GeoDataFrame with coincident nodes for testing edge cases."""
+    data = {
+        "node_id": [1, 2, 3],
+        "feature1": [10.0, 20.0, 30.0],
+        "geometry": [Point(0, 0), Point(0, 0), Point(1, 1)],  # Two coincident points
+    }
+    return gpd.GeoDataFrame(data, crs=sample_crs).set_index("node_id")
+
+
+def create_empty_gtfs_component(component_type: str) -> Union[gpd.GeoDataFrame, pd.DataFrame]:
+    """Helper to create empty GTFS components for testing."""
+    if component_type == "stops":
+        return gpd.GeoDataFrame(
+            columns=["stop_id", "stop_name", "stop_lat", "stop_lon", "geometry"],
+            geometry="geometry",
+            crs="EPSG:4326"
+        )
+    elif component_type == "routes":
+        return pd.DataFrame(columns=["route_id", "agency_id", "route_short_name", "route_long_name", "route_type"])
+    elif component_type == "trips":
+        return pd.DataFrame(columns=["route_id", "service_id", "trip_id"])
+    elif component_type == "stop_times":
+        return pd.DataFrame(columns=["trip_id", "arrival_time", "departure_time", "stop_id", "stop_sequence"])
+    elif component_type == "calendar":
+        return pd.DataFrame(columns=["service_id", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday", "start_date", "end_date"])
+    else:
+        return pd.DataFrame()
 
 
 # --- General Fixtures ---
@@ -301,25 +432,19 @@ def mg_center_point(sample_segments_gdf: gpd.GeoDataFrame, sample_crs: str) -> g
 @pytest.fixture
 def single_building_gdf(sample_buildings_gdf: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
     """A GDF with a single building polygon."""
-    if not sample_buildings_gdf.empty:
-        return sample_buildings_gdf.iloc[[0]].copy()
-    return sample_buildings_gdf.copy()  # Return empty if source is empty
+    return modify_gdf_single_item(sample_buildings_gdf, 0)
 
 
 @pytest.fixture
 def single_segment_gdf(sample_segments_gdf: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
     """A GDF with a single segment line."""
-    if not sample_segments_gdf.empty:
-        return sample_segments_gdf.iloc[[0]].copy()
-    return sample_segments_gdf.copy()
+    return modify_gdf_single_item(sample_segments_gdf, 0)
 
 
 @pytest.fixture
 def single_tessellation_cell_gdf(sample_tessellation_gdf: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
     """A GDF with a single tessellation cell."""
-    if not sample_tessellation_gdf.empty:
-        return sample_tessellation_gdf.iloc[[0]].copy()
-    return sample_tessellation_gdf.copy()
+    return modify_gdf_single_item(sample_tessellation_gdf, 0)
 
 
 # --- Fixtures for Error/Edge Cases ---
@@ -346,43 +471,31 @@ def segments_no_public_id_gdf(sample_crs: str) -> gpd.GeoDataFrame:
 @pytest.fixture
 def segments_gdf_far_away(sample_segments_gdf: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
     """Sample segments translated far away, for testing no priv_pub connections."""
-    segments_far = sample_segments_gdf.copy()
-    if not segments_far.empty:
-        segments_far.geometry = segments_far.geometry.translate(xoff=100000, yoff=100000)
-    return segments_far
+    return modify_gdf_translate(sample_segments_gdf, xoff=100000, yoff=100000)
 
 
 @pytest.fixture
 def segments_gdf_no_crs(sample_segments_gdf: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
     """Sample segments GDF with CRS removed."""
-    gdf_no_crs = sample_segments_gdf.copy()
-    gdf_no_crs.crs = None
-    return gdf_no_crs
+    return modify_gdf_remove_crs(sample_segments_gdf)
 
 
 @pytest.fixture
 def segments_gdf_alt_crs(sample_segments_gdf: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
     """Sample segments GDF with an alternative CRS."""
-    gdf = sample_segments_gdf.copy()
-    if not gdf.empty:
-        gdf = gdf.to_crs("EPSG:4326")
-    return gdf
+    return modify_gdf_change_crs(sample_segments_gdf, "EPSG:4326")
 
 
 @pytest.fixture
 def nodes_gdf_no_crs(sample_nodes_gdf: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
     """A nodes GeoDataFrame with no CRS."""
-    gdf = sample_nodes_gdf.copy()
-    gdf.crs = None
-    return gdf
+    return modify_gdf_remove_crs(sample_nodes_gdf)
 
 
 @pytest.fixture
 def sample_nodes_gdf_alt_crs(sample_nodes_gdf: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
     """A nodes GeoDataFrame with an alternative CRS."""
-    gdf = sample_nodes_gdf.copy()
-    gdf.crs = "EPSG:4326"
-    return gdf
+    return modify_gdf_change_crs(sample_nodes_gdf, "EPSG:4326")
 
 
 @pytest.fixture
@@ -410,7 +523,7 @@ def segments_gdf_with_custom_barrier(sample_segments_gdf: gpd.GeoDataFrame) -> g
         )
         return segments_gdf_copy
 
-    segments_gdf = sample_segments_gdf.iloc[[0]].copy()  # Take only the first segment
+    segments_gdf = modify_gdf_single_item(sample_segments_gdf, 0)
     # Create a plausible barrier polygon based on the first segment's bounds
     first_segment_bounds = segments_gdf.geometry.iloc[0].bounds
     minx, miny, maxx, maxy = first_segment_bounds
@@ -451,10 +564,6 @@ def not_a_gdf() -> pd.DataFrame:
     return pd.DataFrame({"col1": [1, 2], "col2": [3, 4]})
 
 
-# Pytest skipif marker for tests requiring torch
-requires_torch = pytest.mark.skipif(
-    not TORCH_AVAILABLE, reason="PyTorch or PyTorch Geometric is not available.",
-)
 
 # --- Fixtures for validate_nx testing ---
 
@@ -732,6 +841,17 @@ def segments_gdf_with_multiindex_public_id(sample_crs: str) -> gpd.GeoDataFrame:
 
 
 @pytest.fixture
+def empty_hetero_nodes_dict() -> dict[str, gpd.GeoDataFrame]:
+    """Fixture for an empty dictionary of heterogeneous nodes GeoDataFrames."""
+    return {}
+
+
+@pytest.fixture
+def empty_hetero_edges_dict() -> dict[tuple[str, str, str], gpd.GeoDataFrame]:
+    """Fixture for an empty dictionary of heterogeneous edges GeoDataFrames."""
+    return {}
+
+@pytest.fixture
 def empty_nodes_gdf(sample_crs: str) -> gpd.GeoDataFrame:
     """Return an empty nodes GeoDataFrame for testing edge cases."""
     return gpd.GeoDataFrame(columns=["geometry"], geometry="geometry", crs=sample_crs)
@@ -760,14 +880,9 @@ def two_nodes_gdf(sample_crs: str) -> gpd.GeoDataFrame:
 
 
 @pytest.fixture
-def coincident_nodes_gdf(sample_crs: str) -> gpd.GeoDataFrame:
+def coincident_nodes_gdf(sample_nodes_gdf: gpd.GeoDataFrame, sample_crs: str) -> gpd.GeoDataFrame:
     """Return a GeoDataFrame with coincident nodes for testing edge cases."""
-    data = {
-        "node_id": [1, 2, 3],
-        "feature1": [10.0, 20.0, 30.0],
-        "geometry": [Point(0, 0), Point(0, 0), Point(1, 1)],  # Two coincident points
-    }
-    return gpd.GeoDataFrame(data, crs=sample_crs).set_index("node_id")
+    return create_coincident_nodes_gdf(sample_nodes_gdf, sample_crs)
 
 
 @pytest.fixture
@@ -929,41 +1044,23 @@ def sample_gtfs_zip():
         zf.writestr("agency.txt", agency_data)
         
         # stops.txt
-        stops_data = """stop_id,stop_name,stop_lat,stop_lon
-stop1,Stop 1,40.7128,-74.0060
-stop2,Stop 2,40.7589,-73.9851
-stop3,Stop 3,40.7505,-73.9934
-"""
+        stops_data = """stop_id,stop_name,stop_lat,stop_lon\nstop1,Stop 1,40.7128,-74.0060\nstop2,Stop 2,40.7589,-73.9851\nstop3,Stop 3,40.7505,-73.9934\n"""
         zf.writestr("stops.txt", stops_data)
         
         # routes.txt
-        routes_data = """route_id,agency_id,route_short_name,route_long_name,route_type
-route1,1,1,Test Route 1,3
-"""
+        routes_data = """route_id,agency_id,route_short_name,route_long_name,route_type\nroute1,1,1,Test Route 1,3\n"""
         zf.writestr("routes.txt", routes_data)
         
         # trips.txt
-        trips_data = """route_id,service_id,trip_id
-route1,service1,trip1
-route1,service1,trip2
-"""
+        trips_data = """route_id,service_id,trip_id\nroute1,service1,trip1\nroute1,service1,trip2\n"""
         zf.writestr("trips.txt", trips_data)
         
         # stop_times.txt
-        stop_times_data = """trip_id,arrival_time,departure_time,stop_id,stop_sequence
-trip1,08:00:00,08:00:00,stop1,1
-trip1,08:05:00,08:05:00,stop2,2
-trip1,08:10:00,08:10:00,stop3,3
-trip2,09:00:00,09:00:00,stop1,1
-trip2,09:05:00,09:05:00,stop2,2
-trip2,09:10:00,09:10:00,stop3,3
-"""
+        stop_times_data = """trip_id,arrival_time,departure_time,stop_id,stop_sequence\ntrip1,08:00:00,08:00:00,stop1,1\ntrip1,08:05:00,08:05:00,stop2,2\ntrip1,08:10:00,08:10:00,stop3,3\ntrip2,09:00:00,09:00:00,stop1,1\ntrip2,09:05:00,09:05:00,stop2,2\ntrip2,09:10:00,09:10:00,stop3,3\n"""
         zf.writestr("stop_times.txt", stop_times_data)
         
         # calendar.txt
-        calendar_data = """service_id,monday,tuesday,wednesday,thursday,friday,saturday,sunday,start_date,end_date
-service1,1,1,1,1,1,0,0,20240101,20241231
-"""
+        calendar_data = """service_id,monday,tuesday,wednesday,thursday,friday,saturday,sunday,start_date,end_date\nservice1,1,1,1,1,1,0,0,20240101,20241231\n"""
         zf.writestr("calendar.txt", calendar_data)
     
     yield temp_file.name
@@ -986,39 +1083,23 @@ def sample_gtfs_zip_with_shapes():
         agency_data = "agency_id,agency_name,agency_url,agency_timezone\n1,Test Agency,http://test.com,America/New_York\n"
         zf.writestr("agency.txt", agency_data)
         
-        stops_data = """stop_id,stop_name,stop_lat,stop_lon
-stop1,Stop 1,40.7128,-74.0060
-stop2,Stop 2,40.7589,-73.9851
-"""
+        stops_data = """stop_id,stop_name,stop_lat,stop_lon\nstop1,Stop 1,40.7128,-74.0060\nstop2,Stop 2,40.7589,-73.9851\n"""
         zf.writestr("stops.txt", stops_data)
         
-        routes_data = """route_id,agency_id,route_short_name,route_long_name,route_type
-route1,1,1,Test Route 1,3
-"""
+        routes_data = """route_id,agency_id,route_short_name,route_long_name,route_type\nroute1,1,1,Test Route 1,3\n"""
         zf.writestr("routes.txt", routes_data)
         
-        trips_data = """route_id,service_id,trip_id,shape_id
-route1,service1,trip1,shape1
-"""
+        trips_data = """route_id,service_id,trip_id,shape_id\nroute1,service1,trip1,shape1\n"""
         zf.writestr("trips.txt", trips_data)
         
-        stop_times_data = """trip_id,arrival_time,departure_time,stop_id,stop_sequence
-trip1,08:00:00,08:00:00,stop1,1
-trip1,08:05:00,08:05:00,stop2,2
-"""
+        stop_times_data = """trip_id,arrival_time,departure_time,stop_id,stop_sequence\ntrip1,08:00:00,08:00:00,stop1,1\ntrip1,08:05:00,08:05:00,stop2,2\n"""
         zf.writestr("stop_times.txt", stop_times_data)
         
-        calendar_data = """service_id,monday,tuesday,wednesday,thursday,friday,saturday,sunday,start_date,end_date
-service1,1,1,1,1,1,0,0,20240101,20241231
-"""
+        calendar_data = """service_id,monday,tuesday,wednesday,thursday,friday,saturday,sunday,start_date,end_date\nservice1,1,1,1,1,1,0,0,20240101,20241231\n"""
         zf.writestr("calendar.txt", calendar_data)
         
         # shapes.txt
-        shapes_data = """shape_id,shape_pt_lat,shape_pt_lon,shape_pt_sequence
-shape1,40.7128,-74.0060,1
-shape1,40.7300,-74.0000,2
-shape1,40.7589,-73.9851,3
-"""
+        shapes_data = """shape_id,shape_pt_lat,shape_pt_lon,shape_pt_sequence\nshape1,40.7128,-74.0060,1\nshape1,40.7300,-74.0000,2\nshape1,40.7589,-73.9851,3\n"""
         zf.writestr("shapes.txt", shapes_data)
     
     yield temp_file.name
@@ -1055,20 +1136,14 @@ def gtfs_zip_invalid_coords():
     
     with zipfile.ZipFile(temp_file.name, 'w') as zf:
         # stops.txt with some invalid coordinates
-        stops_data = """stop_id,stop_name,stop_lat,stop_lon
-stop1,Stop 1,40.7128,-74.0060
-stop2,Stop 2,invalid,invalid
-stop3,Stop 3,,
-"""
+        stops_data = """stop_id,stop_name,stop_lat,stop_lon\nstop1,Stop 1,40.7128,-74.0060\nstop2,Stop 2,invalid,invalid\nstop3,Stop 3,,\n"""
         zf.writestr("stops.txt", stops_data)
         
         # Minimal other files
         agency_data = "agency_id,agency_name,agency_url,agency_timezone\n1,Test Agency,http://test.com,America/New_York\n"
         zf.writestr("agency.txt", agency_data)
         
-        calendar_data = """service_id,monday,tuesday,wednesday,thursday,friday,saturday,sunday,start_date,end_date
-service1,1,1,1,1,1,0,0,20240101,20241231
-"""
+        calendar_data = """service_id,monday,tuesday,wednesday,thursday,friday,saturday,sunday,start_date,end_date\nservice1,1,1,1,1,1,0,0,20240101,20241231\n"""
         zf.writestr("calendar.txt", calendar_data)
     
     yield temp_file.name
@@ -1153,3 +1228,8 @@ def sample_gtfs_dict_with_exceptions(sample_gtfs_dict):
     
     gtfs_dict["calendar_dates"] = calendar_dates_df
     return gtfs_dict
+
+@pytest.fixture
+def not_a_pyg_object() -> str:
+    """Fixture for an object that is not a PyG Data or HeteroData object."""
+    return "not_a_pyg_object"

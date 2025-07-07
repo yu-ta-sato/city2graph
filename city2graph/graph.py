@@ -103,7 +103,6 @@ except ImportError:  # pragma: no cover - makes life easier for docs build.
 
     # Create stubs for documentation and fallback functionality
     if TYPE_CHECKING:
-        import torch
         from torch_geometric.data import Data
         from torch_geometric.data import HeteroData
     else:
@@ -253,9 +252,6 @@ def gdf_to_pyg(
     # Validate input GeoDataFrames and get type information
     nodes, edges, is_hetero = validate_gdf(nodes_gdf=nodes, edges_gdf=edges)
 
-    # Validate feature column specifications
-    _validate_feature_columns(node_feature_cols, node_label_cols, edge_feature_cols, is_hetero)
-
     device = _get_device(device)
 
     if is_hetero:
@@ -302,13 +298,13 @@ def gdf_to_pyg(
             node_label_cols_homo: list[str] | None = node_label_cols
         else:
             msg = "node_label_cols must be a list for homogeneous graphs"
-            raise ValueError(msg)
+            raise TypeError(msg)
 
         if isinstance(edge_feature_cols, list) or edge_feature_cols is None:
             edge_feature_cols_homo: list[str] | None = edge_feature_cols
         else:
             msg = "edge_feature_cols must be a list for homogeneous graphs"
-            raise ValueError(msg)
+            raise TypeError(msg)
 
         # Create a homogeneous Data object
         data = _build_homogeneous_graph(
@@ -1446,55 +1442,6 @@ def _validate_homo_structure(data: Data, metadata: GraphMetadata) -> None:
             raise ValueError(msg)
 
 
-def _validate_feature_columns(
-    feature_cols: dict[str, list[str]] | list[str] | None,
-    label_cols: dict[str, list[str]] | list[str] | None,
-    edge_cols: dict[str, list[str]] | list[str] | None,
-    is_hetero: bool,
-) -> None:
-    """
-    Validate feature column specifications for homo/heterogeneous graphs.
-
-    Parameters
-    ----------
-    feature_cols : dict[str, list[str]] or list[str], optional
-        Node feature column specifications
-    label_cols : dict[str, list[str]] or list[str], optional
-        Node label column specifications
-    edge_cols : dict[str, list[str]] or list[str], optional
-        Edge feature column specifications
-    is_hetero : bool
-        Whether this is a heterogeneous graph
-
-    Raises
-    ------
-    ValueError
-        If column specifications are inconsistent with graph type
-    """
-    if is_hetero:
-        # For heterogeneous graphs, columns must be dicts or None
-        if feature_cols is not None and not isinstance(feature_cols, dict):
-            msg = "node_feature_cols must be a dict for heterogeneous graphs"
-            raise ValueError(msg)
-        if label_cols is not None and not isinstance(label_cols, dict):
-            msg = "node_label_cols must be a dict for heterogeneous graphs"
-            raise ValueError(msg)
-        if edge_cols is not None and not isinstance(edge_cols, dict):
-            msg = "edge_feature_cols must be a dict for heterogeneous graphs"
-            raise ValueError(msg)
-    else:
-        # For homogeneous graphs, columns must be lists or None
-        if feature_cols is not None and not isinstance(feature_cols, list):
-            msg = "node_feature_cols must be a list for homogeneous graphs"
-            raise ValueError(msg)
-        if label_cols is not None and not isinstance(label_cols, list):
-            msg = "node_label_cols must be a list for homogeneous graphs"
-            raise ValueError(msg)
-        if edge_cols is not None and not isinstance(edge_cols, list):
-            msg = "edge_feature_cols must be a list for homogeneous graphs"
-            raise ValueError(msg)
-
-
 # ============================================================================
 # GRAPH RECONSTRUCTION FUNCTIONS
 # ============================================================================
@@ -1544,6 +1491,8 @@ def _extract_index_values(
 
 def _create_geometry_from_positions(node_data: Data | HeteroData) -> gpd.array.GeometryArray | None:
     """Create geometry from node positions."""
+    if not hasattr(node_data, "pos") or node_data.pos is None:
+        return None
     pos_array: np.ndarray[tuple[int, ...], np.dtype[np.float32]] = node_data.pos.detach().cpu().numpy()
     return gpd.points_from_xy(pos_array[:, 0], pos_array[:, 1])
 
@@ -1600,7 +1549,12 @@ def _set_gdf_index_and_crs(
 
     # Set CRS
     if metadata.crs:
-        gdf.crs = metadata.crs
+        # Check if the geometry column is truly empty or all null
+        if gdf.empty or (gdf.geometry is not None and gdf.geometry.isna().all()):
+            gdf.crs = metadata.crs
+        else:
+            # Use set_crs for non-empty geometries
+            gdf.set_crs(metadata.crs, allow_override=True, inplace=True)
 
 
 def _reconstruct_node_gdf(
@@ -1615,12 +1569,19 @@ def _reconstruct_node_gdf(
     features_labels = _extract_node_features_and_labels(node_data, node_type, metadata)
     gdf_data.update(features_labels)
 
-    # Create geometry and index
+    # Create geometry
     geometry = _create_geometry_from_positions(node_data)
     index_values = _extract_index_values(mapping_info, num_nodes) if mapping_info else None
 
-    # Create GeoDataFrame
-    gdf = gpd.GeoDataFrame(gdf_data, geometry=geometry, index=index_values)
+    # Create GeoDataFrame with geometry
+    if geometry is not None:
+        gdf = gpd.GeoDataFrame(gdf_data, geometry=geometry, index=index_values)
+    else:
+        # If no geometry, create an empty GeoSeries for the geometry column
+        # and explicitly set its CRS if metadata.crs is available.
+        empty_geom = gpd.GeoSeries([], crs=metadata.crs if metadata.crs else None)
+        gdf = gpd.GeoDataFrame(gdf_data, geometry=empty_geom, index=index_values)
+
     _set_gdf_index_and_crs(gdf, node_type, metadata)
 
     return gdf
@@ -1750,15 +1711,26 @@ def _reconstruct_edge_gdf(
     # Reconstruct index from stored values
     index_values = _reconstruct_edge_index(edge_type, is_hetero, edge_data_dict, metadata)
 
-    # Create GeoDataFrame
-    gdf = gpd.GeoDataFrame(edge_data_dict, geometry=geometry, index=index_values)
+    # Create GeoDataFrame with geometry
+    if geometry is not None:
+        gdf = gpd.GeoDataFrame(edge_data_dict, geometry=geometry, index=index_values)
+    else:
+        # If no geometry, create an empty GeoSeries for the geometry column
+        # and explicitly set its CRS if metadata.crs is available.
+        empty_geom = gpd.GeoSeries([], crs=metadata.crs if metadata.crs else None)
+        gdf = gpd.GeoDataFrame(edge_data_dict, geometry=empty_geom, index=index_values)
 
     # Set index names if available
     _set_edge_index_names(gdf, edge_type, is_hetero, metadata)
 
     # Set CRS
     if metadata.crs:
-        gdf.crs = metadata.crs
+        # Check if the geometry column is truly empty or all null
+        if gdf.empty or (gdf.geometry is not None and gdf.geometry.isna().all()):
+            gdf.crs = metadata.crs
+        else:
+            # Use set_crs for non-empty geometries
+            gdf.set_crs(metadata.crs, allow_override=True, inplace=True)
 
     return gdf
 
@@ -1816,9 +1788,10 @@ def _add_homo_edges_to_graph(graph: nx.Graph, data: Data) -> None:
     # Prepare attributes using pandas for efficiency
     if hasattr(data, "edge_attr") and data.edge_attr is not None:
         edge_attrs_np = data.edge_attr.detach().cpu().numpy()
-        attrs_df = pd.DataFrame(edge_attrs_np, columns=edge_feature_cols or None)
-        if not edge_feature_cols:
-            attrs_df = attrs_df.add_prefix("edge_feat_")
+        if edge_feature_cols:
+            attrs_df = pd.DataFrame(edge_attrs_np, columns=edge_feature_cols)
+        else:
+            attrs_df = pd.DataFrame(edge_attrs_np, columns=[f"edge_feat_{j}" for j in range(edge_attrs_np.shape[1])])
     else:
         attrs_df = pd.DataFrame(index=range(num_edges))
 
@@ -1908,15 +1881,13 @@ def _add_hetero_edges_to_graph(graph: nx.Graph, data: HeteroData, node_offset: d
             continue
 
         # Prepare attributes using pandas for efficiency
-        edge_feature_cols = metadata.edge_feature_cols.get(rel_type)
         if hasattr(edge_store, "edge_attr") and edge_store.edge_attr is not None:
             edge_attrs_np = edge_store.edge_attr.detach().cpu().numpy()
-            attrs_df = pd.DataFrame(
-                edge_attrs_np,
-                columns=edge_feature_cols if edge_feature_cols else None,
-            )
-            if not edge_feature_cols:
-                attrs_df = attrs_df.add_prefix("edge_feat_")
+            edge_feature_cols_for_df = metadata.edge_feature_cols.get(rel_type)
+            if edge_feature_cols_for_df:
+                attrs_df = pd.DataFrame(edge_attrs_np, columns=edge_feature_cols_for_df)
+            else:
+                attrs_df = pd.DataFrame(edge_attrs_np, columns=[f"edge_feat_{j}" for j in range(edge_attrs_np.shape[1])])
         else:
             attrs_df = pd.DataFrame(index=range(num_edges))
 
