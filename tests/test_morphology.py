@@ -21,8 +21,8 @@ class TestMorphologicalGraph:
     """Test suite for morphological_graph function."""
 
     def test_basic_morphological_graph(
-        self, sample_buildings_gdf, sample_segments_gdf,
-    ):
+        self, sample_buildings_gdf: gpd.GeoDataFrame, sample_segments_gdf: gpd.GeoDataFrame,
+    ) -> None:
         """Test basic morphological graph creation."""
         nodes, edges = morphological_graph(sample_buildings_gdf, sample_segments_gdf)
 
@@ -35,8 +35,8 @@ class TestMorphologicalGraph:
         assert ("private", "faced_to", "public") in edges
 
     def test_morphological_graph_as_nx(
-        self, sample_buildings_gdf, sample_segments_gdf,
-    ):
+        self, sample_buildings_gdf: gpd.GeoDataFrame, sample_segments_gdf: gpd.GeoDataFrame,
+    ) -> None:
         """Test morphological graph creation as NetworkX graph."""
         graph = morphological_graph(
             sample_buildings_gdf, sample_segments_gdf, as_nx=True,
@@ -47,8 +47,8 @@ class TestMorphologicalGraph:
 
     @pytest.mark.parametrize("contiguity", ["queen", "rook"])
     def test_morphological_graph_contiguity(
-        self, sample_buildings_gdf, sample_segments_gdf, contiguity,
-    ):
+        self, sample_buildings_gdf: gpd.GeoDataFrame, sample_segments_gdf: gpd.GeoDataFrame, contiguity: str,
+    ) -> None:
         """Test morphological graph with different contiguity types."""
         nodes, edges = morphological_graph(
             sample_buildings_gdf, sample_segments_gdf, contiguity=contiguity,
@@ -58,8 +58,8 @@ class TestMorphologicalGraph:
         assert isinstance(edges[("private", "touched_to", "private")], gpd.GeoDataFrame)
 
     def test_morphological_graph_with_distance_filtering(
-        self, sample_buildings_gdf, sample_segments_gdf, custom_center_point,
-    ):
+        self, sample_buildings_gdf: gpd.GeoDataFrame, sample_segments_gdf: gpd.GeoDataFrame, custom_center_point: Point,
+    ) -> None:
         """Test morphological graph with distance filtering."""
         nodes, edges = morphological_graph(
             sample_buildings_gdf,
@@ -73,8 +73,12 @@ class TestMorphologicalGraph:
 
     @pytest.mark.parametrize("clipping_buffer", [0, 100, 500, math.inf])
     def test_morphological_graph_clipping_buffer(
-        self, sample_buildings_gdf, sample_segments_gdf, custom_center_point, clipping_buffer,
-    ):
+        self,
+        sample_buildings_gdf: gpd.GeoDataFrame,
+        sample_segments_gdf: gpd.GeoDataFrame,
+        custom_center_point: Point,
+        clipping_buffer: float,
+    ) -> None:
         """Test morphological graph with various clipping buffer values."""
         nodes, edges = morphological_graph(
             sample_buildings_gdf,
@@ -88,8 +92,8 @@ class TestMorphologicalGraph:
         assert isinstance(edges, dict)
 
     def test_morphological_graph_with_barrier_column(
-        self, sample_buildings_gdf, segments_gdf_alt_geom,
-    ):
+        self, sample_buildings_gdf: gpd.GeoDataFrame, segments_gdf_alt_geom: gpd.GeoDataFrame,
+    ) -> None:
         """Test morphological graph with alternative barrier geometry column."""
         nodes, edges = morphological_graph(
             sample_buildings_gdf,
@@ -101,8 +105,8 @@ class TestMorphologicalGraph:
         assert "public" in nodes
 
     def test_morphological_graph_with_custom_barrier(
-        self, sample_buildings_gdf, segments_gdf_with_custom_barrier,
-    ):
+        self, sample_buildings_gdf: gpd.GeoDataFrame, segments_gdf_with_custom_barrier: gpd.GeoDataFrame,
+    ) -> None:
         """Test morphological graph with custom barrier column."""
         nodes, edges = morphological_graph(
             sample_buildings_gdf,
@@ -896,7 +900,7 @@ class TestComprehensiveCoverage:
         # Should have connectivity
         assert isinstance(edges, gpd.GeoDataFrame)
 
-    def test_morphological_graph_index_handling(self, sample_buildings_gdf, sample_segments_gdf):
+    def test_morphological_graph_index_handling(self, sample_buildings_gdf: gpd.GeoDataFrame, sample_segments_gdf: gpd.GeoDataFrame):
         """Test morphological graph index handling to cover _set_node_index and _set_edge_index."""
         # Test with custom indices
         buildings_custom_idx = sample_buildings_gdf.copy()
@@ -908,15 +912,21 @@ class TestComprehensiveCoverage:
         nodes, edges = morphological_graph(buildings_custom_idx, segments_custom_idx)
 
         # Check that indices are properly set
-        assert "private_id" in nodes["private"].index.names or nodes["private"].index.name == "private_id"
-        assert "public_id" in nodes["public"].index.names or nodes["public"].index.name == "public_id"
+        assert (
+            (hasattr(nodes["private"].index, "names") and "private_id" in nodes["private"].index.names)
+            or nodes["private"].index.name == "private_id"
+        )
+        assert (
+            (hasattr(nodes["public"].index, "names") and "public_id" in nodes["public"].index.names)
+            or nodes["public"].index.name == "public_id"
+        )
 
         # Check edge indices
-        for edge_type, edge_gdf in edges.items():
+        for edge_gdf in edges.values():
             if not edge_gdf.empty:
                 assert isinstance(edge_gdf.index, (pd.Index, pd.MultiIndex))
 
-    def test_morphological_graph_barrier_geometry_coverage(self, sample_buildings_gdf, sample_segments_gdf):
+    def test_morphological_graph_barrier_geometry_coverage(self, sample_buildings_gdf: gpd.GeoDataFrame, sample_segments_gdf: gpd.GeoDataFrame) -> None:
         """Test barrier geometry handling to cover _prepare_barriers."""
         # Test with non-existent barrier column
         nodes, edges = morphological_graph(
@@ -936,7 +946,11 @@ class TestComprehensiveCoverage:
         assert isinstance(nodes, dict)
         assert isinstance(edges, dict)
 
-    def test_morphological_graph_building_info_coverage(self, sample_buildings_gdf, sample_segments_gdf):
+    def test_morphological_graph_building_info_coverage(
+        self,
+        sample_buildings_gdf: gpd.GeoDataFrame,
+        sample_segments_gdf: gpd.GeoDataFrame,
+    ) -> None:
         """Test building info addition to cover _add_building_info."""
         # Test with keep_buildings=True
         nodes, edges = morphological_graph(
@@ -959,7 +973,12 @@ class TestComprehensiveCoverage:
         )
         assert nodes["private"].empty
 
-    def test_morphological_graph_tessellation_filtering_coverage(self, sample_buildings_gdf, sample_segments_gdf, custom_center_point):
+    def test_morphological_graph_tessellation_filtering_coverage(
+        self,
+        sample_buildings_gdf: gpd.GeoDataFrame,
+        sample_segments_gdf: gpd.GeoDataFrame,
+        custom_center_point: Point,
+    ) -> None:
         """Test tessellation filtering to cover _filter_adjacent_tessellation."""
         # Test with various distance values to trigger filtering
         for distance in [100, 1000, 10000]:
@@ -983,7 +1002,7 @@ class TestComprehensiveCoverage:
         assert isinstance(nodes, dict)
         assert isinstance(edges, dict)
 
-    def test_all_functions_with_multiindex_handling(self, sample_crs):
+    def test_all_functions_with_multiindex_handling(self, sample_crs: str) -> None:
         """Test functions with MultiIndex scenarios to cover edge cases."""
         # Create data with MultiIndex
         segments_with_multiindex = gpd.GeoDataFrame({
@@ -1005,7 +1024,11 @@ class TestComprehensiveCoverage:
             # Expected for some MultiIndex scenarios
             pass
 
-    def test_comprehensive_error_scenarios(self, sample_buildings_gdf, sample_segments_gdf):
+    def test_comprehensive_error_scenarios(
+        self,
+        sample_buildings_gdf: gpd.GeoDataFrame,
+        sample_segments_gdf: gpd.GeoDataFrame,
+    ) -> None:
         """Test comprehensive error scenarios to cover validation functions."""
         # These tests will trigger the validation helper functions through public API
 
@@ -1024,7 +1047,11 @@ class TestComprehensiveCoverage:
         with pytest.raises(ValueError, match="segments_gdf must contain only LineString"):
             morphological_graph(sample_buildings_gdf, invalid_segments)
 
-    def test_crs_consistency_coverage(self, sample_buildings_gdf, sample_segments_gdf):
+    def test_crs_consistency_coverage(
+        self,
+        sample_buildings_gdf: gpd.GeoDataFrame,
+        sample_segments_gdf: gpd.GeoDataFrame,
+    ) -> None:
         """Test CRS consistency handling to cover _ensure_crs_consistency."""
         # Create segments with different CRS
         segments_diff_crs = sample_segments_gdf.copy()
@@ -1046,7 +1073,11 @@ class TestComprehensiveCoverage:
 class TestEdgeCasesAndErrorHandling:
     """Test suite for edge cases and error handling."""
 
-    def test_morphological_graph_with_point_center(self, sample_buildings_gdf, sample_segments_gdf):
+    def test_morphological_graph_with_point_center(
+        self,
+        sample_buildings_gdf: gpd.GeoDataFrame,
+        sample_segments_gdf: gpd.GeoDataFrame,
+    ) -> None:
         """Test morphological graph with Point center instead of GeoSeries."""
         center_point = Point(0, 0)
         center_geoseries = gpd.GeoSeries([center_point], crs=sample_buildings_gdf.crs)
@@ -1061,7 +1092,12 @@ class TestEdgeCasesAndErrorHandling:
         assert isinstance(nodes, dict)
         assert isinstance(edges, dict)
 
-    def test_morphological_graph_zero_distance(self, sample_buildings_gdf, sample_segments_gdf, custom_center_point):
+    def test_morphological_graph_zero_distance(
+        self,
+        sample_buildings_gdf: gpd.GeoDataFrame,
+        sample_segments_gdf: gpd.GeoDataFrame,
+        custom_center_point: Point,
+    ) -> None:
         """Test morphological graph with zero distance."""
         nodes, edges = morphological_graph(
             sample_buildings_gdf,
@@ -1074,7 +1110,12 @@ class TestEdgeCasesAndErrorHandling:
         assert isinstance(nodes, dict)
         assert isinstance(edges, dict)
 
-    def test_morphological_graph_very_large_distance(self, sample_buildings_gdf, sample_segments_gdf, custom_center_point):
+    def test_morphological_graph_very_large_distance(
+        self,
+        sample_buildings_gdf: gpd.GeoDataFrame,
+        sample_segments_gdf: gpd.GeoDataFrame,
+        custom_center_point: Point,
+    ) -> None:
         """Test morphological graph with very large distance."""
         nodes, edges = morphological_graph(
             sample_buildings_gdf,
@@ -1086,14 +1127,18 @@ class TestEdgeCasesAndErrorHandling:
         assert isinstance(nodes, dict)
         assert isinstance(edges, dict)
 
-    def test_private_to_private_no_adjacencies(self, p2p_isolated_polys_gdf):
+    def test_private_to_private_no_adjacencies(self, p2p_isolated_polys_gdf: gpd.GeoDataFrame) -> None:
         """Test private_to_private_graph with no adjacencies."""
         nodes, edges = private_to_private_graph(p2p_isolated_polys_gdf)
 
         assert len(nodes) == 3
         assert edges.empty
 
-    def test_private_to_public_very_small_tolerance(self, sample_tessellation_gdf, sample_segments_gdf):
+    def test_private_to_public_very_small_tolerance(
+        self,
+        sample_tessellation_gdf: gpd.GeoDataFrame,
+        sample_segments_gdf: gpd.GeoDataFrame,
+    ) -> None:
         """Test private_to_public_graph with very small tolerance."""
         nodes, edges = private_to_public_graph(
             sample_tessellation_gdf,
@@ -1104,7 +1149,11 @@ class TestEdgeCasesAndErrorHandling:
         assert isinstance(nodes, gpd.GeoDataFrame)
         assert isinstance(edges, gpd.GeoDataFrame)
 
-    def test_private_to_public_very_large_tolerance(self, sample_tessellation_gdf, sample_segments_gdf):
+    def test_private_to_public_very_large_tolerance(
+        self,
+        sample_tessellation_gdf: gpd.GeoDataFrame,
+        sample_segments_gdf: gpd.GeoDataFrame,
+    ) -> None:
         """Test private-to-public with a very large tolerance."""
         nodes, edges = private_to_public_graph(
             sample_tessellation_gdf, sample_segments_gdf, tolerance=1000,
@@ -1113,7 +1162,11 @@ class TestEdgeCasesAndErrorHandling:
         assert isinstance(edges, gpd.GeoDataFrame)
         assert not edges.empty
 
-    def test_morphological_graph_missing_enclosure_index(self, sample_buildings_gdf, sample_segments_gdf):
+    def test_morphological_graph_missing_enclosure_index(
+        self,
+        sample_buildings_gdf: gpd.GeoDataFrame,
+        sample_segments_gdf: gpd.GeoDataFrame,
+    ) -> None:
         """Test morphological graph when tessellation is missing enclosure_index."""
         # This test simulates a scenario where tessellation somehow doesn't get the enclosure_index
         # The function should handle this gracefully.
@@ -1122,13 +1175,21 @@ class TestEdgeCasesAndErrorHandling:
         assert isinstance(edges, dict)
 
     @pytest.mark.parametrize("contiguity", ["queen", "rook"])
-    def test_private_to_private_different_contiguity_types(self, sample_tessellation_gdf, contiguity):
+    def test_private_to_private_different_contiguity_types(
+        self,
+        sample_tessellation_gdf: gpd.GeoDataFrame,
+        contiguity: str,
+    ) -> None:
         """Test private-to-private with both contiguity types."""
         nodes, edges = private_to_private_graph(sample_tessellation_gdf, contiguity=contiguity)
         assert isinstance(nodes, gpd.GeoDataFrame)
         assert isinstance(edges, gpd.GeoDataFrame)
 
-    def test_morphological_graph_center_point_as_geodataframe(self, sample_buildings_gdf, sample_segments_gdf):
+    def test_morphological_graph_center_point_as_geodataframe(
+        self,
+        sample_buildings_gdf: gpd.GeoDataFrame,
+        sample_segments_gdf: gpd.GeoDataFrame,
+    ) -> None:
         """Test morphological graph with center_point as GeoDataFrame."""
         center_point = gpd.GeoSeries([Point(0, 0)], crs=sample_buildings_gdf.crs)
 
@@ -1141,7 +1202,12 @@ class TestEdgeCasesAndErrorHandling:
         assert isinstance(nodes, dict)
         assert isinstance(edges, dict)
 
-    def test_all_functions_return_correct_types(self, sample_buildings_gdf, sample_segments_gdf, sample_tessellation_gdf):
+    def test_all_functions_return_correct_types(
+        self,
+        sample_buildings_gdf: gpd.GeoDataFrame,
+        sample_segments_gdf: gpd.GeoDataFrame,
+        sample_tessellation_gdf: gpd.GeoDataFrame,
+    ) -> None:
         """Test that all public functions return the correct types."""
         # morphological_graph
         nodes, edges = morphological_graph(sample_buildings_gdf, sample_segments_gdf)
@@ -1167,7 +1233,11 @@ class TestEdgeCasesAndErrorHandling:
 class TestParameterValidation:
     """Test suite for parameter validation."""
 
-    def test_morphological_graph_invalid_contiguity_values(self, sample_buildings_gdf, sample_segments_gdf):
+    def test_morphological_graph_invalid_contiguity_values(
+        self,
+        sample_buildings_gdf: gpd.GeoDataFrame,
+        sample_segments_gdf: gpd.GeoDataFrame,
+    ) -> None:
         """Test morphological_graph with various invalid contiguity values."""
         invalid_values = ["invalid", "QUEEN", "ROOK", "", None, 123]
 
@@ -1175,7 +1245,12 @@ class TestParameterValidation:
             with pytest.raises(ValueError, match="contiguity must be 'queen' or 'rook'"):
                 morphological_graph(sample_buildings_gdf, sample_segments_gdf, contiguity=invalid_value)
 
-    def test_morphological_graph_negative_distance(self, sample_buildings_gdf, sample_segments_gdf, custom_center_point):
+    def test_morphological_graph_negative_distance(
+        self,
+        sample_buildings_gdf: gpd.GeoDataFrame,
+        sample_segments_gdf: gpd.GeoDataFrame,
+        custom_center_point: Point,
+    ) -> None:
         """Test morphological_graph with negative distance."""
         # Negative distance should be handled gracefully or raise appropriate error
         try:
@@ -1192,7 +1267,11 @@ class TestParameterValidation:
             # It's also acceptable to raise a ValueError for negative distance
             pass
 
-    def test_morphological_graph_distance_without_center(self, sample_buildings_gdf, sample_segments_gdf):
+    def test_morphological_graph_distance_without_center(
+        self,
+        sample_buildings_gdf: gpd.GeoDataFrame,
+        sample_segments_gdf: gpd.GeoDataFrame,
+    ) -> None:
         """Test morphological_graph with distance but no center_point."""
         # Should work normally, distance should be ignored
         nodes, edges = morphological_graph(
@@ -1204,7 +1283,12 @@ class TestParameterValidation:
         assert isinstance(nodes, dict)
         assert isinstance(edges, dict)
 
-    def test_morphological_graph_center_without_distance(self, sample_buildings_gdf, sample_segments_gdf, custom_center_point):
+    def test_morphological_graph_center_without_distance(
+        self,
+        sample_buildings_gdf: gpd.GeoDataFrame,
+        sample_segments_gdf: gpd.GeoDataFrame,
+        custom_center_point: Point,
+    ) -> None:
         """Test morphological_graph with center_point but no distance."""
         # Should work normally, center_point should be ignored
         nodes, edges = morphological_graph(
@@ -1218,8 +1302,11 @@ class TestParameterValidation:
 
     @pytest.mark.parametrize("clipping_buffer", [-1, -100, -0.1])
     def test_morphological_graph_negative_clipping_buffer_values(
-        self, sample_buildings_gdf, sample_segments_gdf, clipping_buffer,
-    ):
+        self,
+        sample_buildings_gdf: gpd.GeoDataFrame,
+        sample_segments_gdf: gpd.GeoDataFrame,
+        clipping_buffer: float,
+    ) -> None:
         """Test morphological_graph with various negative clipping buffer values."""
         with pytest.raises(ValueError, match="clipping_buffer cannot be negative"):
             morphological_graph(
@@ -1228,7 +1315,10 @@ class TestParameterValidation:
                 clipping_buffer=clipping_buffer,
             )
 
-    def test_private_to_private_invalid_contiguity_values(self, sample_tessellation_gdf):
+    def test_private_to_private_invalid_contiguity_values(
+        self,
+        sample_tessellation_gdf: gpd.GeoDataFrame,
+    ) -> None:
         """Test private_to_private_graph with various invalid contiguity values."""
         invalid_values = ["invalid", "QUEEN", "ROOK", "", None, 123]
 

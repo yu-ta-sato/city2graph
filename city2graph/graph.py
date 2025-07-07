@@ -736,7 +736,7 @@ def _create_node_features(
         Float tensor of shape (num_nodes, num_features) containing node features
     """
     device = _get_device(device)
-    dtype = dtype or torch.float
+    dtype = dtype or torch.float32
 
     if feature_cols is None:
         # Return empty tensor when no feature columns specified
@@ -745,10 +745,9 @@ def _create_node_features(
     # Find valid columns that exist in the GeoDataFrame
     valid_cols = list(set(feature_cols) & set(node_gdf.columns))
     if valid_cols:
-        # Convert to numpy array with consistent float32 type
-        features_array: np.ndarray[tuple[int, ...], np.dtype[np.float32]] = (
-            node_gdf[valid_cols].to_numpy().astype(np.float32)
-        )
+        # Map torch dtype to numpy dtype for consistency
+        numpy_dtype = torch.tensor(0, dtype=dtype).numpy().dtype
+        features_array = node_gdf[valid_cols].to_numpy().astype(numpy_dtype)
         return torch.from_numpy(features_array).to(device=device, dtype=dtype)
 
     # Return empty tensor if no valid columns found
@@ -756,7 +755,9 @@ def _create_node_features(
 
 
 def _create_node_positions(
-    node_gdf: gpd.GeoDataFrame, device: str | torch.device | None = None,
+    node_gdf: gpd.GeoDataFrame,
+    device: str | torch.device | None = None,
+    dtype: torch.dtype | None = None,
 ) -> torch.Tensor | None:
     """Extract spatial coordinates from node geometries.
 
@@ -770,6 +771,8 @@ def _create_node_positions(
         GeoDataFrame with geometry column containing spatial data
     device : str or torch.device, optional
         Target device for tensor creation
+    dtype : torch.dtype, optional
+        Data type for position tensors. If None, uses torch.float32.
 
     Returns
     -------
@@ -784,18 +787,22 @@ def _create_node_positions(
     """
     # Get the device for tensor creation
     device = _get_device(device)
+    dtype = dtype or torch.float32
 
     # Get the geometry column
     geom_series = node_gdf.geometry
 
     # Get centroids of geometries
     centroids = geom_series.centroid
-    pos_data: np.ndarray[tuple[int, ...], np.dtype[np.float64]] = np.column_stack([
+    
+    # Map torch dtype to numpy dtype for consistency
+    numpy_dtype = torch.tensor(0, dtype=dtype).numpy().dtype
+    pos_data = np.column_stack([
         centroids.x.to_numpy(),
         centroids.y.to_numpy(),
-    ])
+    ]).astype(numpy_dtype)
 
-    return torch.tensor(pos_data, dtype=torch.float, device=device)
+    return torch.tensor(pos_data, dtype=dtype, device=device)
 
 
 # ============================================================================
@@ -828,7 +835,7 @@ def _create_edge_features(
         Float tensor of shape (num_edges, num_features) containing edge features
     """
     device = _get_device(device)
-    dtype = dtype or torch.float
+    dtype = dtype or torch.float32
 
     # If no feature columns specified, return empty tensor
     if feature_cols is None:
@@ -842,10 +849,9 @@ def _create_edge_features(
     # Select only numeric columns from valid_cols to prevent conversion errors
     numeric_cols = edge_gdf[valid_cols].select_dtypes(include=np.number).columns.tolist()
 
-    # Convert to numpy array with consistent float32 type
-    features_array: np.ndarray[tuple[int, ...], np.dtype[np.float32]] = (
-        edge_gdf[numeric_cols].to_numpy().astype(np.float32)
-    )
+    # Map torch dtype to numpy dtype for consistency
+    numpy_dtype = torch.tensor(0, dtype=dtype).numpy().dtype
+    features_array = edge_gdf[numeric_cols].to_numpy().astype(numpy_dtype)
     return torch.from_numpy(features_array).to(device=device, dtype=dtype)
 
 
@@ -1016,7 +1022,7 @@ def _build_homogeneous_graph(
     id_mapping, id_col_name, original_ids = _create_node_id_mapping(nodes_gdf)
 
     x = _create_node_features(nodes_gdf, node_feature_cols, device, dtype)
-    pos = _create_node_positions(nodes_gdf, device)
+    pos = _create_node_positions(nodes_gdf, device, dtype)
 
     # Handle labels
     y = None
@@ -1025,7 +1031,7 @@ def _build_homogeneous_graph(
 
     # Edge processing
     edge_index = torch.zeros((2, 0), dtype=torch.long, device=device)
-    edge_attr = torch.empty((0, 0), dtype=dtype or torch.float, device=device)
+    edge_attr = torch.empty((0, 0), dtype=dtype or torch.float32, device=device)
 
     if edges_gdf is not None and not edges_gdf.empty:
         edge_pairs = _create_edge_indices(
@@ -1138,7 +1144,7 @@ def _process_hetero_nodes(
         data[node_type].x = _create_node_features(node_gdf, feature_cols, device, dtype)
 
         # Positions
-        data[node_type].pos = _create_node_positions(node_gdf, device)
+        data[node_type].pos = _create_node_positions(node_gdf, device, dtype)
 
         # Labels
         label_cols = node_label_cols.get(node_type) if node_label_cols else None
@@ -1182,7 +1188,9 @@ def _process_hetero_edges(
 
         if edge_gdf is not None and not edge_gdf.empty:
             edge_pairs = _create_edge_indices(
-                edge_gdf, src_mapping, dst_mapping,
+                edge_gdf,
+                src_mapping,
+                dst_mapping,
             )
             edge_index = (torch.tensor(np.array(edge_pairs).T, dtype=torch.long, device=device)
                          if edge_pairs else torch.zeros((2, 0), dtype=torch.long, device=device))
@@ -1192,7 +1200,7 @@ def _process_hetero_edges(
             data[edge_type].edge_attr = _create_edge_features(edge_gdf, feature_cols, device, dtype)
         else:
             data[edge_type].edge_index = torch.zeros((2, 0), dtype=torch.long, device=device)
-            data[edge_type].edge_attr = torch.empty((0, 0), dtype=dtype or torch.float, device=device)
+            data[edge_type].edge_attr = torch.empty((0, 0), dtype=dtype or torch.float32, device=device)
 
 
 def _store_hetero_metadata(
@@ -1453,10 +1461,10 @@ def _extract_tensor_data(
     if tensor is None or tensor.numel() == 0:
         return {}
 
-    features_array: np.ndarray[tuple[int, ...], np.dtype[np.float32]] = tensor.detach().cpu().numpy()
-
     if column_names is None:
         return {}
+
+    features_array = tensor.detach().cpu().numpy()
 
     num_cols = min(len(column_names), features_array.shape[1])
     return {column_names[i]: features_array[:, i] for i in range(num_cols)}
@@ -1548,13 +1556,14 @@ def _set_gdf_index_and_crs(
                 gdf.index.name = index_names[0]
 
     # Set CRS
-    if metadata.crs:
+    if metadata.crs and hasattr(gdf, "geometry") and gdf.geometry is not None:
         # Check if the geometry column is truly empty or all null
-        if gdf.empty or (gdf.geometry is not None and gdf.geometry.isna().all()):
+        if gdf.empty or gdf.geometry.isna().all():
             gdf.crs = metadata.crs
         else:
             # Use set_crs for non-empty geometries
             gdf.set_crs(metadata.crs, allow_override=True, inplace=True)
+    # If no geometry column, we can't set CRS - skip silently
 
 
 def _reconstruct_node_gdf(
@@ -1573,14 +1582,7 @@ def _reconstruct_node_gdf(
     geometry = _create_geometry_from_positions(node_data)
     index_values = _extract_index_values(mapping_info, num_nodes) if mapping_info else None
 
-    # Create GeoDataFrame with geometry
-    if geometry is not None:
-        gdf = gpd.GeoDataFrame(gdf_data, geometry=geometry, index=index_values)
-    else:
-        # If no geometry, create an empty GeoSeries for the geometry column
-        # and explicitly set its CRS if metadata.crs is available.
-        empty_geom = gpd.GeoSeries([], crs=metadata.crs if metadata.crs else None)
-        gdf = gpd.GeoDataFrame(gdf_data, geometry=empty_geom, index=index_values)
+    gdf = gpd.GeoDataFrame(gdf_data, geometry=geometry, index=index_values)
 
     _set_gdf_index_and_crs(gdf, node_type, metadata)
 
@@ -1782,8 +1784,6 @@ def _add_homo_edges_to_graph(graph: nx.Graph, data: Data) -> None:
 
     edge_index = data.edge_index.detach().cpu().numpy()
     num_edges = edge_index.shape[1]
-    if num_edges == 0:
-        return
 
     # Prepare attributes using pandas for efficiency
     if hasattr(data, "edge_attr") and data.edge_attr is not None:
@@ -1877,8 +1877,6 @@ def _add_hetero_edges_to_graph(graph: nx.Graph, data: HeteroData, node_offset: d
 
         edge_index = edge_store.edge_index.detach().cpu().numpy()
         num_edges = edge_index.shape[1]
-        if num_edges == 0:
-            continue
 
         # Prepare attributes using pandas for efficiency
         if hasattr(edge_store, "edge_attr") and edge_store.edge_attr is not None:
