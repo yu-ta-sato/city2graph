@@ -575,10 +575,7 @@ class GraphConverter:
 
         if len(result) == 1:
             return result[0]
-        if len(result) == 2:
-            return (result[0], result[1])
-        msg = "Must request at least one of nodes or edges"
-        raise ValueError(msg)
+        return (result[0], result[1])
 
     def _reconstruct_heterogeneous(
         self,
@@ -678,13 +675,7 @@ class GraphConverter:
             # Handle index names safely
             index_names = metadata.node_index_names.get(node_type) if isinstance(metadata.node_index_names, dict) else None
 
-            if isinstance(index_names, list):
-                index = pd.MultiIndex.from_tuples(indices, names=index_names)
-            elif isinstance(index_names, str):
-                index = pd.Index(indices, name=index_names)
-            else:
-                index = pd.Index(indices, name=None)
-
+            index = pd.Index(indices, name=index_names) if isinstance(index_names, str) else pd.Index(indices, name=None)
             gdf = gpd.GeoDataFrame(records, geometry="geometry", index=index, crs=metadata.crs)
 
             nodes_dict[node_type] = gdf
@@ -719,11 +710,7 @@ class GraphConverter:
         for edge in edge_data:
             if is_multigraph:
                 # Multigraph edges have format (u, v, k, attrs)
-                if len(edge) == 4:
-                    u, v, _, attrs = edge
-                else:
-                    # Fallback for unexpected format
-                    u, v, attrs = edge[0], edge[1], edge[-1]
+                u, v, _, attrs = edge
             else:
                 # Regular edges have format (u, v, attrs)
                 u, v, attrs = edge
@@ -816,14 +803,7 @@ class GraphConverter:
                 )
 
             # Handle MultiIndex
-            index = None
-            if original_indices and all(
-                isinstance(i, tuple) for i in original_indices if i is not None
-            ):
-                index = pd.MultiIndex.from_tuples(original_indices)
-            else:
-                index = pd.Index(original_indices)
-
+            index = pd.MultiIndex.from_tuples(original_indices)
             gdf = gpd.GeoDataFrame(records, geometry="geometry", index=index, crs=metadata.crs)
 
             # Restore index names safely

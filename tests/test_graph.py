@@ -450,6 +450,62 @@ class TestPygToNx:
 class TestMissingLineCoverage:
     """Test methods to cover specific missing lines."""
 
+    def test_empty_geometry_crs_direct_assignment(self, sample_nodes_gdf: gpd.GeoDataFrame) -> None:
+        """Test empty geometry CRS direct assignment - covers line 1558."""
+        # Create a scenario where we have empty or all-null geometry to trigger line 1558
+        # We'll do this through the public API by creating data with null geometries
+
+        # Create nodes with null geometries
+        nodes_with_null_geom = sample_nodes_gdf.copy()
+        nodes_with_null_geom["geometry"] = None  # All null geometries
+
+        # Convert to PyG and back to trigger the CRS assignment path
+        data = gdf_to_pyg(nodes_with_null_geom)
+
+        # This should trigger line 1558 when reconstructing the GeoDataFrame
+        nodes_restored, _ = pyg_to_gdf(data)
+
+        # Should handle null geometry and complete without error
+        assert isinstance(nodes_restored, gpd.GeoDataFrame)
+
+    def test_empty_geometry_crs_assignment(self, sample_nodes_gdf: gpd.GeoDataFrame) -> None:
+        """Test empty geometry CRS assignment - covers line 1558."""
+        # Create data and remove position to trigger empty geometry case
+        data = gdf_to_pyg(sample_nodes_gdf)
+        data.pos = None  # This will create empty geometry
+
+        # Convert back - this should trigger line 1558 where gdf.crs = metadata.crs
+        nodes_restored, _ = pyg_to_gdf(data)
+
+        # Should handle empty geometry and set CRS directly
+        assert isinstance(nodes_restored, gpd.GeoDataFrame)
+        # For empty geometry, the CRS should be set via direct assignment (line 1558)
+        # We can't check nodes_restored.crs directly because it has no geometry column
+        # But we can verify the function completed without error, which means line 1558 was executed
+
+    def test_default_feature_column_naming(self, sample_hetero_nodes_dict: dict[str, gpd.GeoDataFrame]) -> None:
+        """Test default feature column naming - covers lines 1846, 1860."""
+        # Create hetero data with features but no metadata column names
+        data = gdf_to_pyg(
+            sample_hetero_nodes_dict,
+            node_feature_cols={"building": ["b_feat1"], "road": ["length"]},
+            node_label_cols={"building": ["b_label"], "road": ["r_label"]},
+        )
+
+        # Remove feature column metadata to trigger default naming
+        data.graph_metadata.node_feature_cols = None  # This triggers line 1846
+        data.graph_metadata.node_label_cols = None    # This triggers line 1860
+
+        # Convert to NetworkX to trigger the default naming paths
+        nx_graph = pyg_to_nx(data)
+
+        # Should use default feat_ and label_ naming
+        for _node_id, node_data in nx_graph.nodes(data=True):
+            if "node_type" in node_data:
+                # Should have default feature names
+                assert any(key.startswith("feat_") for key in node_data) or \
+                       any(key.startswith("label_") for key in node_data)
+
     def test_empty_edge_features_handling(self, sample_nodes_gdf: gpd.GeoDataFrame, sample_edges_gdf: gpd.GeoDataFrame) -> None:
         """Test handling of empty edge features - covers line 847."""
         # Create edges with no valid feature columns
@@ -519,17 +575,17 @@ class TestMissingLineCoverage:
         nx_graph = pyg_to_nx(sample_pyg_data)
 
         # Test that feature columns are properly handled - covers line 1796
-        for node_id, node_data in nx_graph.nodes(data=True):
+        for _node_id, node_data in nx_graph.nodes(data=True):
             if hasattr(sample_pyg_data, "x") and sample_pyg_data.x is not None:
                 # Should have feature columns or default names
-                assert any(key.startswith("feat_") for key in node_data.keys()) or \
-                       any(key in ["feature1"] for key in node_data.keys())
+                assert any(key.startswith("feat_") for key in node_data) or \
+                       any(key in ["feature1"] for key in node_data)
 
         # Test label handling - covers lines 1846, 1860
         if hasattr(sample_pyg_data, "y") and sample_pyg_data.y is not None:
-            for node_id, node_data in nx_graph.nodes(data=True):
-                assert any(key.startswith("label_") for key in node_data.keys()) or \
-                       any(key in ["label1"] for key in node_data.keys())
+            for _node_id, node_data in nx_graph.nodes(data=True):
+                assert any(key.startswith("label_") for key in node_data) or \
+                       any(key in ["label1"] for key in node_data)
 
     def test_homo_edge_attributes_specific_lines(self, sample_nodes_gdf: gpd.GeoDataFrame, sample_edges_gdf: gpd.GeoDataFrame) -> None:
         """Test homogeneous edge attributes handling - covers lines 1888-1890."""

@@ -11,7 +11,6 @@ import geopandas as gpd
 import pytest
 from shapely.geometry import LineString
 from shapely.geometry import Point
-from sympy import Polygon
 
 spec = importlib.util.spec_from_file_location("data_module", "city2graph/data.py")
 data_module = importlib.util.module_from_spec(spec)

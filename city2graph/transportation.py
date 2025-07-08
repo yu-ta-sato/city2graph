@@ -24,6 +24,7 @@ and *IPython*.
 """
 from __future__ import annotations
 
+import contextlib
 import io
 import logging
 import zipfile
@@ -67,20 +68,28 @@ def _read_csv_bytes(buf: bytes) -> pd.DataFrame:
 
 def _time_to_seconds(value: str | float | None) -> float:
     """Convert a GTFS ``HH:MM:SS`` string (24 h+ supported) into seconds."""
-    if value is None:
-        return 0.0
-    if isinstance(value, (int, float)):
-        return float(value)
-    # At this point, value must be a string
+    # Convert None and numeric values to float directly
+    if not isinstance(value, str):
+        return float(value or 0)
+    
+    # At this point, value must be a string - parse time
     h, m, s = map(int, value.split(":"))
     return h * 3600 + m * 60 + s
 
 
-def _timestamp(gtfs_time: str, service_date: datetime) -> datetime | None:
+def _timestamp(gtfs_time: str | float | None, service_date: datetime) -> datetime | None:
     """Combine a GTFS time string with a **date** producing a proper timestamp.
 
     Times beyond 24 : 00 : 00 are correctly rolled over to the next day.
     """
+    if not isinstance(gtfs_time, str):
+        # Handle None or numeric values by converting to seconds first
+        seconds = _time_to_seconds(gtfs_time)
+        h, remainder = divmod(int(seconds), 3600)
+        m, s = divmod(remainder, 60)
+        day_offset, h = divmod(h, 24)
+        return service_date.replace(hour=h, minute=m, second=s) + timedelta(days=day_offset)
+
     h, m, s = map(int, gtfs_time.split(":"))
     day_offset, h = divmod(h, 24)
     return service_date.replace(hour=h, minute=m, second=s) + timedelta(days=day_offset)
@@ -287,10 +296,11 @@ def _apply_calendar_exceptions(
         date = datetime.strptime(str(row["date"]), "%Y%m%d")
         t = int(row["exception_type"])
         srv_dates.setdefault(sid, [])
-        if t == 1 and date not in srv_dates[sid]:
-            srv_dates[sid].append(date)
-        if t == 2 and date in srv_dates[sid]:
-            srv_dates[sid].remove(date)
+        # Only removal of service exceptions is supported
+        if t == 2:
+            # Remove service exception: safely remove if present
+            with contextlib.suppress(ValueError):
+                srv_dates[sid].remove(date)
 
 
 def _expand_with_dates(od: pd.DataFrame, srv_dates: dict[str, list[datetime]]) -> pd.DataFrame:

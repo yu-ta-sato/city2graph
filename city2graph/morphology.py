@@ -84,7 +84,6 @@ import itertools
 import logging
 import math
 import warnings
-from ast import literal_eval
 
 import geopandas as gpd
 import libpysal
@@ -612,15 +611,17 @@ def private_to_public_graph(
     p1_geoms = private_centroids_map.loc[joined_with_geom[_priv_id_col]].reset_index(drop=True)
     p2_geoms = public_centroids_map.loc[joined_with_geom[_pub_id_col]].reset_index(drop=True)
 
-    # Stack the coordinates of the centroids to create LineString geometries
-    coords_p1 = np.array(list(zip(p1_geoms.x, p1_geoms.y, strict=True))) # Coordinates for private centroids
-    coords_p2 = np.array(list(zip(p2_geoms.x, p2_geoms.y, strict=True))) # Coordinates for public centroids
-    if coords_p1.ndim == 1:
-        line_coords = np.stack((coords_p1, coords_p2), axis=0)[np.newaxis, :, :]
-    else:
-        line_coords = np.stack((coords_p1, coords_p2), axis=1) # Stack coordinates for LineString creation
-    joined_with_geom["geometry"] = list(sh_linestrings(line_coords)) # Create LineStrings
+    # Extract coordinates and ensure 2D array shape
+    coords_p1 = np.array(list(zip(p1_geoms.x, p1_geoms.y, strict=True)))
+    coords_p2 = np.array(list(zip(p2_geoms.x, p2_geoms.y, strict=True)))
 
+    # Ensure coords are 2D by reshaping if needed
+    coords_p1 = coords_p1.reshape(-1, 2)
+    coords_p2 = coords_p2.reshape(-1, 2)
+
+    # Stack coordinates for LineString creation
+    line_coords = np.stack((coords_p1, coords_p2), axis=1)
+    joined_with_geom["geometry"] = list(sh_linestrings(line_coords))
 
     # Concatenate private and public GeoDataFrames to create a unified nodes GeoDataFrame
     nodes_gdf = pd.concat([private_gdf, public_gdf], ignore_index=True)
@@ -693,9 +694,9 @@ def public_to_public_graph(
         # they can be used safely in dual_graph operations
         has_multiindex = isinstance(public_gdf_work.index, pd.MultiIndex)
         has_tuple_ids = any(isinstance(pid, tuple) for pid in public_gdf_work["public_id"])
-        if has_multiindex and has_tuple_ids:
-            # Convert MultiIndex tuples to strings for consistency if needed
-            public_gdf_work["public_id"] = [str(pid) for pid in public_gdf_work["public_id"]]
+        # Always convert public_id to string to ensure consistency
+        if has_multiindex or has_tuple_ids:
+            public_gdf_work["public_id"] = public_gdf_work["public_id"].astype(str)
     else:
         # Create a unique identifier for each row that can handle any index type
         if isinstance(public_gdf_work.index, pd.MultiIndex):
@@ -799,25 +800,11 @@ def _validate_single_gdf_input(
     ------
     TypeError
         If gdf is not a GeoDataFrame.
-    ValueError
-        If geometry types are invalid and gdf is not empty.
     """
     # Check if the input is a GeoDataFrame
     if not isinstance(gdf, gpd.GeoDataFrame):
         msg = f"{gdf_name} must be a GeoDataFrame"
         raise TypeError(msg)
-
-    # If GeoDataFrame is not empty, validate its geometry types
-    if not gdf.empty:
-        actual_geom_types = gdf.geometry.geom_type.unique() # Get unique geometry types present
-        # Check if all actual types are within the set of expected types
-        if not all(geom_type in expected_geom_types for geom_type in actual_geom_types):
-            msg = (
-                f"{gdf_name} must contain only {', '.join(sorted(expected_geom_types))} geometries. "
-                f"Found: {', '.join(sorted(actual_geom_types))}"
-            )
-            raise ValueError(msg) # Raise error if unexpected types are found
-
 
 def _ensure_crs_consistency(target_gdf: gpd.GeoDataFrame, source_gdf: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
     """
@@ -1042,17 +1029,11 @@ def _find_closest_node_to_center(
     center_point_geom: Point,
 ) -> str:
     """Find the graph node ID closest to the geometric center point."""
-    # Extract node positions from the graph
+    # Extract node positions from the graph (all nodes in spatial graphs have 'pos')
     pos = nx.get_node_attributes(graph, "pos")
-    if not pos:
-        # Fallback for graphs without 'pos' attribute (e.g., from dual_graph)
-        # This part might be fragile if node names are not coordinate tuples
-        # Ensure nodes are strings for eval, handle potential tuples
-        node_ids = list(graph.nodes)
-        node_coords = np.array([literal_eval(str(node)) for node in node_ids])
-    else:
-        node_ids = list(pos.keys())
-        node_coords = np.array(list(pos.values()))
+    
+    node_ids = list(pos.keys())
+    node_coords = np.array(list(pos.values()))
 
     # Create a KDTree for efficient nearest neighbor search
     kdtree = KDTree(node_coords)

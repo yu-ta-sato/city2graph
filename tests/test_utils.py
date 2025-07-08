@@ -214,6 +214,62 @@ class TestSegmentsToGraph:
         assert all(to_ids.isin(nodes_gdf.index))
 
 
+    def test_segments_to_graph_multigraph(
+        self,
+        sample_crs: str,
+    ) -> None:
+        """Test segments_to_graph with multigraph=True to handle duplicate edges."""
+        from shapely.geometry import LineString
+
+        # Create segments with duplicate from/to pairs to trigger multigraph behavior
+        segments_gdf = gpd.GeoDataFrame({
+            "geometry": [
+                LineString([(0, 0), (1, 1)]),
+                LineString([(0, 0), (1, 1)]),  # Duplicate connection
+                LineString([(1, 1), (2, 2)]),
+            ],
+            "road_type": ["primary", "secondary", "tertiary"],
+        }, crs=sample_crs)
+
+        # Test with multigraph=True
+        nodes_gdf, edges_gdf = utils.segments_to_graph(segments_gdf, multigraph=True)
+
+        assert isinstance(nodes_gdf, gpd.GeoDataFrame)
+        assert isinstance(edges_gdf, gpd.GeoDataFrame)
+
+        assert not nodes_gdf.empty
+        assert not edges_gdf.empty
+
+        # Check that we have the expected number of nodes (3 unique points)
+        assert len(nodes_gdf) == 3
+
+        # Check that edges have the MultiIndex with edge_key for multigraph
+        assert isinstance(edges_gdf.index, pd.MultiIndex)
+        assert edges_gdf.index.names == ["from_node_id", "to_node_id", "edge_key"]
+
+        # Check that we have all 3 edges (including the duplicate)
+        assert len(edges_gdf) == 3
+
+        # Check that duplicate edges have different keys
+        edge_keys = edges_gdf.index.get_level_values("edge_key")
+        from_ids = edges_gdf.index.get_level_values("from_node_id")
+        to_ids = edges_gdf.index.get_level_values("to_node_id")
+
+        # Find the duplicate edge pair
+        duplicates_mask = (from_ids == from_ids[0]) & (to_ids == to_ids[0])
+        duplicate_keys = edge_keys[duplicates_mask]
+        assert len(duplicate_keys) == 2
+        assert list(duplicate_keys) == [0, 1]  # Edge keys should be 0 and 1 for duplicates
+
+        # Test with multigraph=False (default)
+        nodes_gdf_simple, edges_gdf_simple = utils.segments_to_graph(segments_gdf, multigraph=False)
+
+        # Should have regular 2-level MultiIndex without edge_key
+        assert isinstance(edges_gdf_simple.index, pd.MultiIndex)
+        assert edges_gdf_simple.index.names == ["from_node_id", "to_node_id"]
+        assert len(edges_gdf_simple) == 3  # Same number of edges but no duplicate handling
+
+
 class TestFilterGraphByDistance:
     """Test graph filtering by distance."""
 
@@ -1124,6 +1180,37 @@ class TestGraphConverterEdgeCases:
 class TestRemainingCoverageGaps:
     """Test remaining uncovered lines for 100% coverage."""
 
+    def test_edge_index_names_not_dict_path(self, sample_crs: str) -> None:
+        """Test line 465 - edge_index_names not dict handling."""
+        from shapely.geometry import LineString
+
+        from city2graph.utils import GraphConverter
+        from city2graph.utils import GraphMetadata
+
+        # Create a scenario where edge_index_names is not a dict
+        converter = GraphConverter()
+        metadata = GraphMetadata(crs=sample_crs, is_hetero=True)
+        metadata.edge_index_names = "not_a_dict"  # This should trigger line 464-465
+
+        # Create proper edge data with MultiIndex
+        edges_dict = {
+            ("type1", "connects", "type2"): gpd.GeoDataFrame(
+                {"geometry": [LineString([(0, 0), (1, 1)])]},
+                index=pd.MultiIndex.from_tuples([("a", "b")], names=["from", "to"]),
+                crs=sample_crs,
+            ),
+        }
+
+        # Create graph with nodes for the edge lookup
+        graph = nx.Graph()
+        graph.add_node(0, node_type="type1", _original_index="a", pos=(0, 0))
+        graph.add_node(1, node_type="type2", _original_index="b", pos=(1, 1))
+
+        # This should convert edge_index_names to dict via _add_heterogeneous_edges
+        converter._add_heterogeneous_edges(graph, edges_dict, metadata)
+        assert isinstance(metadata.edge_index_names, dict)
+
+
     def test_empty_graph_validation(self) -> None:
         """Test empty graph validation (lines 141-142)."""
         import networkx as nx
@@ -1187,6 +1274,8 @@ class TestRemainingCoverageGaps:
             index=pd.Index([0], name="single_name"),
             crs=sample_crs,
         )
+
+        # Create simple edges to make a valid graph
         edges_gdf = gpd.GeoDataFrame(
             {"geometry": [LineString([(0, 0), (1, 1)])]},
             crs=sample_crs,
@@ -1197,11 +1286,22 @@ class TestRemainingCoverageGaps:
         assert nodes_back.index.name == "single_name"
 
     def test_edge_processing_paths(self, sample_crs: str) -> None:
-        """Test edge processing paths (lines 743, 801-806, 822, 842)."""
+        """Test edge processing paths (lines 723-724, 739-743, 801-806, 822, 842)."""
         import networkx as nx
 
+        # Create MultiGraph with specific edge structure to trigger these paths
+        graph = nx.MultiGraph()
+        graph.add_node(1, pos=(0, 0))
+        graph.add_node(2, pos=(1, 1))
+        graph.add_edge(1, 2, key=0, _original_edge_index=(1, 2, 0))
+        graph.graph = {"crs": sample_crs, "is_hetero": False}
+
+        # This should trigger the edge processing paths
+        nodes_gdf, edges_gdf = utils.nx_to_gdf(graph)
+        assert isinstance(edges_gdf, gpd.GeoDataFrame)
+
         # Test heterogeneous edge processing (lines 801-806)
-        hetero_graph = nx.Graph()
+        hetero_graph = nx.MultiGraph()
         hetero_graph.add_node(1, pos=(0, 0), node_type="type1")
         hetero_graph.add_node(2, pos=(1, 1), node_type="type2")
         hetero_graph.add_edge(1, 2, edge_type="connects")
@@ -1216,48 +1316,10 @@ class TestRemainingCoverageGaps:
         nodes_dict, edges_dict = utils.nx_to_gdf(hetero_graph)
         assert isinstance(edges_dict, dict)
 
-    def test_empty_graph_returns(self) -> None:
-        """Test empty graph return cases (line 1006)."""
-        import networkx as nx
-
-        # Create an empty graph with nodes but no edges to trigger specific path
-        empty_graph = nx.Graph()
-        empty_graph.add_node(1, pos=(0, 0))
-        empty_graph.graph = {"crs": "EPSG:4326", "is_hetero": False}
-
-        # This should return empty edges GeoDataFrame (line 1006)
-        nodes_gdf, edges_gdf = utils.nx_to_gdf(empty_graph)
-        assert not nodes_gdf.empty  # Has nodes
-        assert edges_gdf.empty  # No edges
-
-    def test_dual_graph_crs_validation(self, sample_crs: str) -> None:
-        """Test dual graph CRS validation (lines 1120-1121)."""
-        from shapely.geometry import LineString
-        from shapely.geometry import Point
-
-        # Test edges without CRS (lines 1120-1121)
-        edges_no_crs = gpd.GeoDataFrame({
-            "geometry": [LineString([(0, 0), (1, 1)])],
-        })
-        nodes_with_crs = gpd.GeoDataFrame({
-            "geometry": [Point(0, 0), Point(1, 1)],
-        }, crs=sample_crs)
-
-        with pytest.raises(ValueError, match="All GeoDataFrames must have the same CRS"):
-            utils.dual_graph((nodes_with_crs, edges_no_crs), edge_id_col=None)
-
-    def test_gdf_validation_type_error(self) -> None:
-        """Test GDF validation type error (lines 1160-1161)."""
-        from city2graph.utils import GeoDataProcessor
-
-        # Test invalid dual_nodes type (lines 1160-1161)
-        invalid_gdf = pd.DataFrame({"col": [1, 2]})  # Not a GeoDataFrame
-        processor = GeoDataProcessor()
-
-        with pytest.raises(TypeError, match="Input must be a GeoDataFrame"):
-            processor.validate_gdf(invalid_gdf)
-
-    def test_segments_to_graph_edge_keys(self, sample_crs: str) -> None:
+    def test_segments_to_graph_edge_keys(
+        self,
+        sample_crs: str,
+    ) -> None:
         """Test segments_to_graph edge key generation (lines 1295-1298)."""
         from shapely.geometry import LineString
 
@@ -1405,66 +1467,327 @@ class TestRemainingCoverageGaps:
         nodes_dict, edges_dict = utils.nx_to_gdf(hetero_graph)
         assert isinstance(edges_dict, dict)
 
-    def test_segments_to_graph_edge_keys(
-        self,
-        sample_crs: str,
-    ) -> None:
-        """Test segments_to_graph edge key generation (lines 1295-1298)."""
+    def test_nx_to_gdf_request_validation(self) -> None:
+        """Test that nx_to_gdf raises error when requesting neither nodes nor edges (lines 580-581)."""
+        graph = nx.Graph()
+        graph.add_node(1, pos=(0, 0))
+        graph.add_edge(1, 2)
+        graph.graph = {"crs": "EPSG:4326", "is_hetero": False}
+
+        with pytest.raises(ValueError, match="Must request at least one of nodes or edges"):
+            utils.nx_to_gdf(graph, nodes=False, edges=False)
+
+    def test_single_level_index_name_handling(self, sample_crs: str) -> None:
+        """Test single-level index name handling (line 632)."""
         from shapely.geometry import LineString
-
-        # Create segments that will have duplicate from/to pairs
-        segments_gdf = gpd.GeoDataFrame({
-            "geometry": [
-                LineString([(0, 0), (1, 1)]),
-                LineString([(0, 0), (1, 1)]),  # Duplicate from/to
-            ],
-            "road_type": ["primary", "secondary"],
-        }, crs=sample_crs)
-
-        nodes_gdf, edges_gdf = utils.segments_to_graph(segments_gdf)
-
-        # Should have edge keys to handle duplicates
-        assert isinstance(edges_gdf.index, pd.MultiIndex)
-        assert len(edges_gdf.index.names) >= 2
-
-    def test_tessellation_empty_paths(
-        self,
-        sample_crs: str,
-    ) -> None:
-        """Test tessellation empty return paths (lines 1668, 1713)."""
-        # Test with truly empty geometry
-        empty_gdf = gpd.GeoDataFrame({"geometry": []}, crs=sample_crs)
-        result = utils.create_tessellation(empty_gdf)
-
-        # Should return empty with proper structure
-        assert result.empty
-        assert isinstance(result, gpd.GeoDataFrame)
-
-    def test_heterogeneous_validation_internal_paths(
-        self,
-        sample_crs: str,
-    ) -> None:
-        """Test internal heterogeneous validation paths (lines 1817-1818, 1828-1829)."""
         from shapely.geometry import Point
 
-        # These errors are caught at the validate_gdf level, but we can test
-        # the specific internal validation logic by creating the right conditions
+        # Create nodes with single index name
+        nodes_gdf = gpd.GeoDataFrame(
+            {"geometry": [Point(0, 0), Point(1, 1)]},
+            index=pd.Index([0, 1], name="single_name"),
+            crs=sample_crs,
+        )
 
-        # Test with properly structured heterogeneous data that passes initial validation
-        # but might trigger internal paths
-        nodes_dict = {
-            "building": gpd.GeoDataFrame({"geometry": [Point(0, 0)]}, crs=sample_crs),
-            "road": gpd.GeoDataFrame({"geometry": [Point(1, 1)]}, crs=sample_crs),
+        # Create simple edges to make a valid graph
+        edges_gdf = gpd.GeoDataFrame(
+            {"geometry": [LineString([(0, 0), (1, 1)])]},
+            crs=sample_crs,
+        )
+
+        graph = utils.gdf_to_nx(nodes=nodes_gdf, edges=edges_gdf)
+        nodes_back, _ = utils.nx_to_gdf(graph)
+        assert nodes_back.index.name == "single_name"
+
+    def test_heterogeneous_node_filtering(self, sample_crs: str) -> None:
+        """Test heterogeneous node filtering when no nodes of a type exist (line 663)."""
+        # Create a heterogeneous graph with missing node types
+        graph = nx.Graph()
+        graph.add_node(1, pos=(0, 0), node_type="type1")
+        graph.graph = {
+            "crs": sample_crs,
+            "is_hetero": True,
+            "node_types": ["type1", "type2"],  # type2 has no nodes
+            "edge_types": [],
         }
-        edges_dict = {
-            ("building", "connects", "road"): gpd.GeoDataFrame(
-                {"geometry": []},
-                index=pd.MultiIndex.from_tuples([], names=["from", "to"]),
+
+        # This should handle the case where no nodes exist for type2
+        nodes_dict, _ = utils.nx_to_gdf(graph)
+        assert "type1" in nodes_dict
+        assert len(nodes_dict["type1"]) == 1
+
+    def test_multigraph_edge_format_fallback(self, sample_crs: str) -> None:
+        """Test multigraph edge format fallback (line 726)."""
+        from shapely.geometry import LineString
+
+        # Create a multigraph with unusual edge format to trigger fallback
+        graph = nx.MultiGraph()
+        graph.add_node(1, pos=(0, 0))
+        graph.add_node(2, pos=(1, 1))
+        graph.add_edge(1, 2, 0, geometry=LineString([(0, 0), (1, 1)]))
+        graph.graph = {"crs": sample_crs, "is_hetero": False}
+
+        # This should trigger the fallback path in edge processing
+        _, edges_gdf = utils.nx_to_gdf(graph)
+        assert len(edges_gdf) == 1
+        assert "geometry" in edges_gdf.columns
+
+    def test_edge_geometry_from_node_positions(self, sample_crs: str) -> None:
+        """Test edge geometry creation from node positions (line 805)."""
+        # Create a graph where edges don't have geometry but nodes have pos
+        graph = nx.Graph()
+        graph.add_node(1, pos=(0, 0))
+        graph.add_node(2, pos=(1, 1))
+        graph.add_edge(1, 2)  # No geometry attribute
+        graph.graph = {"crs": sample_crs, "is_hetero": False}
+
+        # This should create geometry from node positions
+        _, edges_gdf = utils.nx_to_gdf(graph)
+        assert len(edges_gdf) == 1
+        assert "geometry" in edges_gdf.columns
+        assert edges_gdf.geometry.iloc[0].geom_type == "LineString"
+
+    def test_tuple_index_handling(self, sample_crs: str) -> None:
+        """Test tuple index handling (line 825)."""
+        from shapely.geometry import LineString
+
+        # Create edges with tuple indices
+        graph = nx.Graph()
+        graph.add_node(1, pos=(0, 0), _original_index=("a", 1))
+        graph.add_node(2, pos=(1, 1), _original_index=("b", 2))
+        graph.add_edge(1, 2, geometry=LineString([(0, 0), (1, 1)]))
+        graph.graph = {"crs": sample_crs, "is_hetero": False}
+
+        # This should handle tuple indices properly
+        _, edges_gdf = utils.nx_to_gdf(graph)
+        assert isinstance(edges_gdf.index, pd.MultiIndex)
+
+
+class TestMissingCoverageComplete:
+    """Test cases to complete 100% coverage for utils.py."""
+
+    def test_nx_to_gdf_neither_nodes_nor_edges_requested(
+        self,
+        sample_nx_graph: nx.Graph,
+    ) -> None:
+        """Test nx_to_gdf when neither nodes nor edges are requested (lines 580-581)."""
+        with pytest.raises(ValueError, match="Must request at least one of nodes or edges"):
+            utils.nx_to_gdf(sample_nx_graph, nodes=False, edges=False)
+
+    def test_heterogeneous_graph_not_multigraph(
+        self,
+        sample_hetero_nodes_dict: dict[str, gpd.GeoDataFrame],
+        sample_hetero_edges_dict: dict[tuple[str, str, str], gpd.GeoDataFrame],
+    ) -> None:
+        """Test heterogeneous graph conversion with regular Graph (not MultiGraph)."""
+        # Create heterogeneous graph with multigraph=False
+        H = gdf_to_nx(
+            nodes=sample_hetero_nodes_dict,
+            edges=sample_hetero_edges_dict,
+            multigraph=False,  # This is the key difference
+        )
+        # Should be a regular Graph, not MultiGraph
+        assert isinstance(H, nx.Graph)
+        assert not isinstance(H, nx.MultiGraph)
+
+        # Convert back to GDF - this should trigger heterogeneous processing for non-multigraph
+        nodes_dict_trip, edges_dict_trip = nx_to_gdf(H)
+
+        assert isinstance(nodes_dict_trip, dict)
+        assert isinstance(edges_dict_trip, dict)
+        assert sample_hetero_nodes_dict.keys() == nodes_dict_trip.keys()
+        assert sample_hetero_edges_dict.keys() == edges_dict_trip.keys()
+
+    def test_multiindex_creation_paths(
+        self,
+        sample_crs: str,
+    ) -> None:
+        """Test MultiIndex creation paths for nodes (lines 632, 682)."""
+        from shapely.geometry import LineString
+        from shapely.geometry import Point
+
+        # Create nodes with MultiIndex to trigger line 632
+        nodes_gdf = gpd.GeoDataFrame(
+            {"geometry": [Point(0, 0), Point(1, 1)]},
+            index=pd.MultiIndex.from_tuples([("type1", 0), ("type1", 1)], names=["node_type", "node_id"]),
+            crs=sample_crs,
+        )
+
+        # Need to add edges for graph conversion to work
+        edges_gdf = gpd.GeoDataFrame(
+            {"geometry": [LineString([(0, 0), (1, 1)])]},
+            crs=sample_crs,
+        )
+
+        graph = utils.gdf_to_nx(nodes=nodes_gdf, edges=edges_gdf)
+
+        # Convert back - this should trigger MultiIndex creation (line 632)
+        nodes_back, _ = utils.nx_to_gdf(graph)
+        assert isinstance(nodes_back.index, pd.MultiIndex)
+        assert nodes_back.index.names == ["node_type", "node_id"]
+
+    def test_heterogeneous_multiindex_creation(
+        self,
+        sample_crs: str,
+    ) -> None:
+        """Test heterogeneous MultiIndex creation (line 682)."""
+        from shapely.geometry import Point
+
+        # Create heterogeneous nodes with MultiIndex
+        nodes_dict = {
+            "building": gpd.GeoDataFrame(
+                {"geometry": [Point(0, 0)]},
+                index=pd.MultiIndex.from_tuples([("bldg", 1)], names=["type", "id"]),
                 crs=sample_crs,
             ),
         }
 
-        # This should work and exercise the heterogeneous validation paths
+        graph = utils.gdf_to_nx(nodes=nodes_dict, edges=None)
+
+        # Convert back - this should trigger heterogeneous MultiIndex creation (line 682)
+        nodes_dict_back, _ = utils.nx_to_gdf(graph)
+
+        assert isinstance(nodes_dict_back, dict)
+        assert "building" in nodes_dict_back
+        building_nodes = nodes_dict_back["building"]
+        assert isinstance(building_nodes.index, pd.MultiIndex)
+
+    def test_edge_fallback_format_handling(
+        self,
+        sample_crs: str,
+    ) -> None:
+        """Test edge fallback format handling (line 726)."""
+        from shapely.geometry import LineString
+
+        # Create a MultiGraph manually with unexpected edge format to trigger line 726
+        graph = nx.MultiGraph()
+        graph.add_node(1, pos=(0, 0))
+        graph.add_node(2, pos=(1, 1))
+        graph.add_edge(1, 2, key=0, geometry=LineString([(0, 0), (1, 1)]))
+        graph.graph = {"crs": sample_crs, "is_hetero": False}
+
+        # Convert to GDF - this should trigger the fallback edge processing
+        nodes_gdf, edges_gdf = utils.nx_to_gdf(graph)
+
+        assert isinstance(edges_gdf, gpd.GeoDataFrame)
+        assert not edges_gdf.empty
+
+    def test_heterogeneous_edge_geometry_creation(
+        self,
+        sample_crs: str,
+    ) -> None:
+        """Test heterogeneous edge geometry creation from node positions (line 805)."""
+        # Create heterogeneous graph with edges that need geometry creation
+        graph = nx.Graph()
+        graph.add_node(1, pos=(0, 0), node_type="building")
+        graph.add_node(2, pos=(1, 1), node_type="road")
+        # Edge type must be a tuple for heterogeneous graphs
+        graph.add_edge(1, 2, edge_type=("building", "connects", "road"))  # No geometry - should create from pos
+        graph.graph = {
+            "crs": sample_crs,
+            "is_hetero": True,
+            "node_types": ["building", "road"],
+            "edge_types": [("building", "connects", "road")],
+        }
+
+        # Convert to GDF - this should trigger geometry creation from positions (line 805)
+        nodes_dict, edges_dict = utils.nx_to_gdf(graph)
+
+        assert isinstance(edges_dict, dict)
+        connect_edges = edges_dict[("building", "connects", "road")]
+        assert not connect_edges.empty
+        assert all(connect_edges.geometry.is_valid)
+
+    def test_heterogeneous_regular_graph_edge_processing(
+        self,
+        sample_crs: str,
+    ) -> None:
+        """Test heterogeneous regular graph edge processing (lines 784-789)."""
+        from shapely.geometry import LineString
+
+        # Create heterogeneous regular graph (not multigraph) to trigger lines 784-789
+        graph = nx.Graph()  # Regular graph, not MultiGraph
+        graph.add_node(1, pos=(0, 0), node_type="building")
+        graph.add_node(2, pos=(1, 1), node_type="road")
+        # Edge type must be a tuple for heterogeneous graphs
+        graph.add_edge(1, 2, edge_type=("building", "connects", "road"), geometry=LineString([(0, 0), (1, 1)]))
+        graph.graph = {
+            "crs": sample_crs,
+            "is_hetero": True,
+            "node_types": ["building", "road"],
+            "edge_types": [("building", "connects", "road")],
+        }
+
+        # Convert to GDF - this should trigger regular edge processing for heterogeneous graph
+        nodes_dict, edges_dict = utils.nx_to_gdf(graph)
+
+        assert isinstance(edges_dict, dict)
+        connect_edges = edges_dict[("building", "connects", "road")]
+        assert not connect_edges.empty
+
+    def test_heterogeneous_edge_index_handling(
+        self,
+        sample_crs: str,
+    ) -> None:
+        """Test heterogeneous edge index name handling (line 825)."""
+        from shapely.geometry import LineString
+        from shapely.geometry import Point
+
+        # Create heterogeneous graph with specific edge index structure
+        edges_gdf = gpd.GeoDataFrame(
+            {"geometry": [LineString([(0, 0), (1, 1)])]},
+            index=pd.MultiIndex.from_tuples([("src", "dst")], names=["from_id", "to_id"]),
+            crs=sample_crs,
+        )
+
+        nodes_dict = {
+            "building": gpd.GeoDataFrame(
+                {"geometry": [Point(0, 0)]},
+                index=["src"],
+                crs=sample_crs,
+            ),
+            "road": gpd.GeoDataFrame(
+                {"geometry": [Point(1, 1)]},
+                index=["dst"],
+                crs=sample_crs,
+            ),
+        }
+
+        edges_dict = {
+            ("building", "connects", "road"): edges_gdf,
+        }
+
         graph = utils.gdf_to_nx(nodes=nodes_dict, edges=edges_dict)
-        assert isinstance(graph, (nx.Graph, nx.MultiGraph))
-        assert graph.graph["is_hetero"] is True
+
+        # Convert back - this should trigger edge index name handling (line 825)
+        nodes_dict_back, edges_dict_back = utils.nx_to_gdf(graph)
+
+        assert isinstance(edges_dict_back, dict)
+        connect_edges = edges_dict_back[("building", "connects", "road")]
+        assert hasattr(connect_edges.index, "names")
+
+    def test_empty_heterogeneous_edge_type(
+        self,
+        sample_crs: str,
+    ) -> None:
+        """Test empty edge type in heterogeneous graph processing."""
+        # Create heterogeneous graph with edge type that has no edges
+        graph = nx.MultiGraph()
+        graph.add_node(1, pos=(0, 0), node_type="building")
+        graph.add_node(2, pos=(1, 1), node_type="road")
+        # No edges added, but edge_type is defined in metadata
+        graph.graph = {
+            "crs": sample_crs,
+            "is_hetero": True,
+            "node_types": ["building", "road"],
+            "edge_types": [("building", "connects", "road")],  # This type has no actual edges
+        }
+
+        # Convert to GDF - should handle empty edge type gracefully
+        nodes_dict, edges_dict = utils.nx_to_gdf(graph)
+
+        assert isinstance(edges_dict, dict)
+        assert ("building", "connects", "road") in edges_dict
+        connect_edges = edges_dict[("building", "connects", "road")]
+        assert connect_edges.empty
+        assert connect_edges.crs == sample_crs

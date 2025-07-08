@@ -1,10 +1,12 @@
 """Tests for the transportation module."""
 
 # Import directly to avoid torch import issues
+# Standard library imports
 import sys
 from datetime import datetime
 from pathlib import Path
 
+# Third-party imports
 import geopandas as gpd
 import pandas as pd
 import pytest
@@ -125,6 +127,62 @@ class TestGetOdPairs:
         assert isinstance(result, gpd.GeoDataFrame)
         # Should handle calendar exceptions properly
         assert len(result) > 0
+
+    def test_get_od_pairs_with_malformed_times(self, sample_gtfs_dict: dict) -> None:
+        """Test OD pairs with malformed time values that trigger non-string handling."""
+        # Create a modified GTFS with some malformed times
+        gtfs_copy = sample_gtfs_dict.copy()
+        stop_times = gtfs_copy["stop_times"].copy()
+
+        # Replace some time values with None and numeric values to trigger line 72
+        stop_times.loc[0, "departure_time"] = None
+        stop_times.loc[1, "arrival_time"] = 3600.0  # numeric value
+
+        gtfs_copy["stop_times"] = stop_times
+
+        # This should still work and not crash
+        result = get_od_pairs(gtfs_copy)
+        assert isinstance(result, (pd.DataFrame, gpd.GeoDataFrame))
+
+    def test_get_od_pairs_removal_exception_integration(self) -> None:
+        """Test removal exception via calendar_dates in get_od_pairs."""
+        # Minimal GTFS with one trip on 2024-01-01, then removed by exception
+        stops = pd.DataFrame({
+            "stop_id": ["s1", "s2"],
+            "stop_lat": [0.0, 1.0],
+            "stop_lon": [0.0, 1.0],
+        })
+        trips = pd.DataFrame({"trip_id": ["t1"], "service_id": ["svc"]})
+        # stop_times should not include service_id; it's merged from trips
+        stop_times = pd.DataFrame({
+            "trip_id": ["t1", "t1"],
+            "stop_id": ["s1", "s2"],
+            "stop_sequence": [1, 2],
+            "departure_time": ["08:00:00", "08:10:00"],
+            "arrival_time": ["08:10:00", "08:20:00"],
+        })
+        calendar = pd.DataFrame({
+            "service_id": ["svc"],
+            "start_date": ["20240101"],
+            "end_date": ["20240101"],
+            "monday": [False], "tuesday": [False], "wednesday": [False],
+            "thursday": [False], "friday": [False], "saturday": [False], "sunday": [True],
+        })
+        calendar_dates = pd.DataFrame({
+            "service_id": ["svc"],
+            "date": ["20240101"],
+            "exception_type": [2],
+        })
+        gtfs = {
+            "stops": stops,
+            "trips": trips,
+            "stop_times": stop_times,
+            "calendar": calendar,
+            "calendar_dates": calendar_dates,
+        }
+        result = get_od_pairs(gtfs, include_geometry=False)
+        assert isinstance(result, pd.DataFrame)
+        assert len(result) == 0
 
 
 class TestTravelSummaryGraph:
