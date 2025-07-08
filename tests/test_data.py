@@ -1,15 +1,17 @@
 """Tests for the data module - refactored version focusing on public API only."""
 
+import importlib.util
 import subprocess
-from unittest.mock import Mock, patch
+
+# Import directly from data module to avoid torch import issues
+from unittest.mock import Mock
+from unittest.mock import patch
 
 import geopandas as gpd
 import pytest
-from shapely.geometry import LineString, Point
+from shapely.geometry import LineString
+from shapely.geometry import Point
 
-# Import directly from data module to avoid torch import issues
-import sys
-import importlib.util
 spec = importlib.util.spec_from_file_location("data_module", "city2graph/data.py")
 data_module = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(data_module)
@@ -20,7 +22,7 @@ process_overture_segments = data_module.process_overture_segments
 
 
 # Tests for constants and basic functionality
-def test_valid_overture_types_constant():
+def test_valid_overture_types_constant() -> None:
     """Test that VALID_OVERTURE_TYPES contains expected types."""
     expected_types = {
         "address", "bathymetry", "building", "building_part", "division",
@@ -30,7 +32,7 @@ def test_valid_overture_types_constant():
     assert expected_types == VALID_OVERTURE_TYPES
 
 
-def test_wgs84_crs_constant():
+def test_wgs84_crs_constant() -> None:
     """Test that WGS84_CRS is correctly defined."""
     assert WGS84_CRS == "EPSG:4326"
 
@@ -39,7 +41,9 @@ def test_wgs84_crs_constant():
 @patch("city2graph.data.subprocess.run")
 @patch("city2graph.data.gpd.read_file")
 @patch("city2graph.data.Path.mkdir")
-def test_load_overture_data_with_bbox_list(mock_mkdir, mock_read_file, mock_subprocess, test_bbox):
+def test_load_overture_data_with_bbox_list(
+    mock_mkdir: Mock, mock_read_file: Mock, mock_subprocess: Mock, test_bbox: list,
+) -> None:
     """Test load_overture_data with bounding box as list."""
     # Setup
     types = ["building", "segment"]
@@ -161,7 +165,7 @@ def test_load_overture_data_subprocess_error(mock_subprocess, test_bbox):
 
 @patch("city2graph.data.subprocess.run")
 @patch("city2graph.data.gpd.read_file")
-def test_load_overture_data_with_prefix(mock_read_file, mock_subprocess, test_bbox):
+def test_load_overture_data_with_prefix(mock_read_file: Mock, mock_subprocess: Mock, test_bbox: list):
     """Test load_overture_data with filename prefix."""
     prefix = "test_prefix_"
 
@@ -181,7 +185,7 @@ def test_load_overture_data_with_prefix(mock_read_file, mock_subprocess, test_bb
 @patch("city2graph.data.subprocess.run")
 @patch("city2graph.data.gpd.read_file")
 @patch("city2graph.data.Path.exists")
-def test_load_overture_data_file_not_exists(mock_exists, mock_read_file, mock_subprocess, test_bbox):
+def test_load_overture_data_file_not_exists(mock_exists: Mock, mock_read_file: Mock, mock_subprocess: Mock, test_bbox: list) -> None:
     """Test behavior when output file doesn't exist."""
     mock_exists.return_value = False
 
@@ -201,7 +205,7 @@ def test_process_overture_segments_empty_input(data_empty_gdf):
     assert result.crs == WGS84_CRS
 
 
-def test_process_overture_segments_basic(data_sample_segments_gdf):
+def test_process_overture_segments_basic(data_sample_segments_gdf) -> None:
     """Test basic functionality of process_overture_segments."""
     result = process_overture_segments(data_sample_segments_gdf, get_barriers=False)
 
@@ -214,12 +218,15 @@ def test_process_overture_segments_basic(data_sample_segments_gdf):
     assert "id" in result.columns
 
 
-def test_process_overture_segments_with_connectors(data_sample_segments_gdf, data_sample_connectors_gdf):
+def test_process_overture_segments_with_connectors(
+    data_sample_segments_gdf: gpd.GeoDataFrame,
+    data_sample_connectors_gdf: gpd.GeoDataFrame,
+) -> None:
     """Test process_overture_segments with connectors."""
     result = process_overture_segments(
         data_sample_segments_gdf,
         connectors_gdf=data_sample_connectors_gdf,
-        get_barriers=False
+        get_barriers=False,
     )
 
     # Should have split columns for segments that were split
@@ -251,7 +258,10 @@ def test_process_overture_segments_missing_level_rules():
     assert result["level_rules"].iloc[0] == ""
 
 
-def test_process_overture_segments_with_threshold(data_sample_segments_gdf, data_sample_connectors_gdf):
+def test_process_overture_segments_with_threshold(
+    data_sample_segments_gdf: gpd.GeoDataFrame,
+    data_sample_connectors_gdf: gpd.GeoDataFrame,
+) -> None:
     """Test process_overture_segments with custom threshold."""
     result = process_overture_segments(
         data_sample_segments_gdf,
@@ -263,7 +273,7 @@ def test_process_overture_segments_with_threshold(data_sample_segments_gdf, data
     assert "length" in result.columns
 
 
-def test_process_overture_segments_no_connectors(data_sample_segments_gdf):
+def test_process_overture_segments_no_connectors(data_sample_segments_gdf) -> None:
     """Test process_overture_segments with None connectors."""
     result = process_overture_segments(data_sample_segments_gdf, connectors_gdf=None)
 
@@ -271,7 +281,7 @@ def test_process_overture_segments_no_connectors(data_sample_segments_gdf):
     assert len(result) == len(data_sample_segments_gdf)
 
 
-def test_process_overture_segments_empty_connectors(data_sample_segments_gdf, data_empty_gdf):
+def test_process_overture_segments_empty_connectors(data_sample_segments_gdf, data_empty_gdf) -> None:
     """Test process_overture_segments with empty connectors GeoDataFrame."""
     result = process_overture_segments(data_sample_segments_gdf, connectors_gdf=data_empty_gdf)
 
@@ -279,7 +289,7 @@ def test_process_overture_segments_empty_connectors(data_sample_segments_gdf, da
     assert len(result) == len(data_sample_segments_gdf)
 
 
-def test_process_overture_segments_invalid_connector_data():
+def test_process_overture_segments_invalid_connector_data() -> None:
     """Test process_overture_segments with invalid connector JSON."""
     geometries = [LineString([(0, 0), (1, 1)])]
     segments_gdf = gpd.GeoDataFrame({
@@ -295,23 +305,21 @@ def test_process_overture_segments_invalid_connector_data():
     assert len(result) == 1
 
 
-def test_process_overture_segments_malformed_connectors(data_sample_connectors_gdf):
+def test_process_overture_segments_malformed_connectors(data_sample_connectors_gdf: gpd.GeoDataFrame) -> None:
     """Test process_overture_segments with malformed connector data."""
-    geometries = [LineString([(0, 0), (1, 1)])]
     segments_gdf = gpd.GeoDataFrame({
         "id": ["seg1"],
         "connectors": ['{"invalid": "structure"}'],
         "level_rules": [""],
-        "geometry": geometries
+        "geometry": [LineString([(0, 0), (1, 1)])],
     }, crs=WGS84_CRS)
-
     result = process_overture_segments(segments_gdf, connectors_gdf=data_sample_connectors_gdf)
 
     # Should handle malformed data gracefully
     assert len(result) == 1
 
 
-def test_process_overture_segments_invalid_level_rules():
+def test_process_overture_segments_invalid_level_rules() -> None:
     """Test process_overture_segments with invalid level rules JSON."""
     geometries = [LineString([(0, 0), (1, 1)])]
     segments_gdf = gpd.GeoDataFrame({
@@ -344,7 +352,7 @@ def test_process_overture_segments_complex_level_rules():
     assert result["barrier_geometry"].iloc[0] is not None
 
 
-def test_process_overture_segments_full_barrier():
+def test_process_overture_segments_full_barrier() -> None:
     """Test process_overture_segments with full barrier level rules."""
     geometries = [LineString([(0, 0), (1, 1)])]
     level_rules = '[{"value": 1}]'  # No "between" means full barrier
@@ -443,9 +451,9 @@ def test_process_overture_segments_level_rules_handling():
     segments_gdf = gpd.GeoDataFrame({
         "id": ["seg1"],
         "level_rules": [None],
-        "geometry": [LineString([(0, 0), (1, 1)])]
+        "geometry": [LineString([(0, 0), (1, 1)])],
     }, crs=WGS84_CRS)
-    
+
     result = process_overture_segments(segments_gdf)
     assert result["level_rules"].iloc[0] == ""
 
@@ -458,13 +466,13 @@ def test_load_and_process_integration():
         "id": ["seg1", "seg2"],
         "connectors": [
             '[{"connector_id": "conn1", "at": 0.0}]',
-            '[{"connector_id": "conn2", "at": 1.0}]'
+            '[{"connector_id": "conn2", "at": 1.0}]',
         ],
         "level_rules": ["", ""],
         "geometry": [
             LineString([(0, 0), (1, 1)]),
-            LineString([(1, 1), (2, 2)])
-        ]
+            LineString([(1, 1), (2, 2)]),
+        ],
     }
 
     segments_gdf = gpd.GeoDataFrame(segments_data, crs=WGS84_CRS)
@@ -493,7 +501,7 @@ def test_real_world_scenario_simulation(mock_exists, mock_read_file, mock_subpro
     # Process the segments
     processed_segments = process_overture_segments(
         data["segment"],
-        connectors_gdf=data["connector"]
+        connectors_gdf=data["connector"],
     )
 
     # Verify the result
@@ -510,7 +518,7 @@ def test_process_overture_segments_with_non_dict_connector():
         "id": ["seg1"],
         "connectors": ['["not_a_dict"]'],
         "level_rules": [""],
-        "geometry": geometries
+        "geometry": geometries,
     }, crs=WGS84_CRS)
 
     result = process_overture_segments(segments_gdf)
@@ -551,7 +559,7 @@ def test_process_overture_segments_with_short_between_array():
 def test_process_overture_segments_with_empty_geometry():
     """Test process_overture_segments with empty geometry."""
     from shapely.geometry import LineString
-    
+
     # Create an empty LineString
     empty_geom = LineString()
     segments_gdf = gpd.GeoDataFrame({
@@ -623,11 +631,11 @@ def test_load_overture_data_comprehensive_all_types(mock_mkdir, mock_read_file, 
     mock_gdf = Mock(spec=gpd.GeoDataFrame)
     mock_gdf.empty = False
     mock_read_file.return_value = mock_gdf
-    
+
     # Test with all types (types=None)
     bbox = [-74.01, 40.70, -73.99, 40.72]
     result = load_overture_data(bbox, types=None, save_to_file=False)
-    
+
     # Should call subprocess for all valid types
     assert mock_subprocess.call_count == len(VALID_OVERTURE_TYPES)
     assert len(result) == len(VALID_OVERTURE_TYPES)
@@ -636,7 +644,7 @@ def test_load_overture_data_comprehensive_all_types(mock_mkdir, mock_read_file, 
 def test_process_overture_segments_with_non_linestring_endpoints():
     """Test endpoint clustering with non-LineString geometries."""
     from shapely.geometry import Point
-    
+
     # Mix LineString and Point geometries
     geometries = [
         LineString([(0, 0), (1, 1)]),
@@ -667,14 +675,14 @@ def test_process_overture_segments_with_non_linestring_endpoints():
 def test_process_overture_segments_with_short_linestring():
     """Test endpoint clustering with LineString having insufficient coordinates."""
     from shapely.geometry import LineString
-    
+
     # Create a LineString with only one coordinate (invalid but possible edge case)
     try:
         invalid_geom = LineString([(0, 0)])  # This might raise an error
     except:
         # If invalid geometry creation fails, use a valid minimal LineString
         invalid_geom = LineString([(0, 0), (0, 0)])  # Degenerate but valid
-    
+
     geometries = [
         LineString([(0, 0), (1, 1)]),
         invalid_geom,

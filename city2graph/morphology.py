@@ -84,7 +84,6 @@ import itertools
 import logging
 import math
 import warnings
-from ast import literal_eval
 
 import geopandas as gpd
 import libpysal
@@ -450,9 +449,8 @@ def private_to_private_graph(
         empty_edges = _create_empty_edges_gdf(
             private_gdf.crs, "from_private_id", "to_private_id", group_cols,
         )
-        if as_nx:
-            return gdf_to_nx(nodes=private_gdf, edges=empty_edges)
-        return private_gdf, empty_edges
+
+        return (private_gdf, empty_edges) if not as_nx else gdf_to_nx(nodes=private_gdf, edges=empty_edges)
 
     # Validate that the group column exists if specified
     if group_col and group_col not in private_gdf.columns:
@@ -480,7 +478,7 @@ def private_to_private_graph(
         crs=private_gdf.crs, # Preserve original CRS
     )
 
-    return (private_gdf, edges_gdf) if not as_nx else gdf_to_nx(private_gdf, edges_gdf)
+    return (private_gdf, edges_gdf) if not as_nx else gdf_to_nx(nodes=private_gdf, edges=edges_gdf)
 
 
 
@@ -551,9 +549,8 @@ def private_to_public_graph(
     if private_gdf.empty or public_gdf.empty:
         empty_edges = _create_empty_edges_gdf(private_gdf.crs, _priv_id_col, _pub_id_col)
         all_nodes = pd.concat([private_gdf, public_gdf], ignore_index=True)
-        if as_nx:
-            return gdf_to_nx(nodes=all_nodes, edges=empty_edges)
-        return all_nodes, empty_edges
+
+        return (all_nodes, empty_edges) if not as_nx else gdf_to_nx(nodes=all_nodes, edges=empty_edges)
 
     # Ensure required ID columns exist in the input GeoDataFrames
     if _priv_id_col not in private_gdf.columns:
@@ -607,23 +604,24 @@ def private_to_public_graph(
     if joined_with_geom.empty:
         edges_gdf = gpd.GeoDataFrame(joined_with_geom, geometry="geometry", crs=private_gdf.crs)
         all_nodes = pd.concat([private_gdf, public_gdf], ignore_index=True)
-        if as_nx:
-            return gdf_to_nx(nodes=all_nodes, edges=edges_gdf)
-        return all_nodes, edges_gdf
+
+        return (all_nodes, edges_gdf) if not as_nx else gdf_to_nx(nodes=all_nodes, edges=edges_gdf)
 
     # Get centroid geometries for each pair in the 'joined' DataFrame
     p1_geoms = private_centroids_map.loc[joined_with_geom[_priv_id_col]].reset_index(drop=True)
     p2_geoms = public_centroids_map.loc[joined_with_geom[_pub_id_col]].reset_index(drop=True)
 
-    # Stack the coordinates of the centroids to create LineString geometries
-    coords_p1 = np.array(list(zip(p1_geoms.x, p1_geoms.y, strict=True))) # Coordinates for private centroids
-    coords_p2 = np.array(list(zip(p2_geoms.x, p2_geoms.y, strict=True))) # Coordinates for public centroids
-    if coords_p1.ndim == 1:
-        line_coords = np.stack((coords_p1, coords_p2), axis=0)[np.newaxis, :, :]
-    else:
-        line_coords = np.stack((coords_p1, coords_p2), axis=1) # Stack coordinates for LineString creation
-    joined_with_geom["geometry"] = list(sh_linestrings(line_coords)) # Create LineStrings
+    # Extract coordinates and ensure 2D array shape
+    coords_p1 = np.array(list(zip(p1_geoms.x, p1_geoms.y, strict=True)))
+    coords_p2 = np.array(list(zip(p2_geoms.x, p2_geoms.y, strict=True)))
 
+    # Ensure coords are 2D by reshaping if needed
+    coords_p1 = coords_p1.reshape(-1, 2)
+    coords_p2 = coords_p2.reshape(-1, 2)
+
+    # Stack coordinates for LineString creation
+    line_coords = np.stack((coords_p1, coords_p2), axis=1)
+    joined_with_geom["geometry"] = list(sh_linestrings(line_coords))
 
     # Concatenate private and public GeoDataFrames to create a unified nodes GeoDataFrame
     nodes_gdf = pd.concat([private_gdf, public_gdf], ignore_index=True)
@@ -631,8 +629,7 @@ def private_to_public_graph(
     # Convert the DataFrame with edge geometries to a GeoDataFrame
     edges_gdf = gpd.GeoDataFrame(joined_with_geom, geometry="geometry", crs=private_gdf.crs)
 
-    return (nodes_gdf, edges_gdf) if not as_nx else gdf_to_nx(nodes_gdf, edges_gdf)
-
+    return (nodes_gdf, edges_gdf) if not as_nx else gdf_to_nx(nodes=nodes_gdf, edges=edges_gdf)
 
 
 # ============================================================================
@@ -684,9 +681,8 @@ def public_to_public_graph(
     # Handle empty or insufficient data: return empty edges GeoDataFrame
     if public_gdf.empty or len(public_gdf) < 2:
         empty_edges = _create_empty_edges_gdf(public_gdf.crs, "from_public_id", "to_public_id")
-        if as_nx:
-            return gdf_to_nx(nodes=public_gdf, edges=empty_edges)
-        return public_gdf, empty_edges
+
+        return (public_gdf, empty_edges) if not as_nx else gdf_to_nx(nodes=public_gdf, edges=empty_edges)
 
     # Create a copy to avoid modifying the original
     public_gdf_work = public_gdf.copy()
@@ -698,9 +694,9 @@ def public_to_public_graph(
         # they can be used safely in dual_graph operations
         has_multiindex = isinstance(public_gdf_work.index, pd.MultiIndex)
         has_tuple_ids = any(isinstance(pid, tuple) for pid in public_gdf_work["public_id"])
-        if has_multiindex and has_tuple_ids:
-            # Convert MultiIndex tuples to strings for consistency if needed
-            public_gdf_work["public_id"] = [str(pid) for pid in public_gdf_work["public_id"]]
+        # Always convert public_id to string to ensure consistency
+        if has_multiindex or has_tuple_ids:
+            public_gdf_work["public_id"] = public_gdf_work["public_id"].astype(str)
     else:
         # Create a unique identifier for each row that can handle any index type
         if isinstance(public_gdf_work.index, pd.MultiIndex):
@@ -726,7 +722,7 @@ def public_to_public_graph(
     # Reset index to ensure it is a regular DataFrame
     dual_edges = dual_edges.reset_index()
 
-    return (public_gdf, dual_edges) if not as_nx else gdf_to_nx(public_gdf, dual_edges)
+    return (public_gdf, dual_edges) if not as_nx else gdf_to_nx(nodes=public_gdf, edges=dual_edges)
 
 
 # ============================================================================
@@ -804,25 +800,11 @@ def _validate_single_gdf_input(
     ------
     TypeError
         If gdf is not a GeoDataFrame.
-    ValueError
-        If geometry types are invalid and gdf is not empty.
     """
     # Check if the input is a GeoDataFrame
     if not isinstance(gdf, gpd.GeoDataFrame):
         msg = f"{gdf_name} must be a GeoDataFrame"
         raise TypeError(msg)
-
-    # If GeoDataFrame is not empty, validate its geometry types
-    if not gdf.empty:
-        actual_geom_types = gdf.geometry.geom_type.unique() # Get unique geometry types present
-        # Check if all actual types are within the set of expected types
-        if not all(geom_type in expected_geom_types for geom_type in actual_geom_types):
-            msg = (
-                f"{gdf_name} must contain only {', '.join(sorted(expected_geom_types))} geometries. "
-                f"Found: {', '.join(sorted(actual_geom_types))}"
-            )
-            raise ValueError(msg) # Raise error if unexpected types are found
-
 
 def _ensure_crs_consistency(target_gdf: gpd.GeoDataFrame, source_gdf: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
     """
@@ -1047,21 +1029,11 @@ def _find_closest_node_to_center(
     center_point_geom: Point,
 ) -> str:
     """Find the graph node ID closest to the geometric center point."""
-    # Extract node positions from the graph
+    # Extract node positions from the graph (all nodes in spatial graphs have 'pos')
     pos = nx.get_node_attributes(graph, "pos")
-    if not pos:
-        # Fallback for graphs without 'pos' attribute (e.g., from dual_graph)
-        # This part might be fragile if node names are not coordinate tuples
-        try:
-            # Ensure nodes are strings for eval, handle potential tuples
-            node_ids = list(graph.nodes)
-            node_coords = np.array([literal_eval(str(node)) for node in node_ids])
-        except (SyntaxError, TypeError, ValueError) as exc:
-            msg = "Graph nodes must have 'pos' attribute or be coordinate strings."
-            raise ValueError(msg) from exc
-    else:
-        node_ids = list(pos.keys())
-        node_coords = np.array(list(pos.values()))
+    
+    node_ids = list(pos.keys())
+    node_coords = np.array(list(pos.values()))
 
     # Create a KDTree for efficient nearest neighbor search
     kdtree = KDTree(node_coords)
@@ -1259,10 +1231,10 @@ def _set_edge_index(
     geopandas.GeoDataFrame
         GeoDataFrame with multi-index set
     """
-    # If GDF is not empty and both 'from_col' and 'to_col' exist, set a MultiIndex
-    if not gdf.empty and from_col in gdf.columns and to_col in gdf.columns:
+    # If both columns exist, set MultiIndex regardless of whether GDF is empty
+    if from_col in gdf.columns and to_col in gdf.columns:
         return gdf.set_index([from_col, to_col]) # Set MultiIndex using the two columns
-    return gdf # Otherwise, return GDF unchanged (e.g., if empty or columns missing)
+    return gdf # Otherwise, return GDF unchanged (e.g., if columns missing)
 
 
 # ============================================================================

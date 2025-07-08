@@ -1,11 +1,35 @@
+"""Core fixtures for graph module testing - refactored for maintainability."""
 import pathlib
-from typing import Any, Dict, List, Optional, Tuple, Union
+import tempfile
+import typing
+import zipfile
+from pathlib import Path
+from typing import Any
 
 import geopandas as gpd
 import networkx as nx
 import pandas as pd
 import pytest
-from shapely.geometry import LineString, Point, Polygon
+from shapely.geometry import LineString
+from shapely.geometry import Point
+from shapely.geometry import Polygon
+
+# Try to import torch, skip tests if not available
+try:
+    import torch
+    from torch_geometric.data import Data
+    from torch_geometric.data import HeteroData
+    TORCH_AVAILABLE = True
+except ImportError:
+    TORCH_AVAILABLE = False
+    torch = None
+    Data = None
+    HeteroData = None
+
+# Pytest skipif marker for tests requiring torch
+requires_torch = pytest.mark.skipif(
+    not TORCH_AVAILABLE, reason="PyTorch is not available",
+)
 
 # Import WGS84_CRS directly to avoid torch import issues
 WGS84_CRS = "EPSG:4326"
@@ -19,7 +43,7 @@ except ImportError:
 
 # Pytest skipif marker for tests requiring torch
 requires_torch = pytest.mark.skipif(
-    not TORCH_AVAILABLE, reason="PyTorch or PyTorch Geometric is not available."
+    not TORCH_AVAILABLE, reason="PyTorch or PyTorch Geometric is not available.",
 )
 
 
@@ -155,7 +179,7 @@ def sample_pyg_data(sample_nodes_gdf: gpd.GeoDataFrame) -> "Data":
 def sample_pyg_hetero_data(
     sample_hetero_nodes_dict: dict[str, gpd.GeoDataFrame],
     sample_hetero_edges_dict: dict[tuple[str, str, str], gpd.GeoDataFrame],
-) -> "HeteroData":
+) -> "HeteroData": # type: ignore[return-value]
     """Fixture for a sample PyG HeteroData object."""
     from city2graph.graph import gdf_to_pyg
     # Ensure some edges exist for testing edge feature naming
@@ -165,7 +189,7 @@ def sample_pyg_hetero_data(
         dummy_edge_gdf = gpd.GeoDataFrame(
             {"source_id": ["b1"], "target_id": ["r1"], "geometry": [LineString([(0,0),(1,1)])]},
             index=pd.MultiIndex.from_arrays([["b1"], ["r1"]], names=["source_id", "target_id"]),
-            crs=sample_hetero_nodes_dict["building"].crs
+            crs=sample_hetero_nodes_dict["building"].crs,
         )
         sample_hetero_edges_dict = {("building", "connects_to", "road"): dummy_edge_gdf}
 
@@ -177,7 +201,7 @@ def empty_edges_gdf(sample_crs: str) -> gpd.GeoDataFrame:
     """Fixture for an empty edges GeoDataFrame."""
     return gpd.GeoDataFrame(
         columns=["source_id", "target_id", "geometry"],
-        crs=sample_crs
+        crs=sample_crs,
     ).set_index(["source_id", "target_id"])
 
 
@@ -186,14 +210,14 @@ def edges_dict_with_empty(sample_crs: str) -> dict[tuple[str, str, str], gpd.Geo
     """Fixture for an edges dictionary with an empty GeoDataFrame."""
     empty_conn_gdf = gpd.GeoDataFrame(
         columns=["b_id", "r_id", "geometry"],
-        crs=sample_crs
+        crs=sample_crs,
     ).set_index(["b_id", "r_id"])
     return {("building", "connects", "road"): empty_conn_gdf}
 
 
 @pytest.fixture
 def sample_nx_graph_no_crs(sample_nx_graph: nx.Graph) -> nx.Graph:
-    """A NetworkX graph with no CRS information."""
+    """Return a NetworkX graph with no CRS information."""
     return modify_nx_graph_remove_attr(sample_nx_graph, "crs")
 
 
@@ -211,7 +235,7 @@ def sample_nx_graph_no_pos(sample_crs: str) -> nx.Graph:
 
 @pytest.fixture
 def custom_center_point() -> Point:
-    """Provides a custom center point for testing."""
+    """Return a custom center point for testing."""
     point = Point(-2.9879004, 53.4062724)
     return gpd.GeoSeries([point], crs="EPSG:4326").to_crs(epsg=27700)
 
@@ -221,13 +245,13 @@ def custom_center_point() -> Point:
 # ============================================================================
 
 def _create_gdf(
-    geometries: List[Any],
-    attributes_list: List[Dict[str, Any]],
+    geometries: list[Any],
+    attributes_list: list[dict[str, Any]],
     crs: str = "EPSG:27700",
 ) -> gpd.GeoDataFrame:
     """
-    Creates a GeoDataFrame with proper handling of empty cases.
-    
+    Create a GeoDataFrame with proper handling of empty cases.
+
     Args:
         geometries: list of shapely geometry objects
         attributes_list: list of dictionaries with attributes for each geometry
@@ -250,7 +274,7 @@ def _create_gdf(
 
 
 def modify_gdf_remove_column(gdf: gpd.GeoDataFrame, column: str) -> gpd.GeoDataFrame:
-    """Helper to remove a column from a GeoDataFrame copy."""
+    """Remove a column from a GeoDataFrame copy."""
     gdf_copy = gdf.copy()
     if column in gdf_copy.columns:
         del gdf_copy[column]
@@ -258,14 +282,14 @@ def modify_gdf_remove_column(gdf: gpd.GeoDataFrame, column: str) -> gpd.GeoDataF
 
 
 def modify_gdf_remove_crs(gdf: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
-    """Helper to remove CRS from a GeoDataFrame copy."""
+    """Remove CRS from a GeoDataFrame copy."""
     gdf_copy = gdf.copy()
     gdf_copy.crs = None
     return gdf_copy
 
 
 def modify_gdf_change_crs(gdf: gpd.GeoDataFrame, new_crs: str) -> gpd.GeoDataFrame:
-    """Helper to change CRS of a GeoDataFrame copy."""
+    """Change CRS of a GeoDataFrame copy."""
     gdf_copy = gdf.copy()
     if not gdf_copy.empty:
         gdf_copy = gdf_copy.to_crs(new_crs)
@@ -275,37 +299,37 @@ def modify_gdf_change_crs(gdf: gpd.GeoDataFrame, new_crs: str) -> gpd.GeoDataFra
 
 
 def modify_nx_graph_remove_attr(graph: nx.Graph, attr: str) -> nx.Graph:
-    """Helper to remove an attribute from a NetworkX graph copy."""
+    """Remove an attribute from a NetworkX graph copy."""
     graph_copy = graph.copy()
-    if hasattr(graph_copy, 'graph') and attr in graph_copy.graph:
+    if hasattr(graph_copy, "graph") and attr in graph_copy.graph:
         del graph_copy.graph[attr]
     return graph_copy
 
 
 def modify_gdf_single_item(gdf: gpd.GeoDataFrame, index: int = 0) -> gpd.GeoDataFrame:
-    """Helper to create a single-item GeoDataFrame from an existing one."""
+    """Create a single-item GeoDataFrame from an existing one."""
     if not gdf.empty and len(gdf) > index:
         return gdf.iloc[[index]].copy()
     return gdf.copy()
 
 
 def modify_gdf_translate(gdf: gpd.GeoDataFrame, xoff: float, yoff: float) -> gpd.GeoDataFrame:
-    """Helper to translate geometries in a GeoDataFrame copy."""
+    """Translate geometries in a GeoDataFrame copy."""
     gdf_copy = gdf.copy()
     if not gdf_copy.empty:
         gdf_copy.geometry = gdf_copy.geometry.translate(xoff=xoff, yoff=yoff)
     return gdf_copy
 
 
-def modify_gdf_add_column(gdf: gpd.GeoDataFrame, column: str, values: Any) -> gpd.GeoDataFrame:
-    """Helper to add a column to a GeoDataFrame copy."""
+def modify_gdf_add_column(gdf: gpd.GeoDataFrame, column: str, values: object) -> gpd.GeoDataFrame:
+    """Add a column to a GeoDataFrame copy."""
     gdf_copy = gdf.copy()
     gdf_copy[column] = values
     return gdf_copy
 
 
-def create_coincident_nodes_gdf(base_gdf: gpd.GeoDataFrame, sample_crs: str) -> gpd.GeoDataFrame:
-    """Helper to create a GeoDataFrame with coincident nodes for testing edge cases."""
+def create_coincident_nodes_gdf(sample_crs: str) -> gpd.GeoDataFrame:
+    """Create a GeoDataFrame with coincident nodes for testing edge cases."""
     data = {
         "node_id": [1, 2, 3],
         "feature1": [10.0, 20.0, 30.0],
@@ -314,24 +338,28 @@ def create_coincident_nodes_gdf(base_gdf: gpd.GeoDataFrame, sample_crs: str) -> 
     return gpd.GeoDataFrame(data, crs=sample_crs).set_index("node_id")
 
 
-def create_empty_gtfs_component(component_type: str) -> Union[gpd.GeoDataFrame, pd.DataFrame]:
-    """Helper to create empty GTFS components for testing."""
+def create_empty_gtfs_component(component_type: str) -> gpd.GeoDataFrame | pd.DataFrame:
+    """Create empty GTFS components for testing."""
     if component_type == "stops":
         return gpd.GeoDataFrame(
             columns=["stop_id", "stop_name", "stop_lat", "stop_lon", "geometry"],
             geometry="geometry",
-            crs="EPSG:4326"
+            crs="EPSG:4326",
         )
-    elif component_type == "routes":
+    if component_type == "routes":
         return pd.DataFrame(columns=["route_id", "agency_id", "route_short_name", "route_long_name", "route_type"])
-    elif component_type == "trips":
+    if component_type == "trips":
         return pd.DataFrame(columns=["route_id", "service_id", "trip_id"])
-    elif component_type == "stop_times":
+    if component_type == "stop_times":
         return pd.DataFrame(columns=["trip_id", "arrival_time", "departure_time", "stop_id", "stop_sequence"])
-    elif component_type == "calendar":
-        return pd.DataFrame(columns=["service_id", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday", "start_date", "end_date"])
-    else:
-        return pd.DataFrame()
+    if component_type == "calendar":
+        return pd.DataFrame(
+            columns=[
+                "service_id", "monday", "tuesday", "wednesday", "thursday",
+                "friday", "saturday", "sunday", "start_date", "end_date",
+            ],
+        )
+    return pd.DataFrame()
 
 
 # --- General Fixtures ---
@@ -353,15 +381,19 @@ def geojson_data_path() -> pathlib.Path:
 # --- Core Data Fixtures from GeoJSON files ---
 @pytest.fixture
 def sample_buildings_gdf(geojson_data_path: pathlib.Path, sample_crs: str) -> gpd.GeoDataFrame:
-    """Loads sample building data from GeoJSON."""
+    """Load sample building data from GeoJSON."""
     file_path = geojson_data_path / "sample_buildings.geojson"
     try:
         gdf = gpd.read_file(file_path)
-    except Exception as e:
+    except OSError as e:
         # Provide a more informative error if the file is not found
         if not file_path.exists():
             pytest.fail(
-                f"GeoJSON file not found at {file_path}. Make sure 'sample_buildings.geojson' is in the '{geojson_data_path.name}' directory relative to the test file.",
+                (
+                    f"GeoJSON file not found at {file_path}. "
+                    f"Make sure 'sample_buildings.geojson' is in the "
+                    f"'{geojson_data_path.name}' directory relative to the test file."
+                ),
             )
         pytest.fail(f"Failed to load sample_buildings.geojson from {file_path}: {e}")
     gdf = gdf.to_crs(sample_crs)
@@ -376,14 +408,18 @@ def sample_buildings_gdf(geojson_data_path: pathlib.Path, sample_crs: str) -> gp
 
 @pytest.fixture
 def sample_segments_gdf(geojson_data_path: pathlib.Path, sample_crs: str) -> gpd.GeoDataFrame:
-    """Loads sample segment data from GeoJSON."""
+    """Load sample segment data from GeoJSON."""
     file_path = geojson_data_path / "sample_segments.geojson"
     try:
         gdf = gpd.read_file(file_path)
-    except Exception as e:
+    except OSError as e:
         if not file_path.exists():
             pytest.fail(
-                f"GeoJSON file not found at {file_path}. Make sure 'sample_segments.geojson' is in the '{geojson_data_path.name}' directory relative to the test file.",
+                (
+                    f"GeoJSON file not found at {file_path}. "
+                    f"Make sure 'sample_segments.geojson' is in the "
+                    f"'{geojson_data_path.name}' directory relative to the test file."
+                ),
             )
         pytest.fail(f"Failed to load sample_segments.geojson from {file_path}: {e}")
     gdf = gdf.to_crs(sample_crs)
@@ -397,7 +433,8 @@ def sample_segments_gdf(geojson_data_path: pathlib.Path, sample_crs: str) -> gpd
 
 @pytest.fixture
 def sample_tessellation_gdf(sample_buildings_gdf: gpd.GeoDataFrame, sample_crs: str) -> gpd.GeoDataFrame:
-    """Creates a simple tessellation-like GDF from sample_buildings_gdf for testing p2p and p2pub.
+    """Return a simple tessellation-like GDF from sample_buildings_gdf for testing p2p and p2pub.
+
     This is a placeholder for actual tessellation output.
     It assigns 'private_id' and a dummy 'enclosure_index'.
     """
@@ -418,7 +455,7 @@ def sample_tessellation_gdf(sample_buildings_gdf: gpd.GeoDataFrame, sample_crs: 
 
 @pytest.fixture
 def mg_center_point(sample_segments_gdf: gpd.GeoDataFrame, sample_crs: str) -> gpd.GeoSeries:
-    """Provides a center point for filtering, e.g., centroid of the first segment."""
+    """Return a center point for filtering, e.g., centroid of the first segment."""
     if not sample_segments_gdf.empty:
         return gpd.GeoSeries(
             [sample_segments_gdf.geometry.iloc[0].centroid], crs=sample_crs,
@@ -431,19 +468,19 @@ def mg_center_point(sample_segments_gdf: gpd.GeoDataFrame, sample_crs: str) -> g
 # --- Fixtures for single-item GDFs for edge case testing ---
 @pytest.fixture
 def single_building_gdf(sample_buildings_gdf: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
-    """A GDF with a single building polygon."""
+    """Return a GDF with a single building polygon."""
     return modify_gdf_single_item(sample_buildings_gdf, 0)
 
 
 @pytest.fixture
 def single_segment_gdf(sample_segments_gdf: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
-    """A GDF with a single segment line."""
+    """Return a GDF with a single segment line."""
     return modify_gdf_single_item(sample_segments_gdf, 0)
 
 
 @pytest.fixture
 def single_tessellation_cell_gdf(sample_tessellation_gdf: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
-    """A GDF with a single tessellation cell."""
+    """Return a GDF with a single tessellation cell."""
     return modify_gdf_single_item(sample_tessellation_gdf, 0)
 
 
@@ -488,13 +525,13 @@ def segments_gdf_alt_crs(sample_segments_gdf: gpd.GeoDataFrame) -> gpd.GeoDataFr
 
 @pytest.fixture
 def nodes_gdf_no_crs(sample_nodes_gdf: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
-    """A nodes GeoDataFrame with no CRS."""
+    """Return a nodes GeoDataFrame with no CRS."""
     return modify_gdf_remove_crs(sample_nodes_gdf)
 
 
 @pytest.fixture
 def sample_nodes_gdf_alt_crs(sample_nodes_gdf: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
-    """A nodes GeoDataFrame with an alternative CRS."""
+    """Return a nodes GeoDataFrame with an alternative CRS."""
     return modify_gdf_change_crs(sample_nodes_gdf, "EPSG:4326")
 
 
@@ -799,21 +836,21 @@ def invalid_input_list() -> list:
 
 @pytest.fixture
 def p2pub_private_single_cell(sample_crs: str) -> gpd.GeoDataFrame:
-    """A single private cell for private_to_public tests."""
+    """Return a single private cell for private_to_public tests."""
     poly = Polygon([(0.4, 0.4), (0.4, 0.6), (0.6, 0.6), (0.6, 0.4)])
     return _create_gdf([poly], [{"private_id": 0}], crs=sample_crs)
 
 
 @pytest.fixture
 def p2pub_public_single_segment(sample_crs: str) -> gpd.GeoDataFrame:
-    """A single public segment for private_to_public tests."""
+    """Return a single public segment for private_to_public tests."""
     line = LineString([(0.5, 0.3), (0.5, 0.7)])
     return _create_gdf([line], [{"public_id": 10}], crs=sample_crs)
 
 
 @pytest.fixture
 def p2p_isolated_polys_gdf(sample_crs: str) -> gpd.GeoDataFrame:
-    """A GDF with polygons that are not contiguous, for testing private_to_private_graph."""
+    """Return a GDF with polygons that are not contiguous, for testing private_to_private_graph."""
     polys = [
         Polygon([(0, 0), (0, 1), (1, 1), (1, 0)]),
         Polygon([(10, 10), (10, 11), (11, 11), (11, 10)]),
@@ -825,7 +862,7 @@ def p2p_isolated_polys_gdf(sample_crs: str) -> gpd.GeoDataFrame:
 
 @pytest.fixture
 def segments_gdf_with_multiindex_public_id(sample_crs: str) -> gpd.GeoDataFrame:
-    """A GDF with segments and a MultiIndex for public_id, for public_to_public_graph."""
+    """Return a GDF with segments and a MultiIndex for public_id, for public_to_public_graph."""
     data = {
         "seg_id": ["s1", "s2", "s3"],
         "geometry": [
@@ -880,9 +917,9 @@ def two_nodes_gdf(sample_crs: str) -> gpd.GeoDataFrame:
 
 
 @pytest.fixture
-def coincident_nodes_gdf(sample_nodes_gdf: gpd.GeoDataFrame, sample_crs: str) -> gpd.GeoDataFrame:
+def coincident_nodes_gdf(sample_crs: str) -> gpd.GeoDataFrame:
     """Return a GeoDataFrame with coincident nodes for testing edge cases."""
-    return create_coincident_nodes_gdf(sample_nodes_gdf, sample_crs)
+    return create_coincident_nodes_gdf(sample_crs)
 
 
 @pytest.fixture
@@ -935,7 +972,7 @@ def data_sample_segments_gdf() -> gpd.GeoDataFrame:
     geometries = [
         LineString([(0, 0), (1, 1)]),
         LineString([(1, 1), (2, 2)]),
-        LineString([(2, 2), (3, 3)])
+        LineString([(2, 2), (3, 3)]),
     ]
 
     data = {
@@ -943,7 +980,7 @@ def data_sample_segments_gdf() -> gpd.GeoDataFrame:
         "connectors": [
             '[{"connector_id": "conn1", "at": 0.0}, {"connector_id": "conn2", "at": 1.0}]',
             '[{"connector_id": "conn2", "at": 0.0}, {"connector_id": "conn3", "at": 0.5}, {"connector_id": "conn4", "at": 1.0}]',
-            "[]"
+            "[]",
         ],
         "level_rules": [
             '[{"value": 1, "between": [0.2, 0.8]}]',
@@ -957,13 +994,13 @@ def data_sample_segments_gdf() -> gpd.GeoDataFrame:
 
 
 @pytest.fixture
-def data_sample_connectors_gdf():
+def data_sample_connectors_gdf() -> gpd.GeoDataFrame:
     """Create a sample connectors GeoDataFrame for testing."""
     geometries = [
         Point(0, 0),
         Point(1, 1),
         Point(2, 2),
-        Point(3, 3)
+        Point(3, 3),
     ]
 
     data = {
@@ -975,14 +1012,14 @@ def data_sample_connectors_gdf():
 
 
 @pytest.fixture
-def realistic_segments_gdf():
+def realistic_segments_gdf() -> gpd.GeoDataFrame:
     """Create a realistic segments GeoDataFrame."""
     return gpd.GeoDataFrame({
         "id": ["seg1", "seg2", "seg3"],
         "connectors": [
             '[{"connector_id": "conn1", "at": 0.0}, {"connector_id": "conn2", "at": 1.0}]',
             '[{"connector_id": "conn2", "at": 0.0}, {"connector_id": "conn3", "at": 0.5}]',
-            "[]"
+            "[]",
         ],
         "level_rules": [
             '[{"value": 1, "between": [0.2, 0.8]}]',
@@ -992,168 +1029,184 @@ def realistic_segments_gdf():
         "geometry": [
             LineString([(-74.01, 40.70), (-74.005, 40.705)]),
             LineString([(-74.005, 40.705), (-73.99, 40.72)]),
-            LineString([(-73.99, 40.72), (-73.985, 40.715)])
-        ]
+            LineString([(-73.99, 40.72), (-73.985, 40.715)]),
+        ],
     }, crs=WGS84_CRS)
 
 
 @pytest.fixture
-def realistic_connectors_gdf():
+def realistic_connectors_gdf() -> gpd.GeoDataFrame:
     """Create a realistic connectors GeoDataFrame."""
     return gpd.GeoDataFrame({
         "id": ["conn1", "conn2", "conn3"],
         "geometry": [
             Point(-74.01, 40.70),
             Point(-74.005, 40.705),
-            Point(-73.99, 40.72)
-        ]
+            Point(-73.99, 40.72),
+        ],
     }, crs=WGS84_CRS)
 
 
 @pytest.fixture
-def data_empty_gdf():
+def data_empty_gdf() -> gpd.GeoDataFrame:
     """Create an empty GeoDataFrame for data testing."""
     return gpd.GeoDataFrame(geometry=[], crs=WGS84_CRS)
 
 
 @pytest.fixture
-def test_bbox():
+def test_bbox() -> list[float]:
     """Standard test bounding box."""
     return [-74.01, 40.70, -73.99, 40.72]
 
 
 @pytest.fixture
-def test_polygon():
+def test_polygon() -> Polygon:
     """Standard test polygon."""
     return Polygon([(-74.01, 40.70), (-73.99, 40.70), (-73.99, 40.72), (-74.01, 40.72)])
 
 
 # Transportation module fixtures
 @pytest.fixture
-def sample_gtfs_zip():
+def sample_gtfs_zip() -> typing.Generator[str, None, None]:
     """Create a sample GTFS zip file for testing."""
-    import tempfile
-    import zipfile
-    
     # Create temporary zip file
-    temp_file = tempfile.NamedTemporaryFile(suffix=".zip", delete=False)
-    
-    with zipfile.ZipFile(temp_file.name, 'w') as zf:
-        # agency.txt
-        agency_data = "agency_id,agency_name,agency_url,agency_timezone\n1,Test Agency,http://test.com,America/New_York\n"
-        zf.writestr("agency.txt", agency_data)
-        
-        # stops.txt
-        stops_data = """stop_id,stop_name,stop_lat,stop_lon\nstop1,Stop 1,40.7128,-74.0060\nstop2,Stop 2,40.7589,-73.9851\nstop3,Stop 3,40.7505,-73.9934\n"""
-        zf.writestr("stops.txt", stops_data)
-        
-        # routes.txt
-        routes_data = """route_id,agency_id,route_short_name,route_long_name,route_type\nroute1,1,1,Test Route 1,3\n"""
-        zf.writestr("routes.txt", routes_data)
-        
-        # trips.txt
-        trips_data = """route_id,service_id,trip_id\nroute1,service1,trip1\nroute1,service1,trip2\n"""
-        zf.writestr("trips.txt", trips_data)
-        
-        # stop_times.txt
-        stop_times_data = """trip_id,arrival_time,departure_time,stop_id,stop_sequence\ntrip1,08:00:00,08:00:00,stop1,1\ntrip1,08:05:00,08:05:00,stop2,2\ntrip1,08:10:00,08:10:00,stop3,3\ntrip2,09:00:00,09:00:00,stop1,1\ntrip2,09:05:00,09:05:00,stop2,2\ntrip2,09:10:00,09:10:00,stop3,3\n"""
-        zf.writestr("stop_times.txt", stop_times_data)
-        
-        # calendar.txt
-        calendar_data = """service_id,monday,tuesday,wednesday,thursday,friday,saturday,sunday,start_date,end_date\nservice1,1,1,1,1,1,0,0,20240101,20241231\n"""
-        zf.writestr("calendar.txt", calendar_data)
-    
-    yield temp_file.name
-    
-    # Cleanup
-    import os
-    os.unlink(temp_file.name)
+    with tempfile.NamedTemporaryFile(suffix=".zip", delete=False) as temp_file:
+        with zipfile.ZipFile(temp_file.name, "w") as zf:
+            # agency.txt
+            agency_data = "agency_id,agency_name,agency_url,agency_timezone\n1,Test Agency,http://test.com,America/New_York\n"
+            zf.writestr("agency.txt", agency_data)
+
+            # stops.txt
+            stops_data = (
+                "stop_id,stop_name,stop_lat,stop_lon\n"
+                "stop1,Stop 1,40.7128,-74.0060\n"
+                "stop2,Stop 2,40.7589,-73.9851\n"
+                "stop3,Stop 3,40.7505,-73.9934\n"
+            )
+            zf.writestr("stops.txt", stops_data)
+
+            # routes.txt
+            routes_data = """route_id,agency_id,route_short_name,route_long_name,route_type\nroute1,1,1,Test Route 1,3\n"""
+            zf.writestr("routes.txt", routes_data)
+
+            # trips.txt
+            trips_data = """route_id,service_id,trip_id\nroute1,service1,trip1\nroute1,service1,trip2\n"""
+            zf.writestr("trips.txt", trips_data)
+
+            # stop_times.txt
+            stop_times_data = (
+                "trip_id,arrival_time,departure_time,stop_id,stop_sequence\n"
+                "trip1,08:00:00,08:00:00,stop1,1\n"
+                "trip1,08:05:00,08:05:00,stop2,2\n"
+                "trip1,08:10:00,08:10:00,stop3,3\n"
+                "trip2,09:00:00,09:00:00,stop1,1\n"
+                "trip2,09:05:00,09:05:00,stop2,2\n"
+                "trip2,09:10:00,09:10:00,stop3,3\n"
+            )
+            zf.writestr("stop_times.txt", stop_times_data)
+
+            # calendar.txt
+            calendar_data = (
+                "service_id,monday,tuesday,wednesday,thursday,friday,saturday,sunday,start_date,end_date\n"
+                "service1,1,1,1,1,1,0,0,20240101,20241231\n"
+            )
+            zf.writestr("calendar.txt", calendar_data)
+
+        yield temp_file.name
+
+        Path(temp_file.name).unlink()
 
 
 @pytest.fixture
-def sample_gtfs_zip_with_shapes():
+def sample_gtfs_zip_with_shapes() -> typing.Generator[str, None, None]:
     """Create a sample GTFS zip file with shapes for testing."""
-    import tempfile
-    import zipfile
-    
-    temp_file = tempfile.NamedTemporaryFile(suffix=".zip", delete=False)
-    
-    with zipfile.ZipFile(temp_file.name, 'w') as zf:
-        # Basic files (reuse from sample_gtfs_zip)
-        agency_data = "agency_id,agency_name,agency_url,agency_timezone\n1,Test Agency,http://test.com,America/New_York\n"
-        zf.writestr("agency.txt", agency_data)
-        
-        stops_data = """stop_id,stop_name,stop_lat,stop_lon\nstop1,Stop 1,40.7128,-74.0060\nstop2,Stop 2,40.7589,-73.9851\n"""
-        zf.writestr("stops.txt", stops_data)
-        
-        routes_data = """route_id,agency_id,route_short_name,route_long_name,route_type\nroute1,1,1,Test Route 1,3\n"""
-        zf.writestr("routes.txt", routes_data)
-        
-        trips_data = """route_id,service_id,trip_id,shape_id\nroute1,service1,trip1,shape1\n"""
-        zf.writestr("trips.txt", trips_data)
-        
-        stop_times_data = """trip_id,arrival_time,departure_time,stop_id,stop_sequence\ntrip1,08:00:00,08:00:00,stop1,1\ntrip1,08:05:00,08:05:00,stop2,2\n"""
-        zf.writestr("stop_times.txt", stop_times_data)
-        
-        calendar_data = """service_id,monday,tuesday,wednesday,thursday,friday,saturday,sunday,start_date,end_date\nservice1,1,1,1,1,1,0,0,20240101,20241231\n"""
-        zf.writestr("calendar.txt", calendar_data)
-        
-        # shapes.txt
-        shapes_data = """shape_id,shape_pt_lat,shape_pt_lon,shape_pt_sequence\nshape1,40.7128,-74.0060,1\nshape1,40.7300,-74.0000,2\nshape1,40.7589,-73.9851,3\n"""
-        zf.writestr("shapes.txt", shapes_data)
-    
-    yield temp_file.name
-    
-    import os
-    os.unlink(temp_file.name)
+    with tempfile.NamedTemporaryFile(suffix=".zip", delete=False) as temp_file:
+        with zipfile.ZipFile(temp_file.name, "w") as zf:
+            # Basic files (reuse from sample_gtfs_zip)
+            agency_data = "agency_id,agency_name,agency_url,agency_timezone\n1,Test Agency,http://test.com,America/New_York\n"
+            zf.writestr("agency.txt", agency_data)
+
+            stops_data = """stop_id,stop_name,stop_lat,stop_lon\nstop1,Stop 1,40.7128,-74.0060\nstop2,Stop 2,40.7589,-73.9851\n"""
+            zf.writestr("stops.txt", stops_data)
+
+            routes_data = """route_id,agency_id,route_short_name,route_long_name,route_type\nroute1,1,1,Test Route 1,3\n"""
+            zf.writestr("routes.txt", routes_data)
+
+            trips_data = """route_id,service_id,trip_id,shape_id\nroute1,service1,trip1,shape1\n"""
+            zf.writestr("trips.txt", trips_data)
+
+            stop_times_data = (
+                "trip_id,arrival_time,departure_time,stop_id,stop_sequence\n"
+                "trip1,08:00:00,08:00:00,stop1,1\n"
+                "trip1,08:05:00,08:05:00,stop2,2\n"
+            )
+            zf.writestr("stop_times.txt", stop_times_data)
+
+            calendar_data = (
+                "service_id,monday,tuesday,wednesday,thursday,friday,saturday,sunday,"
+                "start_date,end_date\n"
+                "service1,1,1,1,1,1,0,0,20240101,20241231\n"
+            )
+            zf.writestr("calendar.txt", calendar_data)
+
+            # shapes.txt
+            shapes_data = (
+                "shape_id,shape_pt_lat,shape_pt_lon,shape_pt_sequence\n"
+                "shape1,40.7128,-74.0060,1\n"
+                "shape1,40.7300,-74.0000,2\n"
+                "shape1,40.7589,-73.9851,3\n"
+            )
+            zf.writestr("shapes.txt", shapes_data)
+
+        yield temp_file.name
+
+        Path(temp_file.name).unlink()
 
 
 @pytest.fixture
-def empty_gtfs_zip():
+def empty_gtfs_zip() -> typing.Generator[str, None, None]:
     """Create an empty GTFS zip file for testing."""
-    import tempfile
-    import zipfile
-    
-    temp_file = tempfile.NamedTemporaryFile(suffix=".zip", delete=False)
-    
-    with zipfile.ZipFile(temp_file.name, 'w') as zf:
-        # Create empty zip
-        pass
-    
-    yield temp_file.name
-    
-    import os
-    os.unlink(temp_file.name)
+    with tempfile.NamedTemporaryFile(suffix=".zip", delete=False) as temp_file:
+        with zipfile.ZipFile(temp_file.name, "w"):
+            # Create empty zip
+            pass
+
+        yield temp_file.name
+
+        Path(temp_file.name).unlink()
 
 
 @pytest.fixture
-def gtfs_zip_invalid_coords():
+def gtfs_zip_invalid_coords() -> typing.Generator[str, None, None]:
     """Create a GTFS zip file with invalid coordinates for testing."""
-    import tempfile
-    import zipfile
-    
-    temp_file = tempfile.NamedTemporaryFile(suffix=".zip", delete=False)
-    
-    with zipfile.ZipFile(temp_file.name, 'w') as zf:
-        # stops.txt with some invalid coordinates
-        stops_data = """stop_id,stop_name,stop_lat,stop_lon\nstop1,Stop 1,40.7128,-74.0060\nstop2,Stop 2,invalid,invalid\nstop3,Stop 3,,\n"""
-        zf.writestr("stops.txt", stops_data)
-        
-        # Minimal other files
-        agency_data = "agency_id,agency_name,agency_url,agency_timezone\n1,Test Agency,http://test.com,America/New_York\n"
-        zf.writestr("agency.txt", agency_data)
-        
-        calendar_data = """service_id,monday,tuesday,wednesday,thursday,friday,saturday,sunday,start_date,end_date\nservice1,1,1,1,1,1,0,0,20240101,20241231\n"""
-        zf.writestr("calendar.txt", calendar_data)
-    
-    yield temp_file.name
-    
-    import os
-    os.unlink(temp_file.name)
+    with tempfile.NamedTemporaryFile(suffix=".zip", delete=False) as temp_file:
+        with zipfile.ZipFile(temp_file.name, "w") as zf:
+            # stops.txt with some invalid coordinates
+            stops_data = (
+                "stop_id,stop_name,stop_lat,stop_lon\n"
+                "stop1,Stop 1,40.7128,-74.0060\n"
+                "stop2,Stop 2,invalid,invalid\n"
+                "stop3,Stop 3,,\n"
+            )
+            zf.writestr("stops.txt", stops_data)
+
+            # Minimal other files
+            agency_data = "agency_id,agency_name,agency_url,agency_timezone\n1,Test Agency,http://test.com,America/New_York\n"
+            zf.writestr("agency.txt", agency_data)
+
+            calendar_data = (
+                "service_id,monday,tuesday,wednesday,thursday,friday,saturday,sunday,start_date,end_date\n"
+                "service1,1,1,1,1,1,0,0,20240101,20241231\n"
+            )
+            zf.writestr("calendar.txt", calendar_data)
+
+        yield temp_file.name
+
+        Path(temp_file.name).unlink()
 
 
 @pytest.fixture
-def sample_gtfs_dict():
+def sample_gtfs_dict() -> dict:
     """Create a sample GTFS dictionary for testing."""
     # Create stops GeoDataFrame
     stops_data = {
@@ -1164,34 +1217,34 @@ def sample_gtfs_dict():
         "geometry": [
             Point(-74.0060, 40.7128),
             Point(-73.9851, 40.7589),
-            Point(-73.9934, 40.7505)
-        ]
+            Point(-73.9934, 40.7505),
+        ],
     }
     stops_gdf = gpd.GeoDataFrame(stops_data, crs="EPSG:4326")
-    
+
     # Create other DataFrames
     routes_df = pd.DataFrame({
         "route_id": ["route1"],
         "agency_id": ["1"],
         "route_short_name": ["1"],
         "route_long_name": ["Test Route 1"],
-        "route_type": [3]
+        "route_type": [3],
     })
-    
+
     trips_df = pd.DataFrame({
         "route_id": ["route1", "route1"],
         "service_id": ["service1", "service1"],
-        "trip_id": ["trip1", "trip2"]
+        "trip_id": ["trip1", "trip2"],
     })
-    
+
     stop_times_df = pd.DataFrame({
         "trip_id": ["trip1", "trip1", "trip1", "trip2", "trip2", "trip2"],
         "arrival_time": ["08:00:00", "08:05:00", "08:10:00", "09:00:00", "09:05:00", "09:10:00"],
         "departure_time": ["08:00:00", "08:05:00", "08:10:00", "09:00:00", "09:05:00", "09:10:00"],
         "stop_id": ["stop1", "stop2", "stop3", "stop1", "stop2", "stop3"],
-        "stop_sequence": [1, 2, 3, 1, 2, 3]
+        "stop_sequence": [1, 2, 3, 1, 2, 3],
     })
-    
+
     calendar_df = pd.DataFrame({
         "service_id": ["service1"],
         "monday": [True],
@@ -1202,30 +1255,30 @@ def sample_gtfs_dict():
         "saturday": [False],
         "sunday": [False],
         "start_date": ["20240101"],
-        "end_date": ["20241231"]
+        "end_date": ["20241231"],
     })
-    
+
     return {
         "stops": stops_gdf,
         "routes": routes_df,
         "trips": trips_df,
         "stop_times": stop_times_df,
-        "calendar": calendar_df
+        "calendar": calendar_df,
     }
 
 
 @pytest.fixture
-def sample_gtfs_dict_with_exceptions(sample_gtfs_dict):
+def sample_gtfs_dict_with_exceptions(sample_gtfs_dict: dict) -> dict:
     """Create a sample GTFS dictionary with calendar exceptions."""
     gtfs_dict = sample_gtfs_dict.copy()
-    
+
     # Add calendar_dates for exceptions
     calendar_dates_df = pd.DataFrame({
         "service_id": ["service1", "service1"],
         "date": ["20240101", "20240102"],
-        "exception_type": [2, 1]  # 2 = remove service, 1 = add service
+        "exception_type": [2, 1],  # 2 = remove service, 1 = add service
     })
-    
+
     gtfs_dict["calendar_dates"] = calendar_dates_df
     return gtfs_dict
 
@@ -1233,3 +1286,157 @@ def sample_gtfs_dict_with_exceptions(sample_gtfs_dict):
 def not_a_pyg_object() -> str:
     """Fixture for an object that is not a PyG Data or HeteroData object."""
     return "not_a_pyg_object"
+
+@pytest.fixture(scope="session")
+def sample_crs() -> str:
+    """Return standard coordinate reference system for tests."""
+    return "EPSG:27700"
+
+
+@pytest.fixture
+def sample_nodes_gdf(sample_crs: str) -> gpd.GeoDataFrame:
+    """Return standard nodes GeoDataFrame with features and labels."""
+    data = {
+        "node_id": [1, 2, 3, 4],
+        "feature1": [10.0, 20.0, 30.0, 40.0],
+        "label1": [0, 1, 0, 1],
+        "geometry": [Point(0, 0), Point(1, 1), Point(0, 1), Point(1, 0)],
+    }
+    return gpd.GeoDataFrame(data, crs=sample_crs).set_index("node_id")
+
+
+@pytest.fixture
+def sample_edges_gdf(sample_crs: str) -> gpd.GeoDataFrame:
+    """Return standard edges GeoDataFrame with MultiIndex."""
+    data = {
+        "edge_id": ["e1", "e2", "e3", "e4"],
+        "source_id": [1, 1, 2, 3],
+        "target_id": [2, 3, 4, 4],
+        "edge_feature1": [0.5, 0.8, 1.2, 2.5],
+        "geometry": [
+            LineString([(0, 0), (1, 1)]),
+            LineString([(0, 0), (0, 1)]),
+            LineString([(1, 1), (1, 0)]),
+            LineString([(0, 1), (1, 0)]),
+        ],
+    }
+    multi_index = pd.MultiIndex.from_arrays(
+        [data["source_id"], data["target_id"]], names=("source_id", "target_id"),
+    )
+    return gpd.GeoDataFrame(data, index=multi_index, crs=sample_crs)
+
+
+@pytest.fixture
+def empty_nodes_gdf(sample_crs: str) -> gpd.GeoDataFrame:
+    """Return empty nodes GeoDataFrame."""
+    return gpd.GeoDataFrame({"geometry": []}, crs=sample_crs)
+
+
+@pytest.fixture
+def sample_hetero_nodes_dict(sample_crs: str) -> dict[str, gpd.GeoDataFrame]:
+    """Return heterogeneous nodes dictionary."""
+    buildings_data = {
+        "building_id": ["b1", "b2", "b3"],
+        "b_feat1": [100.0, 150.0, 120.0],
+        "b_label": [1, 0, 1],
+        "geometry": [Point(10, 10), Point(11, 11), Point(10, 11)],
+    }
+    buildings_gdf = gpd.GeoDataFrame(buildings_data, crs=sample_crs).set_index("building_id")
+
+    roads_data = {
+        "road_id": ["r1", "r2"],
+        "length": [5.5, 6.0],
+        "r_label": [0, 0],
+        "geometry": [Point(10, 12), Point(12, 12)],
+    }
+    roads_gdf = gpd.GeoDataFrame(roads_data, crs=sample_crs).set_index("road_id")
+
+    return {"building": buildings_gdf, "road": roads_gdf}
+
+
+@pytest.fixture
+def sample_hetero_edges_dict(sample_crs: str) -> dict[tuple[str, str, str], gpd.GeoDataFrame]:
+    """Return heterogeneous edges dictionary."""
+    # Building to road connections
+    connections_data = {
+        "building_id": ["b1", "b2", "b3"],
+        "road_id": ["r1", "r1", "r2"],
+        "conn_feat1": [1.0, 2.0, 3.0],
+        "geometry": [
+            LineString([(10, 10), (10, 12)]),
+            LineString([(11, 11), (10, 12)]),
+            LineString([(10, 11), (12, 12)]),
+        ],
+    }
+    connections_multi_index = pd.MultiIndex.from_arrays(
+        [connections_data["building_id"], connections_data["road_id"]],
+        names=("building_id", "road_id"),
+    )
+    connections_gdf = gpd.GeoDataFrame(
+        connections_data, index=connections_multi_index, crs=sample_crs,
+    )
+
+    # Road to road connections
+    road_links_data = {
+        "source_road_id": ["r1", "r2"],
+        "target_road_id": ["r2", "r1"],
+        "link_feat1": [0.7, 0.7],
+        "geometry": [LineString([(10, 12), (12, 12)]), LineString([(12, 12), (10, 12)])],
+    }
+    road_links_multi_index = pd.MultiIndex.from_arrays(
+        [road_links_data["source_road_id"], road_links_data["target_road_id"]],
+        names=("source_road_id", "target_road_id"),
+    )
+    road_links_gdf = gpd.GeoDataFrame(
+        road_links_data, index=road_links_multi_index, crs=sample_crs,
+    )
+
+    return {
+        ("building", "connects_to", "road"): connections_gdf,
+        ("road", "links_to", "road"): road_links_gdf,
+    }
+
+
+@pytest.fixture
+def sample_nx_graph(sample_crs: str) -> nx.Graph:
+    """Return standard NetworkX graph."""
+    graph = nx.Graph()
+    graph.add_node(1, feature1=10.0, label1=0, pos=(0, 0), geometry=Point(0, 0))
+    graph.add_node(2, feature1=20.0, label1=1, pos=(1, 1), geometry=Point(1, 1))
+    graph.add_node(3, feature1=30.0, label1=0, pos=(0, 1), geometry=Point(0, 1))
+    graph.add_edge(1, 2, edge_feature1=0.5, geometry=LineString([(0, 0), (1, 1)]))
+    graph.add_edge(1, 3, edge_feature1=0.8, geometry=LineString([(0, 0), (0, 1)]))
+    graph.graph["crs"] = sample_crs
+    graph.graph["is_hetero"] = False
+    return graph
+
+
+@pytest.fixture
+@requires_torch
+def sample_pyg_data(sample_nodes_gdf: gpd.GeoDataFrame, sample_edges_gdf: gpd.GeoDataFrame) -> Data:
+    """Return standard PyG Data object."""
+    from city2graph.graph import gdf_to_pyg
+    return gdf_to_pyg(
+        sample_nodes_gdf,
+        sample_edges_gdf,
+        node_feature_cols=["feature1"],
+        node_label_cols=["label1"],
+        edge_feature_cols=["edge_feature1"],
+    )
+
+
+@pytest.fixture
+@requires_torch
+def sample_pyg_hetero_data(
+    sample_hetero_nodes_dict: dict[str, gpd.GeoDataFrame],
+    sample_hetero_edges_dict: dict[tuple[str, str, str], gpd.GeoDataFrame],
+) -> HeteroData:
+    """Return standard PyG HeteroData object."""
+    from city2graph.graph import gdf_to_pyg
+    return gdf_to_pyg(
+        sample_hetero_nodes_dict,
+        sample_hetero_edges_dict,
+        node_feature_cols={"building": ["b_feat1"], "road": ["length"]},
+        node_label_cols={"building": ["b_label"], "road": ["r_label"]},
+        edge_feature_cols={"connects_to": ["conn_feat1"], "links_to": ["link_feat1"]},
+    )

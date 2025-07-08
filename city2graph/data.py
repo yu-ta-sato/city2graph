@@ -394,10 +394,10 @@ def _create_barrier_geometry(
     if not barrier_intervals:
         return geometry
 
+    # Ensure barrier_intervals is a list of tuples
+    assert isinstance(barrier_intervals, list)
+
     # Calculate passable intervals (complement of barrier intervals)
-    # Type guard to ensure we have the right type
-    if isinstance(barrier_intervals, str):
-        return None
     passable_intervals = _calculate_passable_intervals(barrier_intervals)
 
     if not passable_intervals:

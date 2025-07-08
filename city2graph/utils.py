@@ -137,9 +137,6 @@ class GeoDataProcessor:
         ValueError
             If the graph has no nodes, no edges, or is missing essential metadata.
         """
-        if not isinstance(graph, (nx.Graph, nx.MultiGraph)):
-            msg = "Input must be a NetworkX Graph or MultiGraph"
-            raise TypeError(msg)
         if graph.number_of_nodes() == 0:
             msg = "Graph has no nodes"
             raise ValueError(msg)
@@ -240,13 +237,6 @@ class GraphConverter:
 
         is_nodes_dict = isinstance(nodes, dict)
         is_edges_dict = isinstance(edges, dict)
-
-        if is_nodes_dict and edges is not None and not is_edges_dict:
-            msg = "If nodes is a dict, edges must also be a dict or None."
-            raise TypeError(msg)
-        if is_edges_dict and nodes is not None and not is_nodes_dict:
-            msg = "If edges is a dict, nodes must also be a dict or None."
-            raise TypeError(msg)
 
         # Determine graph type
         is_hetero = is_nodes_dict or is_edges_dict
@@ -430,14 +420,7 @@ class GraphConverter:
         metadata: "GraphMetadata",
     ) -> dict[str, int]:
         """Add heterogeneous nodes to graph."""
-        if not nodes_dict:
-            return {}
-
-        if metadata.node_index_names is None:
-            metadata.node_index_names = {}
-
-        # Ensure node_index_names is a dict for type safety
-        if not isinstance(metadata.node_index_names, dict):
+        if metadata.node_index_names is None or not isinstance(metadata.node_index_names, dict):
             metadata.node_index_names = {}
 
         node_offset = {}
@@ -592,10 +575,7 @@ class GraphConverter:
 
         if len(result) == 1:
             return result[0]
-        if len(result) == 2:
-            return (result[0], result[1])
-        msg = "Must request at least one of nodes or edges"
-        raise ValueError(msg)
+        return (result[0], result[1])
 
     def _reconstruct_heterogeneous(
         self,
@@ -695,13 +675,7 @@ class GraphConverter:
             # Handle index names safely
             index_names = metadata.node_index_names.get(node_type) if isinstance(metadata.node_index_names, dict) else None
 
-            if isinstance(index_names, list):
-                index = pd.MultiIndex.from_tuples(indices, names=index_names)
-            elif isinstance(index_names, str):
-                index = pd.Index(indices, name=index_names)
-            else:
-                index = pd.Index(indices, name=None)
-
+            index = pd.Index(indices, name=index_names) if isinstance(index_names, str) else pd.Index(indices, name=None)
             gdf = gpd.GeoDataFrame(records, geometry="geometry", index=index, crs=metadata.crs)
 
             nodes_dict[node_type] = gdf
@@ -736,11 +710,7 @@ class GraphConverter:
         for edge in edge_data:
             if is_multigraph:
                 # Multigraph edges have format (u, v, k, attrs)
-                if len(edge) == 4:
-                    u, v, _, attrs = edge
-                else:
-                    # Fallback for unexpected format
-                    u, v, attrs = edge[0], edge[1], edge[-1]
+                u, v, _, attrs = edge
             else:
                 # Regular edges have format (u, v, attrs)
                 u, v, attrs = edge
@@ -833,14 +803,7 @@ class GraphConverter:
                 )
 
             # Handle MultiIndex
-            index = None
-            if original_indices and all(
-                isinstance(i, tuple) for i in original_indices if i is not None
-            ):
-                index = pd.MultiIndex.from_tuples(original_indices)
-            else:
-                index = pd.Index(original_indices)
-
+            index = pd.MultiIndex.from_tuples(original_indices)
             gdf = gpd.GeoDataFrame(records, geometry="geometry", index=index, crs=metadata.crs)
 
             # Restore index names safely
@@ -1002,9 +965,8 @@ class GraphAnalyzer:
         graph_type: type = nx.Graph,
     ) -> gpd.GeoDataFrame | nx.Graph | nx.MultiGraph:
         """Create an empty result in the appropriate format."""
-        if is_graph_input:
-            return graph_type()
-        return gpd.GeoDataFrame(geometry=[], crs=original_crs)
+        return gpd.GeoDataFrame(geometry=[], crs=original_crs) if not is_graph_input else graph_type()
+
 
 # ============================================================================
 # PUBLIC API FUNCTIONS
@@ -1116,10 +1078,6 @@ def dual_graph(
     assert edges_clean is not None
     assert not edges_clean.empty
 
-    if edges_clean.crs is None:
-        msg = "Input edges `gdf` must have a CRS."
-        raise ValueError(msg)
-
     if keep_original_geom:
         edges_clean["original_geometry"] = gpd.GeoSeries(
             edges_clean.geometry.copy(), crs=edges_clean.crs,
@@ -1153,13 +1111,12 @@ def dual_graph(
     # Convert the NetworkX graph to GeoDataFrames
     dual_nodes, dual_edges = nx_to_gdf(graph_nx, nodes=True, edges=True)
 
+    # Ensure dual_nodes is a GeoDataFrame for type checking
+    assert isinstance(dual_nodes, gpd.GeoDataFrame)
+    assert isinstance(dual_edges, gpd.GeoDataFrame)
+
     new_index_name = None
     if edge_id_col:
-        # Ensure dual_nodes is a GeoDataFrame
-        if not isinstance(dual_nodes, gpd.GeoDataFrame):
-            msg = "Expected GeoDataFrame for dual_nodes"
-            raise TypeError(msg)
-
         # Create a mapping from the old index (used by momepy) to the new index values
         id_map = dual_nodes[edge_id_col]
 
@@ -1701,7 +1658,6 @@ def create_tessellation(
                         geometry="geometry",
                         crs=geometry.crs,
                     )
-                raise
         else:
             tessellation = gpd.GeoDataFrame(
                 columns=["geometry", "enclosure_index"],
@@ -1813,9 +1769,6 @@ def validate_gdf(
     if is_hetero:
         # Validate heterogeneous inputs
         if nodes_gdf is not None:
-            if not isinstance(nodes_gdf, dict):
-                msg = "nodes_gdf must be a dictionary for heterogeneous graphs"
-                raise TypeError(msg)
             validated_nodes = {}
             for node_type, node_gdf in nodes_gdf.items():
                 if not isinstance(node_type, str):
@@ -1824,9 +1777,6 @@ def validate_gdf(
                 validated_nodes[node_type] = processor.validate_gdf(node_gdf, allow_empty=True)
 
         if edges_gdf is not None:
-            if not isinstance(edges_gdf, dict):
-                msg = "edges_gdf must be a dictionary for heterogeneous graphs"
-                raise TypeError(msg)
             validated_edges = {}
             for edge_type, edge_gdf in edges_gdf.items():
                 if not isinstance(edge_type, tuple) or len(edge_type) != 3:
