@@ -887,7 +887,7 @@ class GraphAnalyzer:
             return gpd.GeoDataFrame(geometry=[], crs=getattr(reachable, "crs", None))
 
         # Create convex hull
-        union_geom = reachable.unary_union
+        union_geom = reachable.union_all()
         hull = union_geom.convex_hull
         return gpd.GeoDataFrame(geometry=[hull], crs=reachable.crs)
 

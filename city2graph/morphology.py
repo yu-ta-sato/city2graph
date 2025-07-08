@@ -909,13 +909,13 @@ def _filter_adjacent_tessellation(
     # Iterate over each enclosure group
     for _, group in tess.groupby(encl_col):
         # Geometry of the current enclosure
-        enclosure_geom = group.unary_union
+        enclosure_geom = group.union_all()
 
         # Segments intersecting this enclosure
         segs_in_enclosure = segments[segments.intersects(enclosure_geom)]
 
         # Union of segments within this enclosure
-        segment_union_in_enclosure = segs_in_enclosure.unary_union
+        segment_union_in_enclosure = segs_in_enclosure.union_all()
 
         # Centroids of cells in this group
         centroids_in_group = group.geometry.centroid
@@ -1260,10 +1260,10 @@ def _create_spatial_weights(gdf: gpd.GeoDataFrame, contiguity: str) -> libpysal.
     """
     # Attempt to create spatial weights matrix using libpysal
     if contiguity == "queen": # Queen contiguity (shared edges or vertices)
-        return libpysal.weights.Queen.from_dataframe(gdf)
+        return libpysal.weights.Queen.from_dataframe(gdf, use_index=True)
 
     # Rook contiguity (shared edges only)
-    return libpysal.weights.Rook.from_dataframe(gdf)
+    return libpysal.weights.Rook.from_dataframe(gdf, use_index=True)
 
 def _extract_adjacency_relationships(
     spatial_weights: libpysal.weights.W, # Precomputed spatial weights matrix
