@@ -114,7 +114,7 @@ def test_network_metric_error_handling(
 ) -> None:
     """Test network metric error handling when network_gdf is missing."""
     generator_fn = globals()[gen_name]
-    with pytest.raises(ValueError, match="network_gdf.*must be supplied|network.*required"):
+    with pytest.raises(ValueError, match="network_gdf is required for network distance metric"):
         _run_or_skip(generator_fn, sample_nodes_gdf, distance_metric="network", **kwargs)
 
 @pytest.mark.parametrize(("gen_name", "kwargs"), [g for g in GENERATORS if g[0] != "waxman_graph"])
@@ -351,7 +351,7 @@ class TestErrorConditions:
 
     def test_invalid_distance_metric(self, sample_nodes_gdf: gpd.GeoDataFrame) -> None:
         """Test invalid distance metric error."""
-        with pytest.raises(ValueError, match="distance_metric must be"):
+        with pytest.raises(ValueError, match="Unknown distance metric"):
             _run_or_skip(waxman_graph, sample_nodes_gdf, beta=0.5, r0=1.0, distance_metric="invalid")
 
     def test_crs_mismatch(self, sample_nodes_gdf: gpd.GeoDataFrame) -> None:
@@ -383,7 +383,7 @@ class TestNetworkGeometry:
         """Test network metric error when creating geometries - covers lines 1398-1402."""
         # This tests the error handling in _build_graph when network_gdf is None during geometry creation
         # We need to create a scenario where the distance calculation succeeds but geometry creation fails
-        with pytest.raises(ValueError, match="network_gdf.*must be supplied"):
+        with pytest.raises(ValueError, match="network_gdf is required for network distance metric"):
             _run_or_skip(knn_graph, sample_nodes_gdf, k=1, distance_metric="network", network_gdf=None)
 
     def test_fallback_geometry_creation(self) -> None:
