@@ -5,29 +5,6 @@ This module provides comprehensive functionality for loading and processing geos
 data from various sources, with specialized support for Overture Maps data. It handles
 data validation, coordinate reference system management, and geometric processing
 operations commonly needed for urban network analysis.
-
-Key Features
-------------
-- Overture Maps data loading via CLI integration
-- Automatic data validation and cleaning
-- CRS handling and transformation support
-- Geometric processing for network segments
-- Batch processing capabilities for large datasets
-
-Main Functions
---------------
-load_overture_data : Download and load data from Overture Maps
-process_overture_segments : Process and clean segment geometries
-
-Constants
----------
-VALID_OVERTURE_TYPES : Set of valid Overture Maps data types
-WGS84_CRS : Standard WGS84 coordinate reference system identifier
-
-See Also
---------
-city2graph.utils : Core utilities for data validation and processing
-city2graph.graph : Graph conversion and manipulation functions
 """
 
 # Standard library imports

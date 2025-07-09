@@ -2,9 +2,7 @@
 Morphology
 ==========
 
-The morphology module provides functionality for creating morphological graphs from urban data,
-focusing on relationships between buildings and urban street networks. It supports various types
-of spatial relationships and graph representations.
+.. automodule:: city2graph.morphology
 
 .. currentmodule:: city2graph.morphology
 

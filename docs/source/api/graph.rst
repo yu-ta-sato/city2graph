@@ -2,9 +2,7 @@
 Graph
 =====
 
-The graph module provides comprehensive functionality for converting spatial data (GeoDataFrames)
-into PyTorch Geometric graph objects, supporting both homogeneous and heterogeneous graphs.
-It handles bidirectional conversion between GeoDataFrames, NetworkX graphs, and PyTorch Geometric objects.
+.. automodule:: city2graph.graph
 
 .. currentmodule:: city2graph.graph
 

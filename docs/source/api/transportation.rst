@@ -2,8 +2,7 @@
 Transportation
 ==============
 
-The transportation module provides functionality for loading and processing GTFS (General Transit Feed Specification) data
-and constructing transportation networks. It supports origin-destination pair generation and travel summary analysis.
+.. automodule:: city2graph.transportation
 
 .. currentmodule:: city2graph.transportation
 

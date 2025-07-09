@@ -11,35 +11,6 @@ without class dependencies to ensure explicit state management and maintain a
 minimal public API surface. All functions return ready-to-use pandas/GeoPandas
 objects or NetworkX graphs that can be seamlessly integrated into analysis
 pipelines, notebooks, or model training workflows.
-
-Key Features
-------------
-- GTFS feed parsing and validation
-- Origin-destination (OD) pair generation
-- Stop-to-stop connectivity analysis
-- Travel time and frequency aggregation
-- Temporal network analysis capabilities
-- Integration with spatial analysis workflows
-
-Main Functions
---------------
-load_gtfs : Parse GTFS zip files into structured DataFrames
-get_od_pairs : Generate origin-destination pairs from trip data
-travel_summary_graph : Create aggregated stop-level network graphs
-
-Data Processing Pipeline
-------------------------
-1. GTFS data ingestion and validation
-2. Temporal schedule processing
-3. Spatial stop location handling
-4. Network graph construction
-5. Travel time and frequency aggregation
-
-See Also
---------
-city2graph.utils : Core utilities for graph conversion and validation
-city2graph.graph : PyTorch Geometric integration utilities
-city2graph.proximity : Spatial proximity analysis functions
 """
 # Future annotations for type hints
 from __future__ import annotations

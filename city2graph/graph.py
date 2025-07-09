@@ -11,68 +11,6 @@ The module serves as a bridge between geospatial data analysis tools and deep
 learning frameworks, enabling seamless integration of spatial urban data with
 Graph Neural Networks (GNNs) for tasks such as urban modeling, traffic prediction,
 and spatial analysis.
-
-Key Features
-------------
-- Automatic detection of graph structure (homogeneous vs heterogeneous)
-- Intelligent column detection for source/target relationships
-- Robust type handling and ID mapping
-- Preservation of spatial geometry and coordinate reference systems (CRS)
-- Bidirectional conversion between GeoDataFrames and PyTorch Geometric objects
-- NetworkX integration for graph analysis workflows
-- Support for both Data and HeteroData objects
-
-Main Functions
---------------
-gdf_to_pyg : Convert GeoDataFrames to PyTorch Geometric objects
-pyg_to_gdf : Convert PyTorch Geometric objects back to GeoDataFrames
-nx_to_pyg : Convert NetworkX graphs to PyTorch Geometric objects
-pyg_to_nx : Convert PyTorch Geometric objects to NetworkX graphs
-is_torch_available : Check if PyTorch Geometric dependencies are available
-
-See Also
---------
-city2graph.utils : Utility functions for data validation and conversion
-city2graph.morphology : Urban morphology analysis functions
-city2graph.proximity : Spatial proximity and accessibility functions
-
-Notes
------
-This module requires PyTorch and PyTorch Geometric for full functionality.
-If these packages are not available, the conversion functions will raise
-ImportError with helpful installation instructions.
-
-Examples
---------
-Basic usage with homogeneous graphs:
-
->>> import geopandas as gpd
->>> from city2graph.graph import gdf_to_pyg, pyg_to_gdf
->>>
->>> # Load spatial data
->>> nodes_gdf = gpd.read_file("urban_nodes.geojson")
->>> edges_gdf = gpd.read_file("urban_edges.geojson")
->>>
->>> # Convert to PyTorch Geometric
->>> data = gdf_to_pyg(nodes_gdf, edges_gdf)
->>>
->>> # Convert back to GeoDataFrames
->>> nodes_restored, edges_restored = pyg_to_gdf(data)
-
-Advanced usage with heterogeneous graphs:
-
->>> # Define multiple node types
->>> buildings = gpd.read_file("buildings.geojson")
->>> roads = gpd.read_file("roads.geojson")
->>>
->>> # Define relationships
->>> connections = gpd.read_file("building_road_connections.geojson")
->>>
->>> # Create heterogeneous graph
->>> nodes_dict = {'building': buildings, 'road': roads}
->>> edges_dict = {('building', 'connects_to', 'road'): connections}
->>>
->>> hetero_data = gdf_to_pyg(nodes_dict, edges_dict)
 """
 
 # Future annotations for type hints

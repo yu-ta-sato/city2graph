@@ -13,34 +13,6 @@ The module follows a consistent internal workflow across all proximity models:
 4. Edge list derivation according to the selected proximity model
 5. Edge weight and geometry attachment
 6. Output formatting as NetworkX graphs or GeoDataFrames
-
-Key Features
-------------
-- Multiple proximity models (k-NN, Delaunay, fixed radius, Waxman)
-- Flexible distance metrics and weighting schemes
-- Support for both homogeneous and heterogeneous node sets
-- Efficient spatial indexing for large datasets
-- NetworkX integration with bidirectional conversion
-- Geometric edge representation with LineString geometries
-
-Main Functions
---------------
-knn_graph : Generate k-nearest neighbors proximity graphs
-delaunay_graph : Create Delaunay triangulation-based networks
-fixed_radius_graph : Build graphs with fixed distance thresholds
-waxman_graph : Generate Waxman random geometric graphs
-bridge_nodes : Connect disparate node sets with proximity relationships
-
-See Also
---------
-city2graph.utils : Core utilities for graph conversion and validation
-city2graph.morphology : Urban morphology analysis functions
-city2graph.graph : PyTorch Geometric integration utilities
-
-Notes
------
-All functions are implemented as pure functions without class dependencies,
-ensuring explicit state management and a minimal public API surface.
 """
 
 # Future annotations for type hints
