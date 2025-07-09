@@ -27,7 +27,7 @@ try:
     TORCH_AVAILABLE = True
 except ImportError:
     TORCH_AVAILABLE = False
-zx    torch = typing.cast("Any", None)
+    torch = typing.cast("Any", None)
     Data = typing.cast("Any", None)
     HeteroData = typing.cast("Any", None)
 
