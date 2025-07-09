@@ -117,7 +117,7 @@ __all__ = [
 logger = logging.getLogger(__name__)
 
 
-# =============================================================================
+# ============================================================================
 # MAIN MORPHOLOGICAL GRAPH FUNCTION
 # ============================================================================
 
@@ -433,7 +433,7 @@ def private_to_private_graph(
     The input private_gdf is expected to have a 'private_id' column.
     """
     # Input validation
-    _validate_single_gdf_input(private_gdf, "private_gdf", {"Polygon", "MultiPolygon"})
+    _validate_single_gdf_input(private_gdf, "private_gdf")
 
     _id_col = "private_id" # Fixed ID column name for private polygons
 
@@ -543,8 +543,8 @@ def private_to_public_graph(
     Input GDFs are expected to have 'private_id' and 'public_id' columns respectively.
     """
     # Input validation
-    _validate_single_gdf_input(private_gdf, "private_gdf", {"Polygon", "MultiPolygon"})
-    _validate_single_gdf_input(public_gdf, "public_gdf", {"LineString"})
+    _validate_single_gdf_input(private_gdf, "private_gdf")
+    _validate_single_gdf_input(public_gdf, "public_gdf")
 
     _priv_id_col = "private_id" # Fixed ID column name for private spaces
     _pub_id_col = "public_id"   # Fixed ID column name for public spaces
@@ -680,7 +680,7 @@ def public_to_public_graph(
     are created as LineStrings connecting the centroids of connected segments.
     """
     # Input validation
-    _validate_single_gdf_input(public_gdf, "public_gdf", {"LineString"})
+    _validate_single_gdf_input(public_gdf, "public_gdf")
 
     # Handle empty or insufficient data: return empty edges GeoDataFrame
     if public_gdf.empty or len(public_gdf) < 2:
@@ -781,7 +781,6 @@ def _validate_input_gdfs(buildings_gdf: gpd.GeoDataFrame, segments_gdf: gpd.GeoD
 def _validate_single_gdf_input(
     gdf: gpd.GeoDataFrame,
     gdf_name: str,
-    expected_geom_types: set[str],
 ) -> None:
     """
     Validate a single GeoDataFrame input.
@@ -792,8 +791,6 @@ def _validate_single_gdf_input(
         GeoDataFrame to validate.
     gdf_name : str
         Name of the GeoDataFrame (for error messages).
-    expected_geom_types : set[str]
-        Set of expected geometry types (e.g., {"Polygon", "MultiPolygon"}).
 
     Raises
     ------

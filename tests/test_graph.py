@@ -14,11 +14,13 @@ Key improvements:
 
 from __future__ import annotations
 
+from typing import Any
+from typing import cast
+
 import geopandas as gpd
 import networkx as nx
 import pandas as pd
 import pytest
-import torch
 from shapely.geometry import Point
 
 from city2graph.utils import GraphMetadata
@@ -57,20 +59,20 @@ class TestTorchAvailability:
         import city2graph.graph as graph_module
         monkeypatch.setattr(graph_module, "TORCH_AVAILABLE", False)
 
-        functions_to_test = [
+        functions_to_test: list[tuple[Any, tuple[Any, ...]]] = [
             (graph_module.gdf_to_pyg, ({}, {})),
-            (graph_module.validate_pyg, ({})),
-            (graph_module.pyg_to_gdf, ({})),
-            (graph_module.pyg_to_nx, ({})),
+            (graph_module.validate_pyg, ({},)),
+            (graph_module.pyg_to_gdf, ({},)),
+            (graph_module.pyg_to_nx, ({},)),
         ]
 
         for func, args in functions_to_test:
             if isinstance(args, tuple):
                 with pytest.raises(ImportError, match="PyTorch required"):
-                    func(*args)  # type: ignore[arg-type]
+                    func(*args)
             else:
                 with pytest.raises(ImportError, match="PyTorch required"):
-                    func(args)  # type: ignore[arg-type]
+                    func(args)
 
         # Test nx_to_pyg with valid graph
         valid_graph = nx.Graph()
@@ -236,7 +238,7 @@ class TestValidation:
         """Test validation with invalid inputs."""
         # Invalid input type
         with pytest.raises(TypeError, match="Input must be a PyTorch Geometric"):
-            validate_pyg("not_a_pyg_object")  # type: ignore[arg-type]
+            validate_pyg("not_a_pyg_object")
 
         # Missing metadata
         data = gdf_to_pyg(sample_nodes_gdf)
@@ -246,8 +248,8 @@ class TestValidation:
 
         # Wrong metadata type
         data = gdf_to_pyg(sample_nodes_gdf)
-        data.graph_metadata = "wrong_type"  # type: ignore[assignment]
-        with pytest.raises(ValueError, match="PyG object has 'graph_metadata' of incorrect type"):
+        data.graph_metadata = "wrong_type"
+        with pytest.raises(TypeError, match="PyG object has 'graph_metadata' of incorrect type"):
             validate_pyg(data)
 
     @pytest.mark.parametrize(("graph_type", "inconsistency"), [
@@ -276,25 +278,19 @@ class TestValidation:
 class TestDeviceHandling:
     """Test device and dtype handling."""
 
-    @pytest.mark.parametrize(("device_input", "expected_error"), [
-        (123, "Device must be"),
-        (["cuda"], "Device must be"),
-        ("invalid_device", "Device must be"),
-        ("gpu", "Device must be"),
-    ])
-    def test_device_validation_errors(
-        self,
-        device_input: object,
-        expected_error: str,
-        sample_nodes_gdf: gpd.GeoDataFrame,
-    ) -> None:
+    def test_device_validation_errors(self, sample_nodes_gdf: gpd.GeoDataFrame) -> None:
         """Test device validation with various invalid inputs."""
-        if isinstance(device_input, (int, list)):
-            with pytest.raises(TypeError, match=expected_error):
-                gdf_to_pyg(sample_nodes_gdf, device=device_input)  # type: ignore[arg-type]
-        else:
-            with pytest.raises(ValueError, match=expected_error):
-                gdf_to_pyg(sample_nodes_gdf, device=device_input)  # type: ignore[arg-type]
+        # Test TypeError cases - invalid types
+        invalid_type_inputs = [123, ["cuda"]]
+        for device_input in invalid_type_inputs:
+            with pytest.raises(TypeError, match="Device must be"):
+                gdf_to_pyg(sample_nodes_gdf, device=cast("Any", device_input))
+
+        # Test ValueError cases - invalid string values
+        invalid_string_inputs = ["invalid_device", "gpu"]
+        for device_input in invalid_string_inputs:
+            with pytest.raises(ValueError, match="Device must be"):
+                gdf_to_pyg(sample_nodes_gdf, device=device_input)
 
     def test_cuda_not_available(self, sample_nodes_gdf: gpd.GeoDataFrame) -> None:
         """Test CUDA not available error when CUDA is requested but not available."""
@@ -368,15 +364,15 @@ class TestEdgeCases:
     ) -> None:
         """Test invalid feature column types."""
         if graph_type == "homogeneous":
-            kwargs = {feature_type: {"invalid": ["cols"]}}
+            kwargs: dict[str, Any] = {feature_type: {"invalid": "cols"}}
             expected_msg = f"{feature_type} must be a list"
             with pytest.raises(TypeError, match=expected_msg):
-                gdf_to_pyg(sample_nodes_gdf, **kwargs)  # type: ignore[arg-type]
+                gdf_to_pyg(sample_nodes_gdf, **kwargs)
         else:
             kwargs = {feature_type: ["invalid"]}
             expected_msg = f"{feature_type} must be a dict"
             with pytest.raises(TypeError, match=expected_msg):
-                gdf_to_pyg(sample_hetero_nodes_dict, **kwargs)  # type: ignore[arg-type]
+                gdf_to_pyg(sample_hetero_nodes_dict, **kwargs)
 
     def test_geometry_handling(self, sample_nodes_gdf: gpd.GeoDataFrame) -> None:
         """Test geometry handling edge cases."""
@@ -452,7 +448,11 @@ class TestSpecialCases:
         with pytest.raises(ValueError, match="should have node_label_cols as list, not dict"):
             validate_pyg(data)
 
-    def test_homo_edge_validation_cases(self, sample_nodes_gdf: gpd.GeoDataFrame, sample_edges_gdf: gpd.GeoDataFrame) -> None:
+    def test_homo_edge_validation_cases(
+        self,
+        sample_nodes_gdf: gpd.GeoDataFrame,
+        sample_edges_gdf: gpd.GeoDataFrame,
+    ) -> None:
         """Test homogeneous edge validation cases."""
         # Dict edge feature cols instead of list
         data = gdf_to_pyg(sample_nodes_gdf, sample_edges_gdf, edge_feature_cols=["edge_feature1"])
@@ -495,6 +495,7 @@ class TestSpecialCases:
         nodes_restored, _ = pyg_to_gdf(data)
 
         # Verify features and labels are extracted correctly
+        assert isinstance(nodes_restored, gpd.GeoDataFrame)
         assert "feature1" in nodes_restored.columns
         assert "label1" in nodes_restored.columns
 
@@ -555,6 +556,7 @@ class TestSpecialCases:
         }, index=[100, 200])
         data = gdf_to_pyg(minimal_nodes)
         nodes_back, _ = pyg_to_gdf(data)
+        assert isinstance(nodes_back, gpd.GeoDataFrame)
         assert list(nodes_back.index) == [100, 200]
 
     def test_missing_features_handling(self, sample_nodes_gdf: gpd.GeoDataFrame) -> None:
@@ -582,6 +584,8 @@ class TestSpecialCases:
         )
         nodes_restored, _ = pyg_to_gdf(data)
         assert isinstance(nodes_restored, dict)
+        assert isinstance(nodes_restored["building"], gpd.GeoDataFrame)
+        assert isinstance(nodes_restored["road"], gpd.GeoDataFrame)
         assert "b_feat1" in nodes_restored["building"].columns
         # Note: r_feat1 doesn't exist in the fixture, so it won't be restored
         assert "r_label" in nodes_restored["road"].columns

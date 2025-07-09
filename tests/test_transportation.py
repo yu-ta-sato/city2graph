@@ -73,7 +73,7 @@ class TestLoadGtfs:
 class TestGetOdPairs:
     """Test the get_od_pairs function."""
 
-    def test_get_od_pairs_basic(self, sample_gtfs_dict: dict) -> None:
+    def test_get_od_pairs_basic(self, sample_gtfs_dict: dict[str, pd.DataFrame]) -> None:
         """Test basic OD pairs generation."""
         result = get_od_pairs(sample_gtfs_dict)
 
@@ -91,7 +91,7 @@ class TestGetOdPairs:
         assert result.crs.to_string() == "EPSG:4326"
         assert all(isinstance(geom, LineString) for geom in result.geometry if geom is not None)
 
-    def test_get_od_pairs_date_range(self, sample_gtfs_dict: dict) -> None:
+    def test_get_od_pairs_date_range(self, sample_gtfs_dict: dict[str, pd.DataFrame]) -> None:
         """Test OD pairs with specific date range."""
         result = get_od_pairs(
             sample_gtfs_dict,
@@ -105,7 +105,7 @@ class TestGetOdPairs:
         assert dates.min() >= datetime(2024, 1, 1).date()
         assert dates.max() <= datetime(2024, 1, 2).date()
 
-    def test_get_od_pairs_no_geometry(self, sample_gtfs_dict: dict) -> None:
+    def test_get_od_pairs_no_geometry(self, sample_gtfs_dict: dict[str, pd.DataFrame]) -> None:
         """Test OD pairs without geometry."""
         result = get_od_pairs(sample_gtfs_dict, include_geometry=False)
 
@@ -120,7 +120,7 @@ class TestGetOdPairs:
         assert isinstance(result, pd.DataFrame)
         assert len(result) == 0
 
-    def test_get_od_pairs_with_calendar_dates(self, sample_gtfs_dict_with_exceptions: dict) -> None:
+    def test_get_od_pairs_with_calendar_dates(self, sample_gtfs_dict_with_exceptions: dict[str, pd.DataFrame]) -> None:
         """Test OD pairs with calendar exceptions."""
         result = get_od_pairs(sample_gtfs_dict_with_exceptions)
 
@@ -128,7 +128,7 @@ class TestGetOdPairs:
         # Should handle calendar exceptions properly
         assert len(result) > 0
 
-    def test_get_od_pairs_with_malformed_times(self, sample_gtfs_dict: dict) -> None:
+    def test_get_od_pairs_with_malformed_times(self, sample_gtfs_dict: dict[str, pd.DataFrame]) -> None:
         """Test OD pairs with malformed time values that trigger non-string handling."""
         # Create a modified GTFS with some malformed times
         gtfs_copy = sample_gtfs_dict.copy()
@@ -188,7 +188,7 @@ class TestGetOdPairs:
 class TestTravelSummaryGraph:
     """Test the travel_summary_graph function."""
 
-    def test_travel_summary_graph_basic(self, sample_gtfs_dict: dict) -> None:
+    def test_travel_summary_graph_basic(self, sample_gtfs_dict: dict[str, pd.DataFrame]) -> None:
         """Test basic travel summary graph generation."""
         nodes_gdf, edges_gdf = travel_summary_graph(sample_gtfs_dict)
 
@@ -208,7 +208,7 @@ class TestTravelSummaryGraph:
         assert isinstance(edges_gdf.index, pd.MultiIndex)
         assert edges_gdf.index.names == ["from_stop_id", "to_stop_id"]
 
-    def test_travel_summary_graph_time_filter(self, sample_gtfs_dict: dict) -> None:
+    def test_travel_summary_graph_time_filter(self, sample_gtfs_dict: dict[str, pd.DataFrame]) -> None:
         """Test travel summary graph with time filtering."""
         nodes_gdf, edges_gdf = travel_summary_graph(
             sample_gtfs_dict,
@@ -221,7 +221,7 @@ class TestTravelSummaryGraph:
         # Should have fewer edges due to time filtering
         assert len(edges_gdf) >= 0
 
-    def test_travel_summary_graph_calendar_range(self, sample_gtfs_dict: dict) -> None:
+    def test_travel_summary_graph_calendar_range(self, sample_gtfs_dict: dict[str, pd.DataFrame]) -> None:
         """Test travel summary graph with calendar date range."""
         nodes_gdf, edges_gdf = travel_summary_graph(
             sample_gtfs_dict,
@@ -232,7 +232,7 @@ class TestTravelSummaryGraph:
         assert isinstance(nodes_gdf, gpd.GeoDataFrame)
         assert isinstance(edges_gdf, gpd.GeoDataFrame)
 
-    def test_travel_summary_graph_as_nx(self, sample_gtfs_dict: dict) -> None:
+    def test_travel_summary_graph_as_nx(self, sample_gtfs_dict: dict[str, pd.DataFrame]) -> None:
         """Test travel summary graph returning NetworkX graph."""
         result = travel_summary_graph(sample_gtfs_dict, as_nx=True)
 
@@ -249,7 +249,7 @@ class TestTravelSummaryGraph:
         with pytest.raises(ValueError, match="GTFS must contain at least stop_times and stops"):
             travel_summary_graph(incomplete_gtfs)
 
-    def test_travel_summary_graph_empty_stop_times(self, sample_gtfs_dict: dict) -> None:
+    def test_travel_summary_graph_empty_stop_times(self, sample_gtfs_dict: dict[str, pd.DataFrame]) -> None:
         """Test travel summary graph with empty stop_times."""
         gtfs_copy = sample_gtfs_dict.copy()
         gtfs_copy["stop_times"] = pd.DataFrame(columns=["trip_id", "stop_id", "arrival_time", "departure_time", "stop_sequence"])

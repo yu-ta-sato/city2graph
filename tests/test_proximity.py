@@ -55,7 +55,11 @@ DISTANCE_METRICS = ["euclidean", "manhattan"]
 BRIDGE_METHODS = [("knn", {"k": 1}), ("fixed_radius", {"radius": 3})]
 
 # Helper functions
-def _run_or_skip(fn: Callable[..., object], *args: object, **kwargs: object) -> object:
+def _run_or_skip(
+    fn: Callable[..., tuple[gpd.GeoDataFrame, gpd.GeoDataFrame] | nx.Graph],
+    *args: object,
+    **kwargs: object,
+) -> tuple[gpd.GeoDataFrame, gpd.GeoDataFrame] | nx.Graph:
     """Execute function, skipping on implementation errors."""
     try:
         return fn(*args, **kwargs)
@@ -68,7 +72,7 @@ def _is_l_shaped(line: LineString) -> bool:
     if len(coords) != 3:
         return False
     (x0, y0), (x1, y1), (x2, y2) = coords
-    return (x0 == x1 or y0 == y1) and (x1 == x2 or y1 == y2)
+    return bool((x0 == x1 or y0 == y1) and (x1 == x2 or y1 == y2))
 
 def _create_test_points(crs: str = "EPSG:27700") -> gpd.GeoDataFrame:
     """Create well-separated test points."""
@@ -183,16 +187,17 @@ class TestWaxmanGraph:
     def test_parameter_storage(self, sample_nodes_gdf: gpd.GeoDataFrame) -> None:
         """Test parameter storage in graph metadata."""
         beta, r0 = 0.7, 2.5
-        G = _run_or_skip(waxman_graph, sample_nodes_gdf, beta=beta, r0=r0, as_nx=True)
-        assert G.graph.get("beta") == beta
-        assert G.graph.get("r0") == r0
+        result = _run_or_skip(waxman_graph, sample_nodes_gdf, beta=beta, r0=r0, as_nx=True)
+        assert isinstance(result, nx.Graph)
+        assert result.graph.get("beta") == beta
+        assert result.graph.get("r0") == r0
 
     def test_single_node_networkx_output(self, single_node_gdf: gpd.GeoDataFrame) -> None:
         """Test single node case with NetworkX output - covers line 1019."""
-        G = _run_or_skip(waxman_graph, single_node_gdf, beta=0.5, r0=1.0, as_nx=True)
-        assert isinstance(G, nx.Graph)
-        assert G.number_of_nodes() == 1
-        assert G.number_of_edges() == 0
+        result = _run_or_skip(waxman_graph, single_node_gdf, beta=0.5, r0=1.0, as_nx=True)
+        assert isinstance(result, nx.Graph)
+        assert result.number_of_nodes() == 1
+        assert result.number_of_edges() == 0
 
 class TestFixedRadiusGraph:
     """Test fixed radius graph functionality."""
@@ -200,12 +205,15 @@ class TestFixedRadiusGraph:
     def test_parameter_storage(self, sample_nodes_gdf: gpd.GeoDataFrame) -> None:
         """Test radius parameter storage."""
         radius = 1.5
-        G = _run_or_skip(fixed_radius_graph, sample_nodes_gdf, radius=radius, as_nx=True)
-        assert G.graph.get("radius") == radius
+        result = _run_or_skip(fixed_radius_graph, sample_nodes_gdf, radius=radius, as_nx=True)
+        assert isinstance(result, nx.Graph)
+        assert result.graph.get("radius") == radius
 
     def test_single_node_edge_case(self, single_node_gdf: gpd.GeoDataFrame) -> None:
         """Test single node case."""
-        _, edges = _run_or_skip(fixed_radius_graph, single_node_gdf, radius=1.0)
+        result = _run_or_skip(fixed_radius_graph, single_node_gdf, radius=1.0)
+        assert isinstance(result, tuple)
+        _, edges = result
         assert edges.empty
 
 class TestTriangulationGraphs:
@@ -213,7 +221,10 @@ class TestTriangulationGraphs:
 
     @pytest.mark.parametrize("graph_fn", [delaunay_graph, gabriel_graph, relative_neighborhood_graph])
     def test_insufficient_points(
-        self, graph_fn: Callable, single_node_gdf: gpd.GeoDataFrame, two_nodes_gdf: gpd.GeoDataFrame,
+        self,
+        graph_fn: Callable[..., tuple[gpd.GeoDataFrame, gpd.GeoDataFrame] | nx.Graph],
+        single_node_gdf: gpd.GeoDataFrame,
+        two_nodes_gdf: gpd.GeoDataFrame,
     ) -> None:
         """Test behavior with insufficient points."""
         # Single point

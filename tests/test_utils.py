@@ -270,10 +270,12 @@ class TestGraphConversions(BaseConversionTest):
         assert sample_hetero_edges_dict.keys() == edges_dict_converted.keys()
 
         for node_type, original_nodes in sample_hetero_nodes_dict.items():
+            assert isinstance(nodes_dict_converted[node_type], gpd.GeoDataFrame)
             converted_nodes = nodes_dict_converted[node_type]
             # Use the first available edge type for consistency check
             first_edge_type = next(iter(sample_hetero_edges_dict.keys()))
             original_edges = sample_hetero_edges_dict[first_edge_type]
+            assert isinstance(edges_dict_converted[first_edge_type], gpd.GeoDataFrame)
             converted_edges = edges_dict_converted[first_edge_type]
             self.assert_roundtrip_consistency(original_nodes, original_edges, converted_nodes, converted_edges)
 
@@ -330,6 +332,10 @@ class TestGraphConversions(BaseConversionTest):
         """Test NetworkX to GDF conversion with different graph properties."""
         graph = request.getfixturevalue(graph_fixture)
         nodes, edges = nx_to_gdf(graph)
+
+        # These are homogeneous graphs, so ensure they return GeoDataFrames not dicts
+        assert isinstance(nodes, gpd.GeoDataFrame)
+        assert isinstance(edges, gpd.GeoDataFrame)
 
         if expect_geom:
             assert "geometry" in nodes.columns
@@ -478,6 +484,7 @@ class TestEdgeCases:
 
         # Test allow_empty parameter
         result = processor.validate_gdf(empty_gdf, allow_empty=True)
+        assert result is not None
         assert result.empty
 
         with pytest.raises(ValueError, match="GeoDataFrame cannot be empty"):
@@ -485,6 +492,7 @@ class TestEdgeCases:
 
         # Test invalid geometries handling
         result = processor.validate_gdf(invalid_geom_gdf)
+        assert result is not None
         assert len(result) < len(invalid_geom_gdf)  # Invalid geometries filtered out
 
         # Test case where filtering makes GDF empty and allow_empty=False (line 115-116)
@@ -550,7 +558,10 @@ class TestEdgeCases:
             processor.validate_nx(hetero_graph_no_edge_type)
 
     def test_heterogeneous_validation_errors(
-        self, nodes_dict_bad_keys: dict, edges_dict_bad_tuple: dict, simple_nodes_dict_type1: dict[str, gpd.GeoDataFrame],
+        self,
+        nodes_dict_bad_keys: dict[int, gpd.GeoDataFrame],
+        edges_dict_bad_tuple: dict[str, gpd.GeoDataFrame],
+        simple_nodes_dict_type1: dict[str, gpd.GeoDataFrame],
     ) -> None:
         """Test heterogeneous graph validation errors."""
         # Test invalid node type keys
@@ -572,6 +583,8 @@ class TestEdgeCases:
         empty_edges_graph.remove_edges_from(list(empty_edges_graph.edges()))
 
         nodes_gdf, edges_gdf = utils.nx_to_gdf(empty_edges_graph)
+        assert isinstance(nodes_gdf, gpd.GeoDataFrame)
+        assert isinstance(edges_gdf, gpd.GeoDataFrame)
         assert not nodes_gdf.empty
         assert edges_gdf.empty
 
@@ -614,11 +627,13 @@ class TestEdgeCases:
         # Test single-level index name handling (line 629)
         graph = utils.gdf_to_nx(nodes=single_name_index_nodes_gdf, edges=simple_edges_gdf)
         nodes_back, _ = utils.nx_to_gdf(graph)
+        assert isinstance(nodes_back, gpd.GeoDataFrame)
         assert nodes_back.index.name == "single_name"
 
         # Test else clause for index names (line 633)
         graph.graph["node_index_names"] = None
         nodes_back, _ = utils.nx_to_gdf(graph)
+        assert isinstance(nodes_back, gpd.GeoDataFrame)
         assert nodes_back.index.name is None
 
     def test_heterogeneous_edge_processing(
@@ -627,10 +642,13 @@ class TestEdgeCases:
         """Test heterogeneous edge processing paths."""
         # Test regular graph edge processing (lines 771-775)
         nodes_dict, edges_dict = utils.nx_to_gdf(regular_hetero_graph)
+        assert isinstance(nodes_dict, dict)
         assert isinstance(edges_dict, dict)
 
         # Test empty edge type (line 779)
         nodes_dict, edges_dict = utils.nx_to_gdf(empty_hetero_graph)
+        assert isinstance(nodes_dict, dict)
+        assert isinstance(edges_dict, dict)
         assert ("building", "connects", "road") in edges_dict
         assert edges_dict[("building", "connects", "road")].empty
 
@@ -641,8 +659,8 @@ class TestEdgeCases:
         assert isinstance(dual_edges, gpd.GeoDataFrame)
 
     def test_validation_type_errors(
-        self, nodes_non_dict_for_hetero: gpd.GeoDataFrame, edges_dict_for_hetero: dict,
-        edges_dict_bad_elements: dict, simple_nodes_dict_type1: dict[str, gpd.GeoDataFrame],
+        self, nodes_non_dict_for_hetero: gpd.GeoDataFrame, edges_dict_for_hetero: dict[tuple[str, str, str], gpd.GeoDataFrame],
+        edges_dict_bad_elements: dict[tuple[int, str, str], gpd.GeoDataFrame], simple_nodes_dict_type1: dict[str, gpd.GeoDataFrame],
     ) -> None:
         """Test validation type errors (lines 1761-1762, 1786-1787)."""
         # Test edges dict with nodes non-dict (line 1761-1762)
@@ -670,7 +688,7 @@ class TestEdgeCases:
         # Test line 465 - edge_index_names not dict handling
         converter = GraphConverter()
         metadata = utils.GraphMetadata(crs=sample_crs, is_hetero=True)
-        metadata.edge_index_names = "not_a_dict"  # This should trigger line 465
+        metadata.edge_index_names = "not_a_dict"  # type: ignore[assignment]  # This should trigger line 465
 
         graph = nx.Graph()
         graph.add_node(0, node_type="type1", _original_index="a", pos=(0, 0))

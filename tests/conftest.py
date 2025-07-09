@@ -5,6 +5,7 @@ import typing
 import zipfile
 from pathlib import Path
 from typing import Any
+from typing import TYPE_CHECKING
 
 import geopandas as gpd
 import networkx as nx
@@ -14,6 +15,10 @@ from shapely.geometry import LineString
 from shapely.geometry import Point
 from shapely.geometry import Polygon
 
+if TYPE_CHECKING:
+    from torch_geometric.data import Data
+    from torch_geometric.data import HeteroData
+
 # Try to import torch, skip tests if not available
 try:
     import torch
@@ -22,9 +27,9 @@ try:
     TORCH_AVAILABLE = True
 except ImportError:
     TORCH_AVAILABLE = False
-    torch = None
-    Data = None
-    HeteroData = None
+zx    torch = typing.cast("Any", None)
+    Data = typing.cast("Any", None)
+    HeteroData = typing.cast("Any", None)
 
 # Pytest skipif marker for tests requiring torch
 requires_torch = pytest.mark.skipif(
@@ -170,7 +175,7 @@ def sample_nx_graph() -> nx.Graph:
 
 
 @pytest.fixture
-def sample_pyg_data(sample_nodes_gdf: gpd.GeoDataFrame) -> "Data":
+def sample_pyg_data(sample_nodes_gdf: gpd.GeoDataFrame) -> object:
     """Fixture for a sample PyG Data object."""
     from city2graph.graph import gdf_to_pyg
     return gdf_to_pyg(sample_nodes_gdf)
@@ -180,7 +185,7 @@ def sample_pyg_data(sample_nodes_gdf: gpd.GeoDataFrame) -> "Data":
 def sample_pyg_hetero_data(
     sample_hetero_nodes_dict: dict[str, gpd.GeoDataFrame],
     sample_hetero_edges_dict: dict[tuple[str, str, str], gpd.GeoDataFrame],
-) -> "HeteroData": # type: ignore[return-value]
+) -> object:
     """Fixture for a sample PyG HeteroData object."""
     from city2graph.graph import gdf_to_pyg
     # Ensure some edges exist for testing edge feature naming
@@ -824,13 +829,13 @@ def invalid_input_string() -> str:
 
 
 @pytest.fixture
-def invalid_input_dict() -> dict:
+def invalid_input_dict() -> dict[str, str]:
     """Fixture for invalid input (dict instead of graph)."""
     return {"not": "a_graph"}
 
 
 @pytest.fixture
-def invalid_input_list() -> list:
+def invalid_input_list() -> list[int]:
     """Fixture for invalid input (list instead of graph)."""
     return [1, 2, 3]
 
@@ -1207,7 +1212,7 @@ def gtfs_zip_invalid_coords() -> typing.Generator[str, None, None]:
 
 
 @pytest.fixture
-def sample_gtfs_dict() -> dict:
+def sample_gtfs_dict() -> dict[str, pd.DataFrame]:
     """Create a sample GTFS dictionary for testing."""
     # Create stops GeoDataFrame
     stops_data = {
@@ -1269,7 +1274,7 @@ def sample_gtfs_dict() -> dict:
 
 
 @pytest.fixture
-def sample_gtfs_dict_with_exceptions(sample_gtfs_dict: dict) -> dict:
+def sample_gtfs_dict_with_exceptions(sample_gtfs_dict: dict[str, pd.DataFrame]) -> dict[str, pd.DataFrame]:
     """Create a sample GTFS dictionary with calendar exceptions."""
     gtfs_dict = sample_gtfs_dict.copy()
 
@@ -1351,7 +1356,7 @@ def hetero_edges_with_multiindex(sample_crs: str) -> dict[tuple[str, str, str], 
 
 
 @pytest.fixture
-def graph_missing_crs(sample_crs: str) -> nx.Graph:
+def graph_missing_crs() -> nx.Graph:
     """Fixture for NetworkX graph missing CRS metadata."""
     graph = nx.Graph()
     graph.add_node(1, pos=(0, 0))
@@ -1440,7 +1445,7 @@ def empty_hetero_graph(sample_crs: str) -> nx.Graph:
     graph.graph = {
         "crs": sample_crs, "is_hetero": True,
         "node_types": ["building"],
-        "edge_types": [("building", "connects", "road")]  # No actual edges
+        "edge_types": [("building", "connects", "road")],
     }
     return graph
 
@@ -1467,19 +1472,19 @@ def graph_with_edge_index_names(sample_crs: str) -> nx.Graph:
 
 
 @pytest.fixture
-def nodes_dict_bad_keys(sample_crs: str) -> dict:
+def nodes_dict_bad_keys(sample_crs: str) -> dict[int, gpd.GeoDataFrame]:
     """Fixture for nodes dict with invalid keys."""
     return {123: gpd.GeoDataFrame({"geometry": [Point(0, 0)]}, crs=sample_crs)}
 
 
 @pytest.fixture
-def edges_dict_bad_tuple(sample_crs: str) -> dict:
+def edges_dict_bad_tuple(sample_crs: str) -> dict[str, gpd.GeoDataFrame]:
     """Fixture for edges dict with invalid tuple keys."""
     return {"not_a_tuple": gpd.GeoDataFrame({"geometry": []}, crs=sample_crs)}
 
 
 @pytest.fixture
-def edges_dict_bad_elements(sample_crs: str) -> dict:
+def edges_dict_bad_elements(sample_crs: str) -> dict[tuple[int, str, str], gpd.GeoDataFrame]:
     """Fixture for edges dict with invalid tuple elements."""
     return {(123, "connects", "type2"): gpd.GeoDataFrame({"geometry": []}, crs=sample_crs)}
 
@@ -1491,7 +1496,7 @@ def nodes_non_dict_for_hetero(sample_crs: str) -> gpd.GeoDataFrame:
 
 
 @pytest.fixture
-def edges_dict_for_hetero(sample_crs: str) -> dict:
+def edges_dict_for_hetero(sample_crs: str) -> dict[tuple[str, str, str], gpd.GeoDataFrame]:
     """Fixture for edges dict for heterogeneous testing."""
     return {("type1", "connects", "type2"): gpd.GeoDataFrame({"geometry": []}, crs=sample_crs)}
 
@@ -1515,12 +1520,12 @@ def hetero_multigraph_with_original_indices(sample_crs: str) -> nx.MultiGraph:
     graph.add_node(1, pos=(0, 0), node_type="building")
     graph.add_node(2, pos=(1, 1), node_type="road")
     # Add edge with _original_edge_index attribute to trigger line 695-696
-    graph.add_edge(1, 2, key=0, edge_type=("building", "connects", "road"), 
+    graph.add_edge(1, 2, key=0, edge_type=("building", "connects", "road"),
                    _original_edge_index=("custom", "index", "key"))
     graph.graph = {
         "crs": sample_crs, "is_hetero": True,
         "node_types": ["building", "road"],
-        "edge_types": [("building", "connects", "road")]
+        "edge_types": [("building", "connects", "road")],
     }
     return graph
 
@@ -1532,12 +1537,12 @@ def hetero_graph_with_original_indices(sample_crs: str) -> nx.Graph:
     graph.add_node(1, pos=(0, 0), node_type="building")
     graph.add_node(2, pos=(1, 1), node_type="road")
     # Add edge with _original_edge_index attribute to trigger line 711
-    graph.add_edge(1, 2, edge_type=("building", "connects", "road"), 
+    graph.add_edge(1, 2, edge_type=("building", "connects", "road"),
                    _original_edge_index=("custom", "index"))
     graph.graph = {
         "crs": sample_crs, "is_hetero": True,
         "node_types": ["building", "road"],
-        "edge_types": [("building", "connects", "road")]
+        "edge_types": [("building", "connects", "road")],
     }
     return graph
 
@@ -1550,7 +1555,7 @@ def empty_hetero_multigraph(sample_crs: str) -> nx.MultiGraph:
     graph.graph = {
         "crs": sample_crs, "is_hetero": True,
         "node_types": ["building"],
-        "edge_types": [("building", "connects", "road")]  # Edge type exists but no actual edges
+        "edge_types": [("building", "connects", "road")],  # Edge type exists but no actual edges
     }
     return graph
 

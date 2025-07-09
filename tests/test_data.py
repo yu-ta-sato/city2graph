@@ -1,7 +1,10 @@
 """Tests for the data module - refactored version focusing on public API only."""
 
+from __future__ import annotations
+
 import importlib.util
 import subprocess
+from typing import TYPE_CHECKING
 
 # Import directly from data module to avoid torch import issues
 from unittest.mock import Mock
@@ -12,8 +15,13 @@ import pytest
 from shapely.geometry import LineString
 from shapely.geometry import Point
 
+if TYPE_CHECKING:
+    from shapely.geometry import Polygon
+
 spec = importlib.util.spec_from_file_location("data_module", "city2graph/data.py")
+assert spec is not None
 data_module = importlib.util.module_from_spec(spec)
+assert spec.loader is not None
 spec.loader.exec_module(data_module)
 VALID_OVERTURE_TYPES = data_module.VALID_OVERTURE_TYPES
 WGS84_CRS = data_module.WGS84_CRS
@@ -42,7 +50,7 @@ def test_wgs84_crs_constant() -> None:
 @patch("city2graph.data.gpd.read_file")
 @patch("city2graph.data.Path.mkdir")
 def test_load_overture_data_with_bbox_list(
-    mock_mkdir: Mock, mock_read_file: Mock, mock_subprocess: Mock, test_bbox: list,
+    mock_mkdir: Mock, mock_read_file: Mock, mock_subprocess: Mock, test_bbox: list[float],
 ) -> None:
     """Test load_overture_data with bounding box as list."""
     # Setup
@@ -67,7 +75,7 @@ def test_load_overture_data_with_bbox_list(
 @patch("city2graph.data.subprocess.run")
 @patch("city2graph.data.gpd.read_file")
 @patch("city2graph.data.Path.mkdir")
-def test_load_overture_data_with_polygon(mock_mkdir, mock_read_file, mock_subprocess, test_polygon) -> None:
+def test_load_overture_data_with_polygon(mock_mkdir: Mock, mock_read_file: Mock, mock_subprocess: Mock, test_polygon: Polygon) -> None:
     """Test load_overture_data with Polygon area."""
     # Setup
     mock_gdf = Mock(spec=gpd.GeoDataFrame)
@@ -80,13 +88,16 @@ def test_load_overture_data_with_polygon(mock_mkdir, mock_read_file, mock_subpro
     # Verify
     assert "building" in result
     mock_subprocess.assert_called_once()
+    mock_mkdir.assert_called()  # Verify directory creation
 
 
 @patch("city2graph.data.subprocess.run")
 @patch("city2graph.data.gpd.read_file")
 @patch("city2graph.data.gpd.clip")
 @patch("city2graph.data.Path.exists")
-def test_load_overture_data_with_polygon_clipping(mock_exists, mock_clip, mock_read_file, mock_subprocess, test_polygon) -> None:
+def test_load_overture_data_with_polygon_clipping(
+    mock_exists: Mock, mock_clip: Mock, mock_read_file: Mock, mock_subprocess: Mock, test_polygon: Polygon,
+) -> None:
     """Test that polygon areas are properly clipped."""
     # Setup
     mock_gdf = Mock(spec=gpd.GeoDataFrame)
@@ -103,10 +114,11 @@ def test_load_overture_data_with_polygon_clipping(mock_exists, mock_clip, mock_r
 
     # Verify
     mock_clip.assert_called_once()
+    mock_subprocess.assert_called()  # Verify subprocess was called
     assert result["building"] == mock_clipped_gdf
 
 
-def test_load_overture_data_invalid_types(test_bbox) -> None:
+def test_load_overture_data_invalid_types(test_bbox: list[float]) -> None:
     """Test that invalid types raise ValueError."""
     invalid_types = ["building", "invalid_type", "another_invalid"]
 
@@ -116,7 +128,7 @@ def test_load_overture_data_invalid_types(test_bbox) -> None:
 
 @patch("city2graph.data.subprocess.run")
 @patch("city2graph.data.gpd.read_file")
-def test_load_overture_data_default_types(mock_read_file, mock_subprocess, test_bbox) -> None:
+def test_load_overture_data_default_types(mock_read_file: Mock, mock_subprocess: Mock, test_bbox: list[float]) -> None:
     """Test that all valid types are used when types=None."""
     mock_gdf = Mock(spec=gpd.GeoDataFrame)
     mock_gdf.empty = False
@@ -129,9 +141,12 @@ def test_load_overture_data_default_types(mock_read_file, mock_subprocess, test_
     for data_type in VALID_OVERTURE_TYPES:
         assert data_type in result
 
+    # Verify subprocess was called for each type
+    assert mock_subprocess.call_count == len(VALID_OVERTURE_TYPES)
+
 
 @patch("city2graph.data.subprocess.run")
-def test_load_overture_data_save_to_file_false(mock_subprocess, test_bbox) -> None:
+def test_load_overture_data_save_to_file_false(mock_subprocess: Mock, test_bbox: list[float]) -> None:
     """Test load_overture_data with save_to_file=False."""
     result = load_overture_data(test_bbox, types=["building"], save_to_file=False, return_data=False)
 
@@ -146,16 +161,17 @@ def test_load_overture_data_save_to_file_false(mock_subprocess, test_bbox) -> No
 
 @patch("city2graph.data.subprocess.run")
 @patch("city2graph.data.gpd.read_file")
-def test_load_overture_data_return_data_false(mock_read_file, mock_subprocess, test_bbox) -> None:
+def test_load_overture_data_return_data_false(mock_read_file: Mock, mock_subprocess: Mock, test_bbox: list[float]) -> None:
     """Test load_overture_data with return_data=False."""
     result = load_overture_data(test_bbox, types=["building"], return_data=False)
 
     assert result == {}
     mock_read_file.assert_not_called()
+    mock_subprocess.assert_called()  # Should still call subprocess to generate files
 
 
 @patch("city2graph.data.subprocess.run")
-def test_load_overture_data_subprocess_error(mock_subprocess, test_bbox) -> None:
+def test_load_overture_data_subprocess_error(mock_subprocess: Mock, test_bbox: list[float]) -> None:
     """Test that subprocess errors are propagated."""
     mock_subprocess.side_effect = subprocess.CalledProcessError(1, "overturemaps")
 
@@ -165,7 +181,7 @@ def test_load_overture_data_subprocess_error(mock_subprocess, test_bbox) -> None
 
 @patch("city2graph.data.subprocess.run")
 @patch("city2graph.data.gpd.read_file")
-def test_load_overture_data_with_prefix(mock_read_file: Mock, mock_subprocess: Mock, test_bbox: list) -> None:
+def test_load_overture_data_with_prefix(mock_read_file: Mock, mock_subprocess: Mock, test_bbox: list[float]) -> None:
     """Test load_overture_data with filename prefix."""
     prefix = "test_prefix_"
 
@@ -185,7 +201,7 @@ def test_load_overture_data_with_prefix(mock_read_file: Mock, mock_subprocess: M
 @patch("city2graph.data.subprocess.run")
 @patch("city2graph.data.gpd.read_file")
 @patch("city2graph.data.Path.exists")
-def test_load_overture_data_file_not_exists(mock_exists: Mock, mock_read_file: Mock, mock_subprocess: Mock, test_bbox: list) -> None:
+def test_load_overture_data_file_not_exists(mock_exists: Mock, mock_read_file: Mock, mock_subprocess: Mock, test_bbox: list[float]) -> None:
     """Test behavior when output file doesn't exist."""
     mock_exists.return_value = False
 
@@ -194,10 +210,11 @@ def test_load_overture_data_file_not_exists(mock_exists: Mock, mock_read_file: M
     # Should return empty GeoDataFrame when file doesn't exist
     mock_read_file.assert_not_called()
     assert "building" in result
+    mock_subprocess.assert_called()  # Should still attempt to generate files
 
 
 # Tests for process_overture_segments function
-def test_process_overture_segments_empty_input(data_empty_gdf) -> None:
+def test_process_overture_segments_empty_input(data_empty_gdf: gpd.GeoDataFrame) -> None:
     """Test process_overture_segments with empty GeoDataFrame."""
     result = process_overture_segments(data_empty_gdf)
 
@@ -205,7 +222,7 @@ def test_process_overture_segments_empty_input(data_empty_gdf) -> None:
     assert result.crs == WGS84_CRS
 
 
-def test_process_overture_segments_basic(data_sample_segments_gdf) -> None:
+def test_process_overture_segments_basic(data_sample_segments_gdf: gpd.GeoDataFrame) -> None:
     """Test basic functionality of process_overture_segments."""
     result = process_overture_segments(data_sample_segments_gdf, get_barriers=False)
 
@@ -236,7 +253,7 @@ def test_process_overture_segments_with_connectors(
         assert "split_to" in result.columns
 
 
-def test_process_overture_segments_with_barriers(data_sample_segments_gdf) -> None:
+def test_process_overture_segments_with_barriers(data_sample_segments_gdf: gpd.GeoDataFrame) -> None:
     """Test process_overture_segments with barrier generation."""
     result = process_overture_segments(data_sample_segments_gdf, get_barriers=True)
 
@@ -273,7 +290,7 @@ def test_process_overture_segments_with_threshold(
     assert "length" in result.columns
 
 
-def test_process_overture_segments_no_connectors(data_sample_segments_gdf) -> None:
+def test_process_overture_segments_no_connectors(data_sample_segments_gdf: gpd.GeoDataFrame) -> None:
     """Test process_overture_segments with None connectors."""
     result = process_overture_segments(data_sample_segments_gdf, connectors_gdf=None)
 
@@ -281,7 +298,7 @@ def test_process_overture_segments_no_connectors(data_sample_segments_gdf) -> No
     assert len(result) == len(data_sample_segments_gdf)
 
 
-def test_process_overture_segments_empty_connectors(data_sample_segments_gdf, data_empty_gdf) -> None:
+def test_process_overture_segments_empty_connectors(data_sample_segments_gdf: gpd.GeoDataFrame, data_empty_gdf: gpd.GeoDataFrame) -> None:
     """Test process_overture_segments with empty connectors GeoDataFrame."""
     result = process_overture_segments(data_sample_segments_gdf, connectors_gdf=data_empty_gdf)
 
@@ -489,7 +506,14 @@ def test_load_and_process_integration() -> None:
 @patch("city2graph.data.subprocess.run")
 @patch("city2graph.data.gpd.read_file")
 @patch("city2graph.data.Path.exists")
-def test_real_world_scenario_simulation(mock_exists, mock_read_file, mock_subprocess, realistic_segments_gdf, realistic_connectors_gdf, test_bbox) -> None:
+def test_real_world_scenario_simulation(
+    mock_exists: Mock,
+    mock_read_file: Mock,
+    mock_subprocess: Mock,
+    realistic_segments_gdf: gpd.GeoDataFrame,
+    realistic_connectors_gdf: gpd.GeoDataFrame,
+    test_bbox: list[float],
+) -> None:
     """Test a scenario that simulates real-world usage."""
     # Mock the file reading to return realistic data
     mock_read_file.side_effect = [realistic_segments_gdf, realistic_connectors_gdf]
@@ -502,11 +526,12 @@ def test_real_world_scenario_simulation(mock_exists, mock_read_file, mock_subpro
     processed_segments = process_overture_segments(
         data["segment"],
         connectors_gdf=data["connector"],
-    )
-
-    # Verify the result
+    )    # Verify the result
     assert not processed_segments.empty
     assert "barrier_geometry" in processed_segments.columns
+
+    # Verify mocks were called appropriately
+    mock_subprocess.assert_called()  # Should be called for data loading
     assert "length" in processed_segments.columns
 
 
@@ -625,8 +650,11 @@ def test_process_overture_segments_with_full_coverage_barriers() -> None:
 @patch("city2graph.data.subprocess.run")
 @patch("city2graph.data.gpd.read_file")
 @patch("city2graph.data.Path.mkdir")
-def test_load_overture_data_comprehensive_all_types(mock_mkdir, mock_read_file, mock_subprocess) -> None:
+def test_load_overture_data_comprehensive_all_types(mock_mkdir: Mock, mock_read_file: Mock, mock_subprocess: Mock) -> None:
     """Test load_overture_data with all types (types=None)."""
+    # mock_mkdir is set up by @patch decorator but not called in this test with save_to_file=False
+    _ = mock_mkdir  # Acknowledge the parameter
+
     # Mock GeoDataFrame
     mock_gdf = Mock(spec=gpd.GeoDataFrame)
     mock_gdf.empty = False
@@ -676,12 +704,8 @@ def test_process_overture_segments_with_short_linestring() -> None:
     """Test endpoint clustering with LineString having insufficient coordinates."""
     from shapely.geometry import LineString
 
-    # Create a LineString with only one coordinate (invalid but possible edge case)
-    try:
-        invalid_geom = LineString([(0, 0)])  # This might raise an error
-    except:
-        # If invalid geometry creation fails, use a valid minimal LineString
-        invalid_geom = LineString([(0, 0), (0, 0)])  # Degenerate but valid
+    # Create a degenerate LineString (same start and end point)
+    invalid_geom = LineString([(0, 0), (0, 0)])  # Degenerate but valid
 
     geometries = [
         LineString([(0, 0), (1, 1)]),

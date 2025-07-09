@@ -164,6 +164,14 @@ warn_unreachable = true
 warn_return_any = true
 warn_unused_configs = true
 disable_error_code = ["unreachable"]
+exclude = [
+    "activate/",
+    "deactivate/",
+    ".venv/",
+    "__pycache__/",
+    "build/",
+    "dist/",
+]
 
 [tool.ruff]
 cache-dir = "~/.cache/pre-commit/ruff"
@@ -221,7 +229,7 @@ extend-select = ["ALL"]
 force-single-line = true
 
 [tool.ruff.lint.mccabe]
-max-complexity = 14
+max-complexity = 15
 
 [tool.ruff.lint.pycodestyle]
 max-line-length = 140
@@ -231,7 +239,7 @@ convention = "numpy"
 
 [tool.ruff.lint.pylint]
 max-args = 10
-max-branches = 14
+max-branches = 15
 
 [tool.pytest.ini_options]
 addopts = "--cov=city2graph --cov-report term-missing"

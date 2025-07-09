@@ -112,7 +112,7 @@ html_css_files = [
 ]
 
 # Custom JavaScript files (if needed)
-html_js_files = []
+html_js_files: list[str] = []
 
 # Theme-specific configuration
 html_theme_options = {

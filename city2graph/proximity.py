@@ -1490,12 +1490,7 @@ def _add_edges(
         for u, v in G.edges():
             p1 = coords[idx_map[u]]
             p2 = coords[idx_map[v]]
-            if metric.lower() == "manhattan":
-                geom = LineString(
-                    [(p1[0], p1[1]), (p2[0], p1[1]), (p2[0], p2[1])],
-                )
-            else:  # Euclidean
-                geom = LineString([p1, p2])
+            geom = LineString([(p1[0], p1[1]), (p2[0], p1[1]), (p2[0], p2[1])]) if metric.lower() == "manhattan" else LineString([p1, p2])
             geom_attr[(u, v)] = geom
 
     nx.set_edge_attributes(G, geom_attr, "geometry")

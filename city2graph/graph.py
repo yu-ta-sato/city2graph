@@ -1312,7 +1312,7 @@ def validate_pyg(data: Data | HeteroData) -> GraphMetadata:
             f"PyG object has 'graph_metadata' of incorrect type: {actual_metadata_type}. "
             f"Expected GraphMetadata. This object may not have been created by city2graph."
         )
-        raise ValueError(msg)
+        raise TypeError(msg)
 
     metadata = data.graph_metadata
     is_hetero = isinstance(data, HeteroData)

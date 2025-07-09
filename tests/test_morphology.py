@@ -2,6 +2,7 @@
 
 import logging
 import warnings
+from collections.abc import Callable
 from typing import Any
 
 import geopandas as gpd
@@ -21,7 +22,11 @@ class TestMorphologyBase:
     """Base class with common test utilities and validation methods."""
 
     @staticmethod
-    def validate_basic_output(nodes: Any, edges: Any, expected_node_types: list | None = None) -> None:
+    def validate_basic_output(
+        nodes: gpd.GeoDataFrame | dict[str, gpd.GeoDataFrame],
+        edges: gpd.GeoDataFrame | dict[str, gpd.GeoDataFrame],
+        expected_node_types: list[str] | None = None,
+    ) -> None:
         """Validate basic output structure for morphology functions."""
         if expected_node_types:
             # For morphological_graph (returns dict)
@@ -41,7 +46,10 @@ class TestMorphologyBase:
         assert graph.number_of_nodes() >= 0
 
     @staticmethod
-    def validate_empty_output(nodes: Any, edges: Any) -> None:
+    def validate_empty_output(
+        nodes: gpd.GeoDataFrame | dict[str, gpd.GeoDataFrame],
+        edges: gpd.GeoDataFrame | dict[str, gpd.GeoDataFrame],
+    ) -> None:
         """Validate output for empty inputs."""
         if isinstance(nodes, dict):
             # morphological_graph case
@@ -51,11 +59,13 @@ class TestMorphologyBase:
                 assert edge_gdf.empty
         else:
             # individual function case
+            assert isinstance(nodes, gpd.GeoDataFrame)
+            assert isinstance(edges, gpd.GeoDataFrame)
             assert nodes.empty
             assert edges.empty
 
     @staticmethod
-    def validate_edge_columns(edges: gpd.GeoDataFrame, expected_columns: list) -> None:
+    def validate_edge_columns(edges: gpd.GeoDataFrame, expected_columns: list[str]) -> None:
         """Validate that edges contain expected columns."""
         if not edges.empty:
             for col in expected_columns:
@@ -184,11 +194,11 @@ class TestMorphologicalGraphEdgeCases(TestMorphologyBase):
     @pytest.mark.parametrize("invalid_contiguity", ["invalid", "diagonal", 123])
     def test_invalid_contiguity(
         self, sample_buildings_gdf: gpd.GeoDataFrame, sample_segments_gdf: gpd.GeoDataFrame,
-        invalid_contiguity: Any,
+        invalid_contiguity: str | int,
     ) -> None:
         """Test invalid contiguity values."""
         with pytest.raises(ValueError, match="contiguity must be"):
-            morphological_graph(sample_buildings_gdf, sample_segments_gdf, contiguity=invalid_contiguity)
+            morphological_graph(sample_buildings_gdf, sample_segments_gdf, contiguity=str(invalid_contiguity))
 
     @pytest.mark.parametrize("invalid_value", [-100, -1, -0.1])
     def test_negative_parameters(
@@ -199,7 +209,7 @@ class TestMorphologicalGraphEdgeCases(TestMorphologyBase):
         Point(0, 0)
 
         # Test negative clipping buffer (this should raise ValueError)
-        with pytest.raises(ValueError):
+        with pytest.raises(ValueError, match="clipping_buffer cannot be negative."):
             morphological_graph(
                 sample_buildings_gdf, sample_segments_gdf,
                 clipping_buffer=invalid_value,
@@ -494,7 +504,7 @@ class TestInputValidationAndErrors(TestMorphologyBase):
         (private_to_public_graph, ("sample_tessellation_gdf", "not_gdf")),
         (public_to_public_graph, ("not_gdf",)),
     ])
-    def test_invalid_input_types(self, function, args, request) -> None:
+    def test_invalid_input_types(self, function: Callable[..., Any], args: tuple[str, ...], request: pytest.FixtureRequest) -> None:
         """Test all functions with invalid input types."""
         # Resolve fixture names to actual objects
         resolved_args = []
@@ -510,7 +520,7 @@ class TestInputValidationAndErrors(TestMorphologyBase):
     def test_empty_input_handling(self, empty_gdf: gpd.GeoDataFrame) -> None:
         """Test all functions handle empty inputs gracefully."""
         # Test each function with appropriate empty inputs
-        functions_and_args = [
+        functions_and_args: list[tuple[Callable[..., Any], tuple[gpd.GeoDataFrame, ...]]] = [
             (private_to_private_graph, (empty_gdf,)),
             (private_to_public_graph, (empty_gdf, empty_gdf)),
             (public_to_public_graph, (empty_gdf,)),
