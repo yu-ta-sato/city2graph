@@ -2,9 +2,7 @@
 Utils
 =====
 
-The utils module provides core utility functions for graph operations, data validation, and geometric processing.
-It includes functions for converting between different graph formats, creating spatial tessellations, and
-performing various graph analysis operations.
+.. automodule:: city2graph.utils
 
 .. currentmodule:: city2graph.utils
 
