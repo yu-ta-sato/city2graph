@@ -201,7 +201,7 @@ class TestTravelSummaryGraph:
         assert isinstance(edges_gdf, gpd.GeoDataFrame)
         assert len(edges_gdf) > 0
 
-        expected_edge_cols = {"travel_time", "frequency"}
+        expected_edge_cols = {"mean_travel_time", "frequency"}
         assert expected_edge_cols.issubset(edges_gdf.columns)
 
         # Check MultiIndex

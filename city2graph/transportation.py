@@ -473,7 +473,7 @@ def travel_summary_graph(
     -------
     (nodes_gdf, edges_gdf) or networkx.Graph
         • **Nodes** - every stop with a valid geometry.
-        • **Edges** - columns = ``from_stop_id, to_stop_id, travel_time,
+        • **Edges** - columns = ``from_stop_id, to_stop_id, mean_travel_time,
           frequency, geometry``.
 
     Examples
@@ -547,7 +547,7 @@ def travel_summary_graph(
         total_service_count=("service_count", "sum"),
     ).reset_index()
 
-    agg_calcs["travel_time"] = agg_calcs["weighted_time_sum"] / agg_calcs["total_service_count"]
+    agg_calcs["mean_travel_time"] = agg_calcs["weighted_time_sum"] / agg_calcs["total_service_count"]
     agg_calcs["frequency"] = agg_calcs["total_service_count"]
 
     # 7. Create GeoDataFrames for nodes and edges
@@ -560,7 +560,7 @@ def travel_summary_graph(
         {
             "from_stop_id": agg_calcs["stop_id"],
             "to_stop_id": agg_calcs["next_stop_id"],
-            "travel_time": agg_calcs["travel_time"],
+            "mean_travel_time": agg_calcs["mean_travel_time"],
             "frequency": agg_calcs["frequency"],
         },
         geometry=edges_geom,
