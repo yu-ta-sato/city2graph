@@ -4,8 +4,8 @@ import tempfile
 import typing
 import zipfile
 from pathlib import Path
-from typing import Any
 from typing import TYPE_CHECKING
+from typing import Any
 
 import geopandas as gpd
 import networkx as nx
