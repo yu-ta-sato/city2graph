@@ -137,6 +137,41 @@ def _coerce_types(gtfs: dict[str, pd.DataFrame]) -> None:
             if d in cal.columns:
                 cal[d] = cal[d].astype(float).fillna(0).astype(bool)
 
+def _get_service_counts(gtfs_data: dict[str, pd.DataFrame | gpd.GeoDataFrame], start_date_str: str, end_date_str: str) -> pd.Series:
+    """Calculate the number of active days for each service_id within a date range."""
+    calendar = gtfs_data.get("calendar")
+    calendar_dates = gtfs_data.get("calendar_dates")
+
+    start_date = datetime.strptime(start_date_str, "%Y%m%d")
+    end_date = datetime.strptime(end_date_str, "%Y%m%d")
+
+    # Create a date range and map each date to its weekday name
+    all_dates = pd.to_datetime(pd.date_range(start=start_date, end=end_date, freq="D"))
+    date_df = pd.DataFrame({"date": all_dates, "day_name": all_dates.strftime("%A").str.lower()})
+
+    service_days = pd.Series(dtype=int)
+
+    # Process regular service days from calendar.txt
+    if calendar is not None:
+        cal_df = calendar.melt(
+            id_vars=["service_id", "start_date", "end_date"],
+            value_vars=["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"],
+            var_name="day_name",
+            value_name="is_active",
+        )
+        cal_df = cal_df[cal_df["is_active"] == 1]
+
+        # Merge with the date range to find active dates
+        merged = cal_df.merge(date_df, on="day_name")
+        merged["start_date"] = pd.to_datetime(merged["start_date"], format="%Y%m%d")
+        merged["end_date"] = pd.to_datetime(merged["end_date"], format="%Y%m%d")
+
+        active_days = merged[
+            (merged["date"] >= merged["start_date"]) & (merged["date"] <= merged["end_date"])
+        ]
+        service_days = active_days.groupby("service_id").size()
+
+    return service_days.astype(int).clip(lower=0)
 
 # ---------------------------------------------------------------------------
 # Geometry builders
@@ -462,63 +497,71 @@ def travel_summary_graph(
     >>> print(G.number_of_nodes(), G.number_of_edges())
     2564 3178
     """
-    if "stop_times" not in gtfs or "stops" not in gtfs:
-        msg = "GTFS must contain at least stop_times and stops"
+    # 1. Validate Required Data
+    required_keys = {"stop_times", "stops"}
+    if not required_keys.issubset(gtfs.keys()):
+        missing = required_keys - gtfs.keys()
+        msg = f"GTFS must contain at least stop_times and stops. Missing: {', '.join(missing)}"
         raise ValueError(msg)
 
-    # 1. Process stop_times to calculate travel times
-    st = gtfs["stop_times"].copy()
-    st["arrival_sec"] = st["arrival_time"].map(_time_to_seconds)
-    st["departure_sec"] = st["departure_time"].map(_time_to_seconds)
+    # 2. Preprocess Data
+    stop_times = gtfs["stop_times"].copy()
+    trips = gtfs["trips"][["trip_id", "service_id"]].copy()
 
-    if start_time:
-        st = st[st["departure_sec"] >= _time_to_seconds(start_time)]
-    if end_time:
-        st = st[st["arrival_sec"] <= _time_to_seconds(end_time)]
+    stop_times["departure_time_sec"] = stop_times["departure_time"].map(_time_to_seconds)
+    stop_times["arrival_time_sec"] = stop_times["arrival_time"].map(_time_to_seconds)
 
-    st = st.sort_values(["trip_id", "stop_sequence"])
-    st["next_stop_id"] = st.groupby("trip_id")["stop_id"].shift(1)
-    st["next_arr_sec"] = st.groupby("trip_id")["arrival_sec"].shift(1)
-    st = st.dropna(subset=["next_stop_id", "next_arr_sec"]).copy()
-    st["travel_time"] = st["next_arr_sec"] - st["departure_sec"]
+    # 3. Filter by Time of Day
+    if start_time is not None:
+        stop_times = stop_times[stop_times["departure_time_sec"] >= _time_to_seconds(start_time)]
+    if end_time is not None:
+        stop_times = stop_times[stop_times["arrival_time_sec"] <= _time_to_seconds(end_time)]
 
-    # 2. Apply calendar weighting for frequency
-    st = st.merge(gtfs["trips"][["trip_id", "service_id"]], on="trip_id", how="left")
+    # 4. Merge Data and Calculate Service Counts
+    stop_times = stop_times.merge(trips, on="trip_id", how="inner")
 
-    cal_start = calendar_start or gtfs["calendar"]["start_date"].min()
-    cal_end = calendar_end or gtfs["calendar"]["end_date"].max()
-    srv_dates = _service_day_map(
-        gtfs["calendar"],
-        datetime.strptime(cal_start, "%Y%m%d"),
-        datetime.strptime(cal_end, "%Y%m%d"),
+    if calendar_start and calendar_end:
+        service_counts = _get_service_counts(gtfs, calendar_start, calendar_end)
+        stop_times["service_count"] = stop_times["service_id"].map(service_counts).fillna(0)
+        stop_times = stop_times[stop_times["service_count"] > 0]
+    else:
+        stop_times["service_count"] = 1
+
+    # 5. Calculate Travel Time Between Consecutive Stops
+    stop_times = stop_times.sort_values(["trip_id", "stop_sequence"])
+    grouped = stop_times.groupby("trip_id")
+
+    valid_pairs = stop_times.assign(
+        next_stop_id=grouped["stop_id"].shift(-1),
+        next_arrival_time_sec=grouped["arrival_time_sec"].shift(-1),
+    ).dropna(subset=["next_stop_id", "next_arrival_time_sec"])
+
+    valid_pairs = valid_pairs.assign(
+        travel_time=valid_pairs["next_arrival_time_sec"] - valid_pairs["departure_time_sec"],
     )
-    counts = pd.Series({k: len(v) for k, v in srv_dates.items()}, name="service_days")
-    st = (
-        st.merge(counts, left_on="service_id", right_index=True, how="left")
-        .fillna(0)
-        .assign(weighted_time=lambda df: df["travel_time"] * df["service_days"])
-    )
+    valid_pairs = valid_pairs[valid_pairs["travel_time"] > 0]
 
-    # 3. Aggregate results
-    agg = (
-        st.groupby(["stop_id", "next_stop_id"])
-        .agg(total_weight=("weighted_time", "sum"), freq=("service_days", "sum"))
-        .reset_index()
-    )
-    agg["travel_time"] = agg["total_weight"] / agg["freq"]
+    # 6. Aggregate Results
+    agg_calcs = valid_pairs.groupby(["stop_id", "next_stop_id"]).agg(
+        weighted_time_sum=("travel_time", lambda x: (x * valid_pairs.loc[x.index, "service_count"]).sum()),
+        total_service_count=("service_count", "sum"),
+    ).reset_index()
 
-    # 4. Create GeoDataFrames for nodes and edges
+    agg_calcs["travel_time"] = agg_calcs["weighted_time_sum"] / agg_calcs["total_service_count"]
+    agg_calcs["frequency"] = agg_calcs["total_service_count"]
+
+    # 7. Create GeoDataFrames for nodes and edges
     nodes_gdf: gpd.GeoDataFrame = gtfs["stops"].set_index("stop_id")
     edges_geom = [
         LineString([nodes_gdf.loc[u].geometry, nodes_gdf.loc[v].geometry])
-        for u, v in zip(agg["stop_id"], agg["next_stop_id"], strict=False)
+        for u, v in zip(agg_calcs["stop_id"], agg_calcs["next_stop_id"], strict=False)
     ]
     edges_gdf = gpd.GeoDataFrame(
         {
-            "from_stop_id": agg["stop_id"],
-            "to_stop_id": agg["next_stop_id"],
-            "travel_time": agg["travel_time"],
-            "frequency": agg["freq"],
+            "from_stop_id": agg_calcs["stop_id"],
+            "to_stop_id": agg_calcs["next_stop_id"],
+            "travel_time": agg_calcs["travel_time"],
+            "frequency": agg_calcs["frequency"],
         },
         geometry=edges_geom,
         crs=nodes_gdf.crs,
