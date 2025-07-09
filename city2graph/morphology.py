@@ -1031,7 +1031,7 @@ def _find_closest_node_to_center(
     """Find the graph node ID closest to the geometric center point."""
     # Extract node positions from the graph (all nodes in spatial graphs have 'pos')
     pos = nx.get_node_attributes(graph, "pos")
-    
+
     node_ids = list(pos.keys())
     node_coords = np.array(list(pos.values()))
 

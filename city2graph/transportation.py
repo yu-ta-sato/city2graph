@@ -71,7 +71,7 @@ def _time_to_seconds(value: str | float | None) -> float:
     # Convert None and numeric values to float directly
     if not isinstance(value, str):
         return float(value or 0)
-    
+
     # At this point, value must be a string - parse time
     h, m, s = map(int, value.split(":"))
     return h * 3600 + m * 60 + s

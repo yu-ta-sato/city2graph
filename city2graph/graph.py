@@ -794,7 +794,7 @@ def _create_node_positions(
 
     # Get centroids of geometries
     centroids = geom_series.centroid
-    
+
     # Map torch dtype to numpy dtype for consistency
     numpy_dtype = torch.tensor(0, dtype=dtype).numpy().dtype
     pos_data = np.column_stack([
@@ -1173,11 +1173,11 @@ def _process_hetero_edges(
         # The type system guarantees these are dictionaries based on _process_hetero_nodes
         src_mapping_raw = node_mappings[src_type]["mapping"]
         dst_mapping_raw = node_mappings[dst_type]["mapping"]
-        
+
         # Type assertion for mypy - these are guaranteed to be dicts by construction
         assert isinstance(src_mapping_raw, dict), f"Expected dict mapping for {src_type}"
         assert isinstance(dst_mapping_raw, dict), f"Expected dict mapping for {dst_type}"
-        
+
         src_mapping: dict[str | int, int] = src_mapping_raw
         dst_mapping: dict[str | int, int] = dst_mapping_raw
 
@@ -1832,13 +1832,7 @@ def _add_hetero_nodes_to_graph(graph: nx.Graph, data: HeteroData) -> dict[str, i
         if hasattr(node_data, "x") and node_data.x is not None:
             x_np = node_data.x.detach().cpu().numpy()
             # Handle the type union for node_feature_cols
-            if isinstance(metadata.node_feature_cols, dict):
-                feature_cols = (
-                    metadata.node_feature_cols.get(node_type)
-                    or [f"feat_{j}" for j in range(x_np.shape[1])]
-                )
-            else:
-                feature_cols = [f"feat_{j}" for j in range(x_np.shape[1])]
+            feature_cols = metadata.node_feature_cols.get(node_type) or [f"feat_{j}" for j in range(x_np.shape[1])]
             for j, col_name in enumerate(feature_cols[:x_np.shape[1]]):
                 attrs_df[col_name] = x_np[:, j]
 
@@ -1846,13 +1840,7 @@ def _add_hetero_nodes_to_graph(graph: nx.Graph, data: HeteroData) -> dict[str, i
         if hasattr(node_data, "y") and node_data.y is not None:
             y_np = node_data.y.detach().cpu().numpy()
             # Handle the type union for node_label_cols
-            if isinstance(metadata.node_label_cols, dict):
-                label_cols = (
-                    metadata.node_label_cols.get(node_type)
-                    or [f"label_{j}" for j in range(y_np.shape[1])]
-                )
-            else:
-                label_cols = [f"label_{j}" for j in range(y_np.shape[1])]
+            label_cols = metadata.node_label_cols.get(node_type) or [f"label_{j}" for j in range(y_np.shape[1])]
             for j, col_name in enumerate(label_cols[:y_np.shape[1]]):
                 attrs_df[col_name] = y_np[:, j]
 
@@ -1889,11 +1877,11 @@ def _add_hetero_edges_to_graph(graph: nx.Graph, data: HeteroData, node_offset: d
 
 
 def _create_edge_attrs_dataframe(
-    edge_store: Data, 
-    metadata: GraphMetadata, 
-    rel_type: str, 
-    edge_type: tuple[str, str, str], 
-    num_edges: int
+    edge_store: Data,
+    metadata: GraphMetadata,
+    rel_type: str,
+    edge_type: tuple[str, str, str],
+    num_edges: int,
 ) -> pd.DataFrame:
     """Create edge attributes DataFrame with features and original indices."""
     # Start with base DataFrame
