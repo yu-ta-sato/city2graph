@@ -80,11 +80,13 @@ Advanced usage with spatial filtering:
 ... )
 """
 
+# Standard library imports
 import itertools
 import logging
 import math
 import warnings
 
+# Third-party imports
 import geopandas as gpd
 import libpysal
 import networkx as nx
@@ -95,6 +97,7 @@ from scipy.spatial.distance import pdist
 from shapely.creation import linestrings as sh_linestrings
 from shapely.geometry import Point
 
+# Local imports
 from .utils import create_tessellation
 from .utils import dual_graph
 from .utils import filter_graph_by_distance
@@ -102,7 +105,7 @@ from .utils import gdf_to_nx
 from .utils import nx_to_gdf
 from .utils import segments_to_graph
 
-# Define the public API for this module
+# Public API definition
 __all__ = [
     "morphological_graph",
     "private_to_private_graph",
@@ -110,10 +113,11 @@ __all__ = [
     "public_to_public_graph",
 ]
 
+# Module logger configuration
 logger = logging.getLogger(__name__)
 
 
-# ============================================================================
+# =============================================================================
 # MAIN MORPHOLOGICAL GRAPH FUNCTION
 # ============================================================================
 
@@ -699,13 +703,8 @@ def public_to_public_graph(
             public_gdf_work["public_id"] = public_gdf_work["public_id"].astype(str)
     else:
         # Create a unique identifier for each row that can handle any index type
-        if isinstance(public_gdf_work.index, pd.MultiIndex):
-            # For MultiIndex, create a string representation of the tuple
-            public_gdf_work["_edge_id"] = [str(idx) for idx in public_gdf_work.index]
-        else:
-            # For regular index, use the index values directly
-            public_gdf_work["_edge_id"] = public_gdf_work.index
         edge_id_col = "_edge_id"
+        public_gdf_work["_edge_id"] = [str(idx) for idx in public_gdf_work.index]
 
     # Convert public_gdf to a graph
     nodes, edges = segments_to_graph(public_gdf_work)
@@ -1126,10 +1125,6 @@ def _add_building_info(
     geopandas.GeoDataFrame
         Tessellation with building information
     """
-    # If no buildings are provided, return the tessellation as is
-    if buildings.empty:
-        return tess.copy()
-
     # Perform a spatial join (left join) from tessellation to buildings based on intersection
     # This adds columns from 'buildings' to 'tess' for intersecting features.
     # 'index_right' column is added by sjoin, containing the index of the joined building.
@@ -1231,10 +1226,7 @@ def _set_edge_index(
     geopandas.GeoDataFrame
         GeoDataFrame with multi-index set
     """
-    # If both columns exist, set MultiIndex regardless of whether GDF is empty
-    if from_col in gdf.columns and to_col in gdf.columns:
-        return gdf.set_index([from_col, to_col]) # Set MultiIndex using the two columns
-    return gdf # Otherwise, return GDF unchanged (e.g., if columns missing)
+    return gdf.set_index([from_col, to_col])
 
 
 # ============================================================================

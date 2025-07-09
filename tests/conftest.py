@@ -104,6 +104,7 @@ def sample_hetero_nodes_dict(sample_crs: str) -> dict[str, gpd.GeoDataFrame]:
         "road_id": ["r1", "r2"],
         "r_feat1": [5.5, 6.0],
         "r_label": [0, 0],
+        "length": [100.0, 120.0],  # Add length column for tests
         "geometry": [Point(10, 12), Point(12, 12)],
     }
     roads_gdf = gpd.GeoDataFrame(roads_data, crs=sample_crs).set_index("road_id")
@@ -1287,156 +1288,293 @@ def not_a_pyg_object() -> str:
     """Fixture for an object that is not a PyG Data or HeteroData object."""
     return "not_a_pyg_object"
 
-@pytest.fixture(scope="session")
-def sample_crs() -> str:
-    """Return standard coordinate reference system for tests."""
-    return "EPSG:27700"
+
+# Additional fixtures for enhanced test coverage
+@pytest.fixture
+def all_invalid_geom_gdf(sample_crs: str) -> gpd.GeoDataFrame:
+    """Fixture for GeoDataFrame with all invalid geometries."""
+    return gpd.GeoDataFrame({
+        "id": [1, 2],
+        "geometry": [None, Point(0, 0).buffer(0).buffer(-1)],  # All invalid
+    }, crs=sample_crs)
 
 
 @pytest.fixture
-def sample_nodes_gdf(sample_crs: str) -> gpd.GeoDataFrame:
-    """Return standard nodes GeoDataFrame with features and labels."""
-    data = {
-        "node_id": [1, 2, 3, 4],
-        "feature1": [10.0, 20.0, 30.0, 40.0],
-        "label1": [0, 1, 0, 1],
-        "geometry": [Point(0, 0), Point(1, 1), Point(0, 1), Point(1, 0)],
-    }
-    return gpd.GeoDataFrame(data, crs=sample_crs).set_index("node_id")
+def invalid_geom_gdf(sample_crs: str) -> gpd.GeoDataFrame:
+    """Fixture for GeoDataFrame with mixed valid/invalid geometries."""
+    return gpd.GeoDataFrame({
+        "id": [1, 2, 3, 4],
+        "geometry": [Point(0, 0), None, Point(0, 0).buffer(0).buffer(-1), Point(1, 1)],  # Mixed
+    }, crs=sample_crs)
 
 
 @pytest.fixture
-def sample_edges_gdf(sample_crs: str) -> gpd.GeoDataFrame:
-    """Return standard edges GeoDataFrame with MultiIndex."""
-    data = {
-        "edge_id": ["e1", "e2", "e3", "e4"],
-        "source_id": [1, 1, 2, 3],
-        "target_id": [2, 3, 4, 4],
-        "edge_feature1": [0.5, 0.8, 1.2, 2.5],
-        "geometry": [
-            LineString([(0, 0), (1, 1)]),
-            LineString([(0, 0), (0, 1)]),
-            LineString([(1, 1), (1, 0)]),
-            LineString([(0, 1), (1, 0)]),
-        ],
-    }
-    multi_index = pd.MultiIndex.from_arrays(
-        [data["source_id"], data["target_id"]], names=("source_id", "target_id"),
-    )
-    return gpd.GeoDataFrame(data, index=multi_index, crs=sample_crs)
+def multiindex_nodes_gdf(sample_crs: str) -> gpd.GeoDataFrame:
+    """Fixture for nodes GeoDataFrame with MultiIndex."""
+    return gpd.GeoDataFrame({
+        "geometry": [Point(0, 0), Point(1, 1)],
+    }, index=pd.MultiIndex.from_tuples([("type1", 0), ("type1", 1)], names=["node_type", "node_id"]), crs=sample_crs)
 
 
 @pytest.fixture
-def empty_nodes_gdf(sample_crs: str) -> gpd.GeoDataFrame:
-    """Return empty nodes GeoDataFrame."""
-    return gpd.GeoDataFrame({"geometry": []}, crs=sample_crs)
+def single_name_index_nodes_gdf(sample_crs: str) -> gpd.GeoDataFrame:
+    """Fixture for nodes GeoDataFrame with single-level named index."""
+    return gpd.GeoDataFrame({
+        "geometry": [Point(0, 0), Point(1, 1)],
+    }, index=pd.Index([0, 1], name="single_name"), crs=sample_crs)
 
 
 @pytest.fixture
-def sample_hetero_nodes_dict(sample_crs: str) -> dict[str, gpd.GeoDataFrame]:
-    """Return heterogeneous nodes dictionary."""
-    buildings_data = {
-        "building_id": ["b1", "b2", "b3"],
-        "b_feat1": [100.0, 150.0, 120.0],
-        "b_label": [1, 0, 1],
-        "geometry": [Point(10, 10), Point(11, 11), Point(10, 11)],
-    }
-    buildings_gdf = gpd.GeoDataFrame(buildings_data, crs=sample_crs).set_index("building_id")
-
-    roads_data = {
-        "road_id": ["r1", "r2"],
-        "length": [5.5, 6.0],
-        "r_label": [0, 0],
-        "geometry": [Point(10, 12), Point(12, 12)],
-    }
-    roads_gdf = gpd.GeoDataFrame(roads_data, crs=sample_crs).set_index("road_id")
-
-    return {"building": buildings_gdf, "road": roads_gdf}
+def simple_edges_gdf(sample_crs: str) -> gpd.GeoDataFrame:
+    """Fixture for simple edges GeoDataFrame."""
+    return gpd.GeoDataFrame({
+        "geometry": [LineString([(0, 0), (1, 1)])],
+    }, crs=sample_crs)
 
 
 @pytest.fixture
-def sample_hetero_edges_dict(sample_crs: str) -> dict[tuple[str, str, str], gpd.GeoDataFrame]:
-    """Return heterogeneous edges dictionary."""
-    # Building to road connections
-    connections_data = {
-        "building_id": ["b1", "b2", "b3"],
-        "road_id": ["r1", "r1", "r2"],
-        "conn_feat1": [1.0, 2.0, 3.0],
-        "geometry": [
-            LineString([(10, 10), (10, 12)]),
-            LineString([(11, 11), (10, 12)]),
-            LineString([(10, 11), (12, 12)]),
-        ],
-    }
-    connections_multi_index = pd.MultiIndex.from_arrays(
-        [connections_data["building_id"], connections_data["road_id"]],
-        names=("building_id", "road_id"),
-    )
-    connections_gdf = gpd.GeoDataFrame(
-        connections_data, index=connections_multi_index, crs=sample_crs,
-    )
+def directed_multigraph_edges_gdf(sample_crs: str) -> gpd.GeoDataFrame:
+    """Fixture for edges suitable for directed multigraph testing."""
+    return gpd.GeoDataFrame({
+        "geometry": [LineString([(0, 0), (1, 1)])],
+    }, crs=sample_crs)
 
-    # Road to road connections
-    road_links_data = {
-        "source_road_id": ["r1", "r2"],
-        "target_road_id": ["r2", "r1"],
-        "link_feat1": [0.7, 0.7],
-        "geometry": [LineString([(10, 12), (12, 12)]), LineString([(12, 12), (10, 12)])],
-    }
-    road_links_multi_index = pd.MultiIndex.from_arrays(
-        [road_links_data["source_road_id"], road_links_data["target_road_id"]],
-        names=("source_road_id", "target_road_id"),
-    )
-    road_links_gdf = gpd.GeoDataFrame(
-        road_links_data, index=road_links_multi_index, crs=sample_crs,
-    )
 
+@pytest.fixture
+def hetero_edges_with_multiindex(sample_crs: str) -> dict[tuple[str, str, str], gpd.GeoDataFrame]:
+    """Fixture for heterogeneous edges with MultiIndex."""
     return {
-        ("building", "connects_to", "road"): connections_gdf,
-        ("road", "links_to", "road"): road_links_gdf,
+        ("type1", "connects", "type2"): gpd.GeoDataFrame({
+            "geometry": [LineString([(0, 0), (1, 1)])],
+        }, index=pd.MultiIndex.from_tuples([("a", "b")], names=["from", "to"]), crs=sample_crs),
     }
 
 
 @pytest.fixture
-def sample_nx_graph(sample_crs: str) -> nx.Graph:
-    """Return standard NetworkX graph."""
+def graph_missing_crs(sample_crs: str) -> nx.Graph:
+    """Fixture for NetworkX graph missing CRS metadata."""
     graph = nx.Graph()
-    graph.add_node(1, feature1=10.0, label1=0, pos=(0, 0), geometry=Point(0, 0))
-    graph.add_node(2, feature1=20.0, label1=1, pos=(1, 1), geometry=Point(1, 1))
-    graph.add_node(3, feature1=30.0, label1=0, pos=(0, 1), geometry=Point(0, 1))
-    graph.add_edge(1, 2, edge_feature1=0.5, geometry=LineString([(0, 0), (1, 1)]))
-    graph.add_edge(1, 3, edge_feature1=0.8, geometry=LineString([(0, 0), (0, 1)]))
-    graph.graph["crs"] = sample_crs
-    graph.graph["is_hetero"] = False
+    graph.add_node(1, pos=(0, 0))
+    graph.add_edge(1, 2)
+    graph.graph = {"is_hetero": False}  # Missing crs
     return graph
 
 
 @pytest.fixture
-@requires_torch
-def sample_pyg_data(sample_nodes_gdf: gpd.GeoDataFrame, sample_edges_gdf: gpd.GeoDataFrame) -> Data:
-    """Return standard PyG Data object."""
-    from city2graph.graph import gdf_to_pyg
-    return gdf_to_pyg(
-        sample_nodes_gdf,
-        sample_edges_gdf,
-        node_feature_cols=["feature1"],
-        node_label_cols=["label1"],
-        edge_feature_cols=["edge_feature1"],
-    )
+def hetero_graph_no_node_types(sample_crs: str) -> nx.Graph:
+    """Fixture for heterogeneous graph missing node_types."""
+    graph = nx.Graph()
+    graph.add_node(1, pos=(0, 0))
+    graph.add_edge(1, 2)
+    graph.graph = {"crs": sample_crs, "is_hetero": True}
+    return graph
 
 
 @pytest.fixture
-@requires_torch
-def sample_pyg_hetero_data(
-    sample_hetero_nodes_dict: dict[str, gpd.GeoDataFrame],
-    sample_hetero_edges_dict: dict[tuple[str, str, str], gpd.GeoDataFrame],
-) -> HeteroData:
-    """Return standard PyG HeteroData object."""
-    from city2graph.graph import gdf_to_pyg
-    return gdf_to_pyg(
-        sample_hetero_nodes_dict,
-        sample_hetero_edges_dict,
-        node_feature_cols={"building": ["b_feat1"], "road": ["length"]},
-        node_label_cols={"building": ["b_label"], "road": ["r_label"]},
-        edge_feature_cols={"connects_to": ["conn_feat1"], "links_to": ["link_feat1"]},
-    )
+def hetero_graph_no_edge_types(sample_crs: str) -> nx.Graph:
+    """Fixture for heterogeneous graph missing edge_types."""
+    graph = nx.Graph()
+    graph.add_node(1, pos=(0, 0))
+    graph.add_edge(1, 2)
+    graph.graph = {"crs": sample_crs, "is_hetero": True, "node_types": ["type1"]}
+    return graph
+
+
+@pytest.fixture
+def graph_no_pos_geom(sample_crs: str) -> nx.Graph:
+    """Fixture for graph with nodes missing pos/geometry."""
+    graph = nx.Graph()
+    graph.add_node(1)  # No pos or geometry
+    graph.add_edge(1, 2)
+    graph.graph = {"crs": sample_crs, "is_hetero": False}
+    return graph
+
+
+@pytest.fixture
+def hetero_graph_no_node_type(sample_crs: str) -> nx.Graph:
+    """Fixture for heterogeneous graph with nodes missing node_type."""
+    graph = nx.Graph()
+    graph.add_node(1, pos=(0, 0))  # No node_type
+    graph.add_edge(1, 2)
+    graph.graph = {
+        "crs": sample_crs, "is_hetero": True,
+        "node_types": ["type1"], "edge_types": [("type1", "connects", "type1")],
+    }
+    return graph
+
+
+@pytest.fixture
+def hetero_graph_no_edge_type(sample_crs: str) -> nx.Graph:
+    """Fixture for heterogeneous graph with edges missing edge_type."""
+    graph = nx.Graph()
+    graph.add_node(1, pos=(0, 0), node_type="type1")
+    graph.add_node(2, pos=(1, 1), node_type="type1")
+    graph.add_edge(1, 2)  # No edge_type
+    graph.graph = {
+        "crs": sample_crs, "is_hetero": True,
+        "node_types": ["type1"], "edge_types": [("type1", "connects", "type1")],
+    }
+    return graph
+
+
+@pytest.fixture
+def regular_hetero_graph(sample_crs: str) -> nx.Graph:
+    """Fixture for regular (non-MultiGraph) heterogeneous graph."""
+    graph = nx.Graph()  # Not MultiGraph
+    graph.add_node(1, pos=(0, 0), node_type="building")
+    graph.add_node(2, pos=(1, 1), node_type="road")
+    graph.add_edge(1, 2, edge_type=("building", "connects", "road"))
+    graph.graph = {
+        "crs": sample_crs, "is_hetero": True,
+        "node_types": ["building", "road"],
+        "edge_types": [("building", "connects", "road")],
+    }
+    return graph
+
+
+@pytest.fixture
+def empty_hetero_graph(sample_crs: str) -> nx.Graph:
+    """Fixture for heterogeneous graph with no edges."""
+    graph = nx.Graph()
+    graph.add_node(1, pos=(0, 0), node_type="building")
+    graph.graph = {
+        "crs": sample_crs, "is_hetero": True,
+        "node_types": ["building"],
+        "edge_types": [("building", "connects", "road")]  # No actual edges
+    }
+    return graph
+
+
+@pytest.fixture
+def simple_nx_graph(sample_crs: str) -> nx.Graph:
+    """Fixture for simple NetworkX graph for dual graph testing."""
+    graph = nx.Graph()
+    graph.add_node(1, pos=(0, 0))
+    graph.add_node(2, pos=(1, 1))
+    graph.add_edge(1, 2)
+    graph.graph = {"crs": sample_crs, "is_hetero": False}
+    return graph
+
+
+@pytest.fixture
+def graph_with_edge_index_names(sample_crs: str) -> nx.Graph:
+    """Fixture for graph with edge_index_names set to None."""
+    graph = nx.Graph()
+    graph.add_node(1, pos=(0, 0))
+    graph.add_edge(1, 2)
+    graph.graph = {"crs": sample_crs, "is_hetero": False, "edge_index_names": None}
+    return graph
+
+
+@pytest.fixture
+def nodes_dict_bad_keys(sample_crs: str) -> dict:
+    """Fixture for nodes dict with invalid keys."""
+    return {123: gpd.GeoDataFrame({"geometry": [Point(0, 0)]}, crs=sample_crs)}
+
+
+@pytest.fixture
+def edges_dict_bad_tuple(sample_crs: str) -> dict:
+    """Fixture for edges dict with invalid tuple keys."""
+    return {"not_a_tuple": gpd.GeoDataFrame({"geometry": []}, crs=sample_crs)}
+
+
+@pytest.fixture
+def edges_dict_bad_elements(sample_crs: str) -> dict:
+    """Fixture for edges dict with invalid tuple elements."""
+    return {(123, "connects", "type2"): gpd.GeoDataFrame({"geometry": []}, crs=sample_crs)}
+
+
+@pytest.fixture
+def nodes_non_dict_for_hetero(sample_crs: str) -> gpd.GeoDataFrame:
+    """Fixture for non-dict nodes when edges is dict."""
+    return gpd.GeoDataFrame({"geometry": [Point(0, 0)]}, crs=sample_crs)
+
+
+@pytest.fixture
+def edges_dict_for_hetero(sample_crs: str) -> dict:
+    """Fixture for edges dict for heterogeneous testing."""
+    return {("type1", "connects", "type2"): gpd.GeoDataFrame({"geometry": []}, crs=sample_crs)}
+
+
+@pytest.fixture
+def single_point_geom_gdf(sample_crs: str) -> gpd.GeoDataFrame:
+    """Fixture for single point geometry that might cause tessellation issues."""
+    return gpd.GeoDataFrame({"geometry": [Point(0, 0)]}, crs=sample_crs)
+
+
+@pytest.fixture
+def tessellation_barriers_gdf(sample_crs: str) -> gpd.GeoDataFrame:
+    """Fixture for barriers in tessellation testing."""
+    return gpd.GeoDataFrame({"geometry": [LineString([(0, 0), (1, 1)])]}, crs=sample_crs)
+
+
+@pytest.fixture
+def hetero_multigraph_with_original_indices(sample_crs: str) -> nx.MultiGraph:
+    """Fixture for heterogeneous MultiGraph with _original_edge_index attributes."""
+    graph = nx.MultiGraph()
+    graph.add_node(1, pos=(0, 0), node_type="building")
+    graph.add_node(2, pos=(1, 1), node_type="road")
+    # Add edge with _original_edge_index attribute to trigger line 695-696
+    graph.add_edge(1, 2, key=0, edge_type=("building", "connects", "road"), 
+                   _original_edge_index=("custom", "index", "key"))
+    graph.graph = {
+        "crs": sample_crs, "is_hetero": True,
+        "node_types": ["building", "road"],
+        "edge_types": [("building", "connects", "road")]
+    }
+    return graph
+
+
+@pytest.fixture
+def hetero_graph_with_original_indices(sample_crs: str) -> nx.Graph:
+    """Fixture for heterogeneous Graph with _original_edge_index attributes."""
+    graph = nx.Graph()
+    graph.add_node(1, pos=(0, 0), node_type="building")
+    graph.add_node(2, pos=(1, 1), node_type="road")
+    # Add edge with _original_edge_index attribute to trigger line 711
+    graph.add_edge(1, 2, edge_type=("building", "connects", "road"), 
+                   _original_edge_index=("custom", "index"))
+    graph.graph = {
+        "crs": sample_crs, "is_hetero": True,
+        "node_types": ["building", "road"],
+        "edge_types": [("building", "connects", "road")]
+    }
+    return graph
+
+
+@pytest.fixture
+def empty_hetero_multigraph(sample_crs: str) -> nx.MultiGraph:
+    """Fixture for empty heterogeneous MultiGraph to test empty edge handling."""
+    graph = nx.MultiGraph()
+    graph.add_node(1, pos=(0, 0), node_type="building")
+    graph.graph = {
+        "crs": sample_crs, "is_hetero": True,
+        "node_types": ["building"],
+        "edge_types": [("building", "connects", "road")]  # Edge type exists but no actual edges
+    }
+    return graph
+
+
+@pytest.fixture
+def duplicate_segments_gdf(sample_crs: str) -> gpd.GeoDataFrame:
+    """Fixture for duplicate segments test data."""
+    return gpd.GeoDataFrame({
+        "geometry": [LineString([(0, 0), (1, 1)]), LineString([(0, 0), (1, 1)])],  # Duplicates
+        "road_type": ["primary", "secondary"],
+    }, crs=sample_crs)
+
+
+@pytest.fixture
+def simple_nodes_dict_type1(sample_crs: str) -> dict[str, gpd.GeoDataFrame]:
+    """Fixture for simple nodes dict with type1."""
+    return {"type1": gpd.GeoDataFrame({"geometry": [Point(0, 0)]}, crs=sample_crs)}
+
+
+@pytest.fixture
+def simple_edges_dict_type1_type2(sample_crs: str) -> dict[tuple[str, str, str], gpd.GeoDataFrame]:
+    """Fixture for simple edges dict connecting type1 to type2."""
+    return {
+        ("type1", "connects", "type2"): gpd.GeoDataFrame({
+            "geometry": [LineString([(0, 0), (1, 1)])],
+        }, index=pd.MultiIndex.from_tuples([("a", "b")], names=["from", "to"]), crs=sample_crs),
+    }

@@ -194,6 +194,28 @@ class TestConversions:
         assert "node_types" in nx_graph.graph
         assert "edge_types" in nx_graph.graph
 
+    def test_nx_default_feature_and_label_naming(self, sample_nodes_gdf: gpd.GeoDataFrame) -> None:
+        """Test NetworkX conversion with both default feature and label naming."""
+        # Create data with both features and labels
+        data = gdf_to_pyg(sample_nodes_gdf, node_feature_cols=["feature1"], node_label_cols=["label1"])
+
+        # Clear both feature and label column names to trigger default naming
+        data.graph_metadata.node_feature_cols = None
+        data.graph_metadata.node_label_cols = None
+
+        nx_graph = pyg_to_nx(data)
+
+        # Check that nodes have both default feature and label attributes
+        for _node_id, node_data in nx_graph.nodes(data=True):
+            assert isinstance(node_data, dict)
+            # Should have default feature attributes
+            feat_attrs = [key for key in node_data if key.startswith("feat_")]
+            assert len(feat_attrs) > 0, "Should have default feature attributes"
+            # Should have default label attributes
+            label_attrs = [key for key in node_data if key.startswith("label_")]
+            assert len(label_attrs) > 0, "Should have default label attributes"
+            break
+
 
 class TestValidation:
     """Test validation functionality for PyG objects."""
@@ -454,7 +476,7 @@ class TestSpecialCases:
         nx_graph = pyg_to_nx(data)
 
         # Check that nodes have attributes (default naming may or may not include feat_ prefix)
-        for node_id, node_data in nx_graph.nodes(data=True):
+        for _node_id, node_data in nx_graph.nodes(data=True):
             assert isinstance(node_data, dict)
             assert len(node_data) > 0  # Should have some attributes
             break
@@ -500,7 +522,11 @@ class TestSpecialCases:
             has_default_feat = any(key.startswith("feat_") for key in node_data)
             has_default_label = any(key.startswith("label_") for key in node_data)
             # At least one should be true if we have features/labels
-            assert has_default_feat or has_default_label or len([k for k in node_data if not k.startswith("_") and k not in {"node_type", "pos"}]) == 0
+            non_meta_keys = [
+                k for k in node_data
+                if not k.startswith("_") and k not in {"node_type", "pos"}
+            ]
+            assert has_default_feat or has_default_label or len(non_meta_keys) == 0
 
     def test_heterogeneous_empty_edges(self, sample_hetero_nodes_dict: dict[str, gpd.GeoDataFrame]) -> None:
         """Test heterogeneous conversion with empty edges."""

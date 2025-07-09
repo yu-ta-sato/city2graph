@@ -1,7 +1,51 @@
-"""Module for loading and processing geospatial data from Overture Maps."""
+"""
+Core Utilities Module.
 
+This module provides essential utilities for graph conversion, data validation,
+and spatial analysis operations. It serves as the foundation for the city2graph
+package, offering robust data structures and conversion functions that enable
+seamless integration between different graph representations and geospatial
+data formats.
+
+Key Features
+------------
+- Bidirectional conversion between GeoDataFrames and NetworkX graphs
+- Comprehensive data validation and type checking
+- Support for both homogeneous and heterogeneous graph structures
+- Spatial analysis utilities (tessellation, isochrones, filtering)
+- Robust metadata preservation across conversions
+- Integration with multiple geospatial libraries
+
+Main Functions
+--------------
+gdf_to_nx : Convert GeoDataFrames to NetworkX graphs
+nx_to_gdf : Convert NetworkX graphs to GeoDataFrames
+segments_to_graph : Convert line segments to graph representation
+dual_graph : Create dual graph representations
+filter_graph_by_distance : Spatial filtering based on network distance
+create_isochrone : Generate accessibility isochrones
+create_tessellation : Create spatial tessellations
+validate_gdf : Validate GeoDataFrame inputs
+validate_nx : Validate NetworkX graph inputs
+
+Core Classes
+------------
+GraphMetadata : Centralized graph metadata management
+GeoDataProcessor : Common GeoDataFrame processing operations
+GraphConverter : Unified graph conversion engine
+GraphAnalyzer : Graph analysis and filtering operations
+
+See Also
+--------
+city2graph.graph : PyTorch Geometric integration utilities
+city2graph.morphology : Urban morphology analysis functions
+city2graph.proximity : Spatial proximity analysis functions
+"""
+
+# Standard library imports
 import logging
 
+# Third-party imports
 import geopandas as gpd
 import momepy
 import networkx as nx
@@ -9,7 +53,7 @@ import pandas as pd
 from shapely.geometry import LineString
 from shapely.geometry import Point
 
-# Define the public API for this module
+# Public API definition
 __all__ = [
     "create_isochrone",
     "create_tessellation",
@@ -22,25 +66,34 @@ __all__ = [
     "validate_nx",
 ]
 
+# Module logger configuration
 logger = logging.getLogger(__name__)
 
-# ============================================================================
-# CORE DATA STRUCTURES AND VALIDATORS
-# ============================================================================
+# =============================================================================
+# CORE DATA STRUCTURES AND VALIDATION
+# =============================================================================
 
 class GraphMetadata:
     """Centralized graph metadata management."""
 
     def __init__(self, crs: str | int | dict[str, object] | object | None = None, is_hetero: bool = False) -> None:
+        # Core metadata
         self.crs = crs
         self.is_hetero = is_hetero
+
+        # Graph structure metadata
         self.node_types: list[str] = []
         self.edge_types: list[tuple[str, str, str]] = []
+
+        # Index management
         self.node_index_names: dict[str, list[str] | None] | list[str] | None = None
         self.edge_index_names: dict[tuple[str, str, str], list[str] | None] | list[str] | None = None
+
+        # Geometry column tracking
         self.node_geom_cols: list[str] = []
         self.edge_geom_cols: list[str] = []
-        # PyG-specific metadata
+
+        # PyTorch Geometric specific metadata
         self.node_mappings: dict[str, dict[str, dict[str | int, int] | str | list[str | int]]] = {}
         self.node_feature_cols: dict[str, list[str]] | list[str] | None = None
         self.node_label_cols: dict[str, list[str]] | list[str] | None = None
@@ -212,9 +265,9 @@ class GeoDataProcessor:
         """Compute centroids efficiently."""
         return gdf.geometry.centroid
 
-# ============================================================================
-# GRAPH CONVERSION CORE ENGINE
-# ============================================================================
+# =============================================================================
+# GRAPH CONVERSION ENGINE
+# =============================================================================
 
 class GraphConverter:
     """Unified graph conversion engine for both homogeneous and heterogeneous graphs."""
@@ -625,14 +678,14 @@ class GraphConverter:
         index_names = metadata.node_index_names
 
         # Handle different types of index_names
-        if isinstance(index_names, list) and len(index_names) > 1:
-            index = pd.MultiIndex.from_tuples(original_indices, names=index_names)
-        elif isinstance(index_names, list) and len(index_names) == 1:
-            index = pd.Index(original_indices, name=index_names[0])
-        elif isinstance(index_names, str):
-            index = pd.Index(original_indices, name=index_names)
+        if isinstance(index_names, list):
+            names = index_names if len(index_names) > 1 else (index_names[0] if index_names else None)
+            index = (pd.MultiIndex.from_tuples(original_indices, names=names)
+                if len(index_names) > 1
+                else pd.Index(original_indices, name=names))
         else:
-            index = pd.Index(original_indices, name=None)
+            # Handle str, None, or other types
+            index = pd.Index(original_indices, name=index_names if isinstance(index_names, str) else None)
 
         gdf = gpd.GeoDataFrame(records, index=index, crs=metadata.crs)
 
@@ -656,8 +709,6 @@ class GraphConverter:
                 (n, d) for n, d in graph.nodes(data=True)
                 if d.get("node_type") == node_type
             ]
-            if not type_nodes:
-                continue
 
             node_ids, attrs_list = zip(*type_nodes, strict=False)
             indices = [attrs.get("_original_index") for attrs in attrs_list]
@@ -968,9 +1019,9 @@ class GraphAnalyzer:
         return gpd.GeoDataFrame(geometry=[], crs=original_crs) if not is_graph_input else graph_type()
 
 
-# ============================================================================
+# =============================================================================
 # PUBLIC API FUNCTIONS
-# ============================================================================
+# =============================================================================
 
 def dual_graph(
     graph: tuple[gpd.GeoDataFrame, gpd.GeoDataFrame] | nx.Graph | nx.MultiGraph,
@@ -1687,9 +1738,9 @@ def create_tessellation(
 
     return tessellation
 
-# ============================================================================
+# =============================================================================
 # VALIDATION FUNCTIONS
-# ============================================================================
+# =============================================================================
 
 def validate_gdf(
     nodes_gdf: gpd.GeoDataFrame | dict[str, gpd.GeoDataFrame] | None = None,

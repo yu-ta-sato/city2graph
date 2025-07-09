@@ -1,29 +1,50 @@
-"""transportation.py.
-
-High-level helpers to ingest GTFS feeds, create origin-destination (OD)
-tables and build basic stop-to-stop graphs.
-
-The module purposefully relies on *plain* functions (no classes) so that
-state is always explicit and the public surface is small.  All helpers
-either return ready-to-use pandas / GeoPandas objects or a NetworkX graph
-that can be consumed downstream in notebooks, pipelines or model training
-scripts.
-
-Public API
-----------
-load_gtfs(...)
-    Parse a GTFS zip file into a dictionary of (Geo)DataFrames.
-get_od_pairs(...)
-    Materialise OD pairs for every trip and service day.
-travel_summary_graph(...)
-    Aggregate travel times / frequencies into a stop-level graph.
-
-The doc-strings follow the same **numpydoc-like** style adopted in
-utils.py and proximity.py so that they render nicely on both *Sphinx*
-and *IPython*.
 """
+Transportation Network Analysis Module.
+
+This module provides comprehensive functionality for processing General Transit Feed
+Specification (GTFS) data and creating transportation network representations. It
+specializes in converting public transit data into graph structures suitable for
+network analysis and accessibility studies.
+
+The module emphasizes functional programming principles, using plain functions
+without class dependencies to ensure explicit state management and maintain a
+minimal public API surface. All functions return ready-to-use pandas/GeoPandas
+objects or NetworkX graphs that can be seamlessly integrated into analysis
+pipelines, notebooks, or model training workflows.
+
+Key Features
+------------
+- GTFS feed parsing and validation
+- Origin-destination (OD) pair generation
+- Stop-to-stop connectivity analysis
+- Travel time and frequency aggregation
+- Temporal network analysis capabilities
+- Integration with spatial analysis workflows
+
+Main Functions
+--------------
+load_gtfs : Parse GTFS zip files into structured DataFrames
+get_od_pairs : Generate origin-destination pairs from trip data
+travel_summary_graph : Create aggregated stop-level network graphs
+
+Data Processing Pipeline
+------------------------
+1. GTFS data ingestion and validation
+2. Temporal schedule processing
+3. Spatial stop location handling
+4. Network graph construction
+5. Travel time and frequency aggregation
+
+See Also
+--------
+city2graph.utils : Core utilities for graph conversion and validation
+city2graph.graph : PyTorch Geometric integration utilities
+city2graph.proximity : Spatial proximity analysis functions
+"""
+# Future annotations for type hints
 from __future__ import annotations
 
+# Standard library imports
 import contextlib
 import io
 import logging
@@ -32,33 +53,38 @@ from datetime import datetime
 from datetime import timedelta
 from typing import TYPE_CHECKING
 
+# Third-party imports
 import geopandas as gpd
 import pandas as pd
 from shapely.geometry import LineString
 from shapely.geometry import Point
 
-# If transportation.py lives inside the same package as utils.py the
-# import below will work. In stand-alone scenarios simply comment it.
+# Local imports
 from .utils import gdf_to_nx  # pragma: no cover
 
+# Type checking imports
 if TYPE_CHECKING:
     from pathlib import Path
 
     import networkx as nx
 
+# Module logger configuration
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
 __all__ = ["get_od_pairs", "load_gtfs", "travel_summary_graph"]
 
 
-# ===========================================================================
-# INTERNAL HELPERS (all “private”, i.e. underscore-prefixed)
-# ===========================================================================
+# =============================================================================
+# INTERNAL HELPER FUNCTIONS
+# =============================================================================
+# All helper functions are private (underscore-prefixed) and support the
+# main public API functions. They handle low-level data processing tasks
+# such as CSV parsing, time conversion, and GTFS data validation.
 
-# ---------------------------------------------------------------------------
-# Generic CSV helpers
-# ---------------------------------------------------------------------------
+# -----------------------------------------------------------------------------
+# CSV Processing Utilities
+# -----------------------------------------------------------------------------
 
 
 def _read_csv_bytes(buf: bytes) -> pd.DataFrame:
@@ -116,16 +142,16 @@ def _load_gtfs_zip(path: str | Path) -> dict[str, pd.DataFrame]:
 
 def _coerce_types(gtfs: dict[str, pd.DataFrame]) -> None:
     """Cast common numeric / boolean columns **in-place** for easier analysis."""
-    # stops.txt - coordinates -------------------------------------------------
+    # Coerce stops.txt coordinates
     if (stops := gtfs.get("stops")) is not None:
         for col in ("stop_lat", "stop_lon"):
             stops[col] = pd.to_numeric(stops[col], errors="coerce")
 
-    # routes.txt - route_type -------------------------------------------------
+    # Coerce routes.txt route_type
     if (routes := gtfs.get("routes")) is not None and "route_type" in routes:
         routes["route_type"] = pd.to_numeric(routes["route_type"], errors="coerce")
 
-    # calendar.txt - weekday flags -------------------------------------------
+    # Coerce calendar.txt weekday flags
     if (cal := gtfs.get("calendar")) is not None:
         weekdays = (
             "monday",
@@ -216,7 +242,7 @@ def load_gtfs(path: str | Path) -> dict[str, pd.DataFrame | gpd.GeoDataFrame]:
 
     _coerce_types(gtfs)
 
-    # Attach geometries -------------------------------------------------------
+    # Attach geometries to stops and shapes
     if (stops := gtfs.get("stops")) is not None and {"stop_lat", "stop_lon"} <= set(stops):
         geo = _point_geometries(stops)
         gtfs["stops"] = gpd.GeoDataFrame(
@@ -367,12 +393,12 @@ def get_od_pairs(
         logger.error("GTFS feed incomplete - need %s", ", ".join(required))
         return pd.DataFrame()
 
-    # 1. successive stop pairs -----------------------------------------------
+    # 1. Create successive stop pairs from stop_times
     od = _create_basic_od(
         gtfs["stop_times"].merge(gtfs["trips"][["trip_id", "service_id"]], on="trip_id"),
     )
 
-    # 2. calendar expansion ---------------------------------------------------
+    # 2. Expand OD pairs with calendar dates
     cal = gtfs["calendar"]
     start_dt = (
         datetime.strptime(start_date, "%Y%m%d")
@@ -394,7 +420,7 @@ def get_od_pairs(
     if not include_geometry:
         return od_full
 
-    # 3. append geometry ------------------------------------------------------
+    # 3. Append LineString geometries
     stops = gtfs["stops"].set_index("stop_id")
     line_geoms = [
         LineString([stops.loc[o].geometry, stops.loc[d].geometry])
@@ -469,6 +495,7 @@ def travel_summary_graph(
         msg = "GTFS must contain at least stop_times and stops"
         raise ValueError(msg)
 
+    # 1. Process stop_times to calculate travel times
     st = gtfs["stop_times"].copy()
     st["arrival_sec"] = st["arrival_time"].map(_time_to_seconds)
     st["departure_sec"] = st["departure_time"].map(_time_to_seconds)
@@ -484,7 +511,7 @@ def travel_summary_graph(
     st = st.dropna(subset=["next_stop_id", "next_arr_sec"]).copy()
     st["travel_time"] = st["next_arr_sec"] - st["departure_sec"]
 
-    # calendar weighting ------------------------------------------------------
+    # 2. Apply calendar weighting for frequency
     st = st.merge(gtfs["trips"][["trip_id", "service_id"]], on="trip_id", how="left")
 
     cal_start = calendar_start or gtfs["calendar"]["start_date"].min()
@@ -501,6 +528,7 @@ def travel_summary_graph(
         .assign(weighted_time=lambda df: df["travel_time"] * df["service_days"])
     )
 
+    # 3. Aggregate results
     agg = (
         st.groupby(["stop_id", "next_stop_id"])
         .agg(total_weight=("weighted_time", "sum"), freq=("service_days", "sum"))
@@ -508,7 +536,7 @@ def travel_summary_graph(
     )
     agg["travel_time"] = agg["total_weight"] / agg["freq"]
 
-    # GeoDataFrames -----------------------------------------------------------
+    # 4. Create GeoDataFrames for nodes and edges
     nodes_gdf: gpd.GeoDataFrame = gtfs["stops"].set_index("stop_id")
     edges_geom = [
         LineString([nodes_gdf.loc[u].geometry, nodes_gdf.loc[v].geometry])

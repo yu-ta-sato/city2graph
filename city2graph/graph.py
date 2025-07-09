@@ -75,23 +75,27 @@ Advanced usage with heterogeneous graphs:
 >>> hetero_data = gdf_to_pyg(nodes_dict, edges_dict)
 """
 
+# Future annotations for type hints
 from __future__ import annotations
 
+# Standard library imports
 import logging
 from typing import TYPE_CHECKING
 
+# Third-party imports
 import geopandas as gpd
 import networkx as nx
 import numpy as np
 import pandas as pd
 from shapely.geometry import LineString
 
+# Local imports
 from city2graph.utils import GraphMetadata
 from city2graph.utils import nx_to_gdf
 from city2graph.utils import validate_gdf
 from city2graph.utils import validate_nx
 
-# Try to import the PyTorch Geometric packages. If unavailable, issue a gentle warning.
+# PyTorch Geometric imports with availability checking
 try:
     import torch
     from torch_geometric.data import Data
