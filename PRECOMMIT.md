@@ -1,6 +1,6 @@
 # Pre-commit Setup for city2graph
 
-This repository uses pre-commit hooks to maintain code quality and consistency, similar to OSMnx.
+This repository uses pre-commit hooks to maintain code quality and consistency.
 
 ## Setup
 

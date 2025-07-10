@@ -2,16 +2,16 @@ name: Run Tests and Upload Coverage
 
 on:
   push:
-    branches: [ main ]
+    branches: [main]
   pull_request:
-    branches: [ main ]
+    branches: [main]
 
 jobs:
   test:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        python-version: ["3.10", "3.11", "3.12", "3.13"]
+        python-version: ['3.10', '3.11', '3.12', '3.13']
     steps:
       - uses: actions/checkout@v4
       - name: Set up Python
@@ -21,17 +21,27 @@ jobs:
       - name: Set up uv
         uses: astral-sh/setup-uv@v5
         with:
-          cache-dependency-glob: "uv.lock"
+          cache-dependency-glob: uv.lock
 
       - name: Sync dependencies
         run: |
           uv sync --locked --extra cpu --dev
+
+      - name: Cache pre-commit
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pre-commit/
+          key: pre-commit-${{ matrix.python-version }}-${{ hashFiles('.pre-commit-config.yaml') }}
+
+      - name: Run pre-commit checks
+        run: uv run pre-commit run --all-files
+
       - name: Run tests with coverage
         run: |
           uv run pytest --cov=city2graph --cov-report=xml
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v5
         with:
-          token: ${{ secrets.CODECOV_TOKEN }} # Set CODECOV_TOKEN in repository secrets
+          token: ${{ secrets.CODECOV_TOKEN }}  # Set CODECOV_TOKEN in repository secrets
           files: coverage.xml
           fail_ci_if_error: true

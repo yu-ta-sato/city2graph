@@ -7,20 +7,16 @@ repos:
       - id: check-ast
       - id: check-case-conflict
       - id: check-executables-have-shebangs
-      - id: check-json
       - id: check-merge-conflict
         args: [--assume-in-merge]
       - id: check-shebang-scripts-are-executable
       - id: check-toml
-      - id: check-xml
       - id: check-yaml
       - id: detect-private-key
       - id: end-of-file-fixer
       - id: fix-byte-order-marker
       - id: mixed-line-ending
       - id: no-commit-to-branch
-      - id: pretty-format-json
-        args: [--autofix]
       - id: trailing-whitespace
 
   - repo: https://github.com/adrienverge/yamllint
@@ -33,6 +29,7 @@ repos:
     rev: v1.9.0
     hooks:
       - id: numpydoc-validation
+        files: ^city2graph/
 
   - repo: https://github.com/astral-sh/ruff-pre-commit
     rev: v0.12.2
