@@ -755,21 +755,30 @@ def public_to_public_graph(
 
 def _validate_input_gdfs(buildings_gdf: gpd.GeoDataFrame, segments_gdf: gpd.GeoDataFrame) -> None:
     """
-    Validate input GeoDataFrames for the morphological graph function.
+    Validate the primary input GeoDataFrames for the morphological graph function.
+
+    This function ensures that the provided buildings and segments inputs are both
+    GeoDataFrames and that their geometries are of the expected types (Polygons for
+    buildings, LineStrings for segments). It serves as a critical initial check
+    to prevent errors in downstream processing.
 
     Parameters
     ----------
     buildings_gdf : geopandas.GeoDataFrame
-        GeoDataFrame containing building polygons
+        GeoDataFrame containing building polygons.
     segments_gdf : geopandas.GeoDataFrame
-        GeoDataFrame containing street segments
+        GeoDataFrame containing street segments.
 
     Raises
     ------
     TypeError
-        If inputs are not GeoDataFrames
+        If either input is not a GeoDataFrame.
     ValueError
-        If geometry types are invalid
+        If the geometries are not of the expected types.
+
+    See Also
+    --------
+    _validate_single_gdf_input : Validate a single GeoDataFrame.
     """
     # Check if buildings_gdf is a GeoDataFrame
     if not isinstance(buildings_gdf, gpd.GeoDataFrame):
@@ -807,19 +816,28 @@ def _validate_single_gdf_input(
     gdf_name: str,
 ) -> None:
     """
-    Validate a single GeoDataFrame input.
+    Validate that a single input is a GeoDataFrame.
+
+    This is a simple utility function to ensure that an input object is of type
+    geopandas.GeoDataFrame, raising a TypeError with a descriptive message if it
+    is not. It is used for validating individual geospatial inputs in various
+    functions.
 
     Parameters
     ----------
     gdf : geopandas.GeoDataFrame
-        GeoDataFrame to validate.
+        The GeoDataFrame to validate.
     gdf_name : str
-        Name of the GeoDataFrame (for error messages).
+        The name of the GeoDataFrame, used in the error message.
 
     Raises
     ------
     TypeError
-        If gdf is not a GeoDataFrame.
+        If the input is not a GeoDataFrame.
+
+    See Also
+    --------
+    _validate_input_gdfs : Validate both buildings and segments GeoDataFrames.
     """
     # Check if the input is a GeoDataFrame
     if not isinstance(gdf, gpd.GeoDataFrame):
@@ -832,24 +850,29 @@ def _ensure_crs_consistency(
     source_gdf: gpd.GeoDataFrame,
 ) -> gpd.GeoDataFrame:
     """
-    Ensure CRS consistency between two GeoDataFrames.
+    Ensure that the source GeoDataFrame has the same CRS as the target.
+
+    This function checks if the Coordinate Reference System (CRS) of the source
+    GeoDataFrame matches that of the target. If they do not match, it reprojects
+    the source to the target's CRS and issues a warning. This is essential for
+    ensuring that spatial operations between the two GeoDataFrames are valid.
 
     Parameters
     ----------
     target_gdf : geopandas.GeoDataFrame
-        Target GeoDataFrame with the desired CRS
+        The GeoDataFrame with the target CRS.
     source_gdf : geopandas.GeoDataFrame
-        Source GeoDataFrame to potentially reproject
+        The GeoDataFrame to check and potentially reproject.
 
     Returns
     -------
     geopandas.GeoDataFrame
-        Source GeoDataFrame reprojected to target CRS if necessary
+        The source GeoDataFrame, reprojected to the target CRS if necessary.
 
     Warns
     -----
     RuntimeWarning
-        If CRS mismatch is detected and reprojection is performed
+        If a CRS mismatch is detected and reprojection is performed.
     """
     # Check if CRS of source_gdf matches target_gdf
     if source_gdf.crs != target_gdf.crs:
@@ -867,19 +890,24 @@ def _prepare_barriers(
     geom_col: str | None,
 ) -> gpd.GeoDataFrame:
     """
-    Prepare barrier geometries for tessellation.
+    Prepare the barrier geometries for tessellation.
+
+    This function selects the appropriate geometry column from the segments
+    GeoDataFrame to be used as barriers in the tessellation process. If an
+    alternative geometry column is specified and exists, it is used; otherwise,
+    the default geometry column is used.
 
     Parameters
     ----------
     segments : geopandas.GeoDataFrame
-        Street segments GeoDataFrame
+        The street segments GeoDataFrame.
     geom_col : str, optional
-        Alternative geometry column name
+        The name of an alternative geometry column to use for the barriers.
 
     Returns
     -------
     geopandas.GeoDataFrame
-        Prepared barriers GeoDataFrame
+        A GeoDataFrame containing the prepared barrier geometries.
     """
     # If an alternative geometry column is specified, exists, and is not the default 'geometry'
     if geom_col and geom_col in segments.columns and geom_col != "geometry":
@@ -898,27 +926,27 @@ def _filter_adjacent_tessellation(
     max_distance: float = math.inf,
 ) -> gpd.GeoDataFrame:
     """
-    Filter tessellation to only include cells adjacent to segments.
+    Filter tessellation cells to include only those adjacent to segments.
+
+    This function filters a tessellation GeoDataFrame to retain only the cells
+    that are within a specified maximum Euclidean distance of the provided street
+    segments. If the tessellation is grouped by enclosures, the filtering is
+    performed independently for each enclosure, considering only the segments
+    that intersect that enclosure.
 
     Parameters
     ----------
     tessellation : geopandas.GeoDataFrame
-        Tessellation GeoDataFrame
+        The tessellation GeoDataFrame to filter.
     segments : geopandas.GeoDataFrame
-        Street segments GeoDataFrame to measure distance against.
-    max_distance : float, optional
-        Maximum Euclidean distance between tessellation centroids and the
-        nearest segment (from the `segments` GeoDataFrame).
-        In `morphological_graph`, this is typically derived from `distance + clipping_buffer`
-        if `distance` is specified, or `math.inf` otherwise.
-        If ``tessellation`` contains an ``enclosure_index`` column,
-        distances are measured using only segments intersecting each enclosure.
-        Defaults to ``math.inf`` which retains all cells.
+        The street segments to measure distance against.
+    max_distance : float, default math.inf
+        The maximum distance for a tessellation cell to be considered adjacent.
 
     Returns
     -------
     geopandas.GeoDataFrame
-        Filtered tessellation
+        The filtered tessellation GeoDataFrame.
     """
     # If tessellation is empty, return an empty GeoDataFrame with the same structure
     if tessellation.empty:
@@ -966,7 +994,27 @@ def _build_spatial_graph(
     segments: gpd.GeoDataFrame,
     tessellation_centroids: gpd.GeoSeries,
 ) -> tuple[nx.Graph, dict[int, str], dict[str, tuple[float, float]]]:
-    """Build a spatial graph from segments and tessellation centroids."""
+    """
+    Build a spatial graph from segments and tessellation centroids.
+
+    This function creates a unified NetworkX graph that combines the street segment
+    network with the tessellation centroids. The segment endpoints and the centroids
+    are all treated as nodes in this temporary graph, which is used for calculating
+    network distances.
+
+    Parameters
+    ----------
+    segments : geopandas.GeoDataFrame
+        The street segments GeoDataFrame.
+    tessellation_centroids : geopandas.GeoSeries
+        A GeoSeries of tessellation centroid points.
+
+    Returns
+    -------
+    tuple[networkx.Graph, dict[int, str], dict[str, tuple[float, float]]]
+        A tuple containing the combined graph, a mapping from centroid integer
+        location to node ID, and a dictionary of segment node positions.
+    """
     # Convert segment GeoDataFrame to a NetworkX graph; nodes are segment endpoints, edges are segments
     graph = gdf_to_nx(edges=segments)
 
@@ -995,7 +1043,25 @@ def _connect_centroids_to_segment_graph(
     centroid_iloc_to_node_id: dict[int, str],  # Maps centroid iloc to graph node ID
     segment_node_positions: dict[str, tuple[float, float]],  # Positions of segment graph nodes
 ) -> None:
-    """Connect centroid nodes to the nearest segment graph nodes using KDTree."""
+    """
+    Connect centroid nodes to their nearest segment graph nodes.
+
+    This function uses a KDTree for efficient nearest neighbor search to find the
+    closest segment node for each tessellation centroid. It then adds edges to the
+    graph connecting each centroid to its nearest segment node, with the edge
+    length representing the Euclidean distance.
+
+    Parameters
+    ----------
+    graph : networkx.Graph
+        The graph to which the new edges will be added.
+    tessellation_centroids : geopandas.GeoSeries
+        The GeoSeries of tessellation centroid points.
+    centroid_iloc_to_node_id : dict[int, str]
+        A mapping from centroid integer location to its graph node ID.
+    segment_node_positions : dict[str, tuple[float, float]]
+        A dictionary of segment node positions.
+    """
     # Prepare segment node IDs and their coordinates for KDTree
     segment_node_ids = list(segment_node_positions.keys())
     segment_node_coords = [list(coord) for coord in segment_node_positions.values()]
@@ -1031,7 +1097,23 @@ def _connect_centroids_to_centroids(
     tessellation_centroids: gpd.GeoSeries,  # Assumed to be a GeoSeries of Point geometries
     centroid_iloc_to_node_id: dict[int, str],  # Maps iloc of centroids to graph node_id
 ) -> None:
-    """Connect centroid nodes to each other based on Euclidean distance, vectorized."""
+    """
+    Connect centroid nodes to each other based on Euclidean distance.
+
+    This function creates a complete graph between all the tessellation centroid
+    nodes, where the weight of each edge is the Euclidean distance between the
+    centroids. This allows for pathfinding between centroids that may not be
+    directly connected to the street network.
+
+    Parameters
+    ----------
+    graph : networkx.Graph
+        The graph to which the new edges will be added.
+    tessellation_centroids : geopandas.GeoSeries
+        The GeoSeries of tessellation centroid points.
+    centroid_iloc_to_node_id : dict[int, str]
+        A mapping from centroid integer location to its graph node ID.
+    """
     # Get relevant ilocs (integer positions) from the centroid_iloc_to_node_id map and sort them
     relevant_ilocs = sorted(centroid_iloc_to_node_id.keys())
 
@@ -1048,7 +1130,9 @@ def _connect_centroids_to_centroids(
     # pdist returns a condensed distance matrix (a 1D array of upper triangular part)
     pairwise_distances = pdist(coords_array, metric="euclidean")
 
-    edges_to_add = []  # List to store edges to be added to the graph
+    # List to store edges to be added to the graph
+    edges_to_add = []
+
     # Generate all unique pairs of ordered node IDs using itertools.combinations
     # The order of pairs matches the order of distances in pairwise_distances
     for idx, (node_id1, node_id2) in enumerate(itertools.combinations(node_ids_ordered, 2)):
@@ -1064,7 +1148,25 @@ def _find_closest_node_to_center(
     graph: nx.Graph,
     center_point_geom: Point,
 ) -> str:
-    """Find the graph node ID closest to the geometric center point."""
+    """
+    Find the graph node ID closest to a geometric center point.
+
+    This function uses a KDTree to efficiently find the nearest node in the graph
+    to a given geometric point. This is used to identify the starting node for
+    network distance calculations when filtering by distance from a center point.
+
+    Parameters
+    ----------
+    graph : networkx.Graph
+        The graph to search within.
+    center_point_geom : shapely.geometry.Point
+        The geometric point to find the closest node to.
+
+    Returns
+    -------
+    str
+        The ID of the closest node in the graph.
+    """
     # Extract node positions from the graph (all nodes in spatial graphs have 'pos')
     pos = nx.get_node_attributes(graph, "pos")
 
@@ -1087,7 +1189,30 @@ def _filter_nodes_by_path_length(
     max_distance: float,
     centroid_iloc_to_node_id: dict[int, str],
 ) -> list[int]:
-    """Filter nodes by path length from a source node."""
+    """
+    Filter nodes by their shortest path length from a source node.
+
+    This function calculates the shortest path distance from a given source node to
+    all other nodes in the graph using Dijkstra's algorithm. It then returns a list
+    of the integer locations (ilocs) of the tessellation centroids whose corresponding
+    nodes are within the specified maximum distance.
+
+    Parameters
+    ----------
+    graph : networkx.Graph
+        The graph to perform the search on.
+    source_node_id : str
+        The ID of the source node for the path length calculation.
+    max_distance : float
+        The maximum path length for a node to be included.
+    centroid_iloc_to_node_id : dict[int, str]
+        A mapping from centroid integer location to its graph node ID.
+
+    Returns
+    -------
+    list[int]
+        A list of integer locations of the centroids that are within the distance.
+    """
     if source_node_id not in graph:
         # This can happen if the center point is very far from any graph node
         logger.warning("Source node for distance filtering not found in graph.")
@@ -1113,7 +1238,31 @@ def _filter_tessellation_by_network_distance(
     center_point: gpd.GeoSeries | gpd.GeoDataFrame | Point,  # Geographic center for filtering
     max_distance: float,  # Maximum network distance
 ) -> gpd.GeoDataFrame:
-    """Filter tessellation by network distance from a center point."""
+    """
+    Filter tessellation by network distance from a center point.
+
+    This function filters a tessellation GeoDataFrame to include only those cells
+    that are within a specified network distance from a given `center_point`.
+    It constructs a spatial graph combining street segments and tessellation
+    centroids, then uses shortest-path calculations to determine reachability.
+
+    Parameters
+    ----------
+    tessellation : geopandas.GeoDataFrame
+        The tessellation GeoDataFrame to filter.
+    segments : geopandas.GeoDataFrame
+        The street segments GeoDataFrame used to build the network for distance calculations.
+    center_point : shapely.geometry.Point or geopandas.GeoSeries or geopandas.GeoDataFrame
+        The geographic center point(s) from which to calculate network distances.
+    max_distance : float
+        The maximum network distance (e.g., in meters) for a tessellation cell to be included.
+
+    Returns
+    -------
+    geopandas.GeoDataFrame
+        The filtered tessellation GeoDataFrame, containing only cells within the specified
+        network distance from the center point.
+    """
     # Return a copy of tessellation if it or segments are empty
     if tessellation.empty or segments.empty:
         return tessellation.copy()
@@ -1163,17 +1312,23 @@ def _add_building_info(
     """
     Add building information to tessellation.
 
+    This function performs a spatial join between the tessellation GeoDataFrame
+    and the buildings GeoDataFrame to associate each tessellation cell with
+    the building(s) it contains or intersects. It adds a new column
+    `building_geometry` to the tessellation, containing the geometry of the
+    intersecting building.
+
     Parameters
     ----------
     tessellation : geopandas.GeoDataFrame
-        Tessellation GeoDataFrame
+        The tessellation GeoDataFrame to which building information will be added.
     buildings : geopandas.GeoDataFrame
-        Buildings GeoDataFrame
+        The GeoDataFrame containing building geometries.
 
     Returns
     -------
     geopandas.GeoDataFrame
-        Tessellation with building information
+        The tessellation GeoDataFrame with an added `building_geometry` column.
     """
     # Perform a spatial join (left join) from tessellation to buildings based on intersection
     # This adds columns from 'buildings' to 'tessellation' for intersecting features.
@@ -1207,21 +1362,28 @@ def _create_empty_edges_gdf(
     """
     Create an empty edges GeoDataFrame with specified column structure.
 
+    This helper function generates an empty GeoDataFrame suitable for representing
+    graph edges, ensuring it has the correct column names for 'from' and 'to'
+    node IDs, and optionally additional columns, along with a geometry column
+    and a specified Coordinate Reference System (CRS). This is useful for
+    initializing empty edge GeoDataFrames when no connections are found or
+    when setting up a new graph structure.
+
     Parameters
     ----------
     crs : str, int, or None
-        Coordinate reference system
+        Coordinate reference system.
     from_col : str
-        Name of the 'from' ID column
+        Name for the 'from' node ID column.
     to_col : str
-        Name of the 'to' ID column
+        Name for the 'to' node ID column.
     extra_cols : list[str], optional
-        Additional columns to include
+        Optional list of additional column names.
 
     Returns
     -------
     geopandas.GeoDataFrame
-        Empty GeoDataFrame with specified columns
+        Empty GeoDataFrame with specified columns.
     """
     # Initialize list of column names with 'from' and 'to' ID columns
     columns = [from_col, to_col]
@@ -1238,6 +1400,11 @@ def _create_empty_edges_gdf(
 def _set_node_index(gdf: gpd.GeoDataFrame, col: str) -> gpd.GeoDataFrame:
     """
     Set GeoDataFrame index using a specified column, if it exists.
+
+    This function attempts to set the index of a GeoDataFrame to a specified column.
+    If the GeoDataFrame is empty, it safely returns an empty GeoDataFrame with an
+    empty index. Otherwise, it sets the specified column as the new index, dropping
+    the column from the DataFrame's columns.
 
     Parameters
     ----------
@@ -1276,19 +1443,25 @@ def _set_edge_index(
     """
     Set multi-index for edge GeoDataFrame.
 
+    This function sets a MultiIndex on an edge GeoDataFrame using specified
+    'from' and 'to' column names. This is crucial for representing graph edges
+    where each edge is uniquely identified by its source and target nodes.
+
     Parameters
     ----------
     gdf : geopandas.GeoDataFrame
-        Edge GeoDataFrame
+        The edge GeoDataFrame to modify.
     from_col : str
-        'From' column name
+        The name of the column to be used as the first level of the MultiIndex
+        (representing the source node ID).
     to_col : str
-        'To' column name
+        The name of the column to be used as the second level of the MultiIndex
+        (representing the target node ID).
 
     Returns
     -------
     geopandas.GeoDataFrame
-        GeoDataFrame with multi-index set
+        The GeoDataFrame with the new MultiIndex applied.
     """
     return gdf.set_index([from_col, to_col])
 
@@ -1301,6 +1474,11 @@ def _set_edge_index(
 def _create_spatial_weights(gdf: gpd.GeoDataFrame, contiguity: str) -> libpysal.weights.W | None:
     """
     Create spatial weights matrix for adjacency analysis.
+
+    This function generates a spatial weights matrix based on the specified contiguity
+    type (Queen or Rook) for a given GeoDataFrame of polygon geometries. This matrix
+    is crucial for defining adjacency relationships between spatial units, which is
+    a fundamental step in many spatial analysis and graph construction tasks.
 
     Parameters
     ----------
@@ -1339,6 +1517,11 @@ def _extract_adjacency_relationships(
     """
     Extract adjacency relationships from spatial weights matrix.
 
+    This function processes a spatial weights matrix to extract pairs of adjacent
+    polygons and their corresponding IDs. It can optionally filter these relationships
+    to include only those within specified groups, ensuring that connections are
+    meaningful within a larger spatial context.
+
     Parameters
     ----------
     spatial_weights : libpysal.weights.W
@@ -1366,6 +1549,7 @@ def _extract_adjacency_relationships(
     """
     # Convert spatial weights to COO (Coordinate Format) sparse matrix for easier pair extraction
     coo = spatial_weights.sparse.tocoo()
+
     # Create a mask to get only unique pairs (upper triangle, row < col) to avoid duplicates (i,j) and (j,i)
     mask = coo.row < coo.col
     rows = coo.row[mask]  # Indices of 'from' polygons (based on gdf's 0..N-1 index)
@@ -1420,6 +1604,10 @@ def _create_adjacency_edges(
 ) -> pd.DataFrame:  # Returns a DataFrame, to be converted to GeoDataFrame by caller
     """
     Create edge geometries from adjacency relationships.
+
+    This function processes adjacency data to generate edge geometries connecting
+    adjacent spatial features, creating LineString geometries between centroids
+    of neighboring features based on their spatial relationships.
 
     Parameters
     ----------

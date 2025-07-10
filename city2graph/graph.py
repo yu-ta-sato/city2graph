@@ -155,6 +155,11 @@ def gdf_to_pyg(
     This function automatically detects the graph type based on input structure.
     For heterogeneous graphs, provide dictionaries mapping types to GeoDataFrames.
     Node positions are automatically extracted from geometry centroids when available.
+    - Preserves original coordinate reference systems (CRS)
+    - Maintains index structure for bidirectional conversion
+    - Handles both Point and non-Point geometries (using centroids)
+    - Creates empty tensors for missing features/edges
+    - For heterogeneous graphs, ensures consistent node/edge type mapping
 
     Examples
     --------
@@ -184,14 +189,6 @@ def gdf_to_pyg(
     >>>
     >>> # Convert to heterogeneous graph
     >>> data = gdf_to_pyg(nodes_dict, edges_dict)
-
-    Notes
-    -----
-    - Preserves original coordinate reference systems (CRS)
-    - Maintains index structure for bidirectional conversion
-    - Handles both Point and non-Point geometries (using centroids)
-    - Creates empty tensors for missing features/edges
-    - For heterogeneous graphs, ensures consistent node/edge type mapping
     """
     # ------------------------------------------------------------------
     # 0. Input validation & dispatch
@@ -566,6 +563,12 @@ def is_torch_available() -> bool:
     gdf_to_pyg : Convert GeoDataFrames to PyTorch Geometric (requires torch).
     pyg_to_gdf : Convert PyTorch Geometric to GeoDataFrames (requires torch).
 
+    Notes
+    -----
+    - Returns False if either PyTorch or PyTorch Geometric is missing
+    - Used internally by torch-dependent functions to provide helpful error messages
+    - Installation can be done with: ``pip install city2graph[torch]``
+
     Examples
     --------
     Check availability before using torch-dependent functions:
@@ -577,12 +580,6 @@ def is_torch_available() -> bool:
     ...     data = gdf_to_pyg(nodes_gdf, edges_gdf)
     ... else:
     ...     print("PyTorch Geometric not available. Install with: pip install city2graph[torch]")
-
-    Notes
-    -----
-    - Returns False if either PyTorch or PyTorch Geometric is missing
-    - Used internally by torch-dependent functions to provide helpful error messages
-    - Installation can be done with: ``pip install city2graph[torch]``
     """
     return TORCH_AVAILABLE
 
@@ -590,6 +587,9 @@ def is_torch_available() -> bool:
 def _get_device(device: str | torch.device | None) -> torch.device:
     """
     Normalize the device argument and return a torch.device instance.
+
+    This function provides a consistent interface for device specification across
+    the library, handling automatic device selection and validation.
 
     Parameters
     ----------
@@ -600,16 +600,25 @@ def _get_device(device: str | torch.device | None) -> torch.device:
     Returns
     -------
     torch.device
-        Normalized torch.device object
+        Normalized torch.device object.
 
     Raises
     ------
     ImportError
-        If PyTorch is not available
+        If PyTorch is not available.
     ValueError
         If device string is not 'cpu' or 'cuda', or if 'cuda' is selected but not available.
     TypeError
-        If device is not a valid type
+        If device is not a valid type.
+
+    See Also
+    --------
+    torch.device : PyTorch device specification.
+
+    Examples
+    --------
+    >>> device = _normalize_device("cuda")
+    >>> device = _normalize_device(None)  # Auto-selects best available
     """
     if device is None:
         device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -663,11 +672,21 @@ def _create_node_id_mapping(
     Returns
     -------
     dict[str | int, int]
-        Dictionary mapping original IDs to integer indices
+        Dictionary mapping original IDs to integer indices.
     str
         Always "index", indicating the DataFrame index was used.
     list[str | int]
-        List of original IDs in order
+        List of original IDs in order.
+
+    See Also
+    --------
+    _create_node_features : Convert node attributes to tensors.
+
+    Examples
+    --------
+    >>> import geopandas as gpd
+    >>> gdf = gpd.GeoDataFrame({'id': [1, 2, 3]})
+    >>> mapping, node_type, ids = _create_node_mapping(gdf)
     """
     # Use DataFrame index as the node identifier
     original_ids = node_gdf.index.tolist()
@@ -681,7 +700,8 @@ def _create_node_features(
     device: str | torch.device | None = None,
     dtype: torch.dtype | None = None,
 ) -> torch.Tensor:
-    """Convert node attributes to PyTorch feature tensors.
+    """
+    Convert node attributes to PyTorch feature tensors.
 
     Extracts numerical data from specified columns and converts to a tensor suitable
     for graph neural network processing. Handles missing columns gracefully and
@@ -690,16 +710,28 @@ def _create_node_features(
     Parameters
     ----------
     node_gdf : geopandas.GeoDataFrame
-        GeoDataFrame containing node data
+        GeoDataFrame containing node data.
     feature_cols : list[str], optional
-        List of column names to use as features (None creates empty tensor)
+        List of column names to use as features (None creates empty tensor).
     device : str or torch.device, optional
-        Target device for tensor creation
+        Target device for tensor creation.
+    dtype : torch.dtype, optional
+        Data type for the tensor.
 
     Returns
     -------
     torch.Tensor
-        Float tensor of shape (num_nodes, num_features) containing node features
+        Float tensor of shape (num_nodes, num_features) containing node features.
+
+    See Also
+    --------
+    _create_node_positions : Extract spatial coordinates from geometries.
+
+    Examples
+    --------
+    >>> import geopandas as gpd
+    >>> gdf = gpd.GeoDataFrame({'feature1': [1, 2], 'feature2': [3, 4]})
+    >>> tensor = _create_node_features(gdf, ['feature1', 'feature2'])
     """
     device = _get_device(device)
     dtype = dtype or torch.float32
@@ -725,7 +757,8 @@ def _create_node_positions(
     device: str | torch.device | None = None,
     dtype: torch.dtype | None = None,
 ) -> torch.Tensor | None:
-    """Extract spatial coordinates from node geometries.
+    """
+    Extract spatial coordinates from node geometries.
 
     Converts geometric representations to coordinate tensors suitable for
     spatial graph neural networks. Handles various geometry types and
@@ -734,22 +767,33 @@ def _create_node_positions(
     Parameters
     ----------
     node_gdf : geopandas.GeoDataFrame
-        GeoDataFrame with geometry column containing spatial data
+        GeoDataFrame with geometry column containing spatial data.
     device : str or torch.device, optional
-        Target device for tensor creation
+        Target device for tensor creation.
     dtype : torch.dtype, optional
         Data type for position tensors. If None, uses torch.float32.
 
     Returns
     -------
     torch.Tensor or None
-        Float tensor of shape (num_nodes, 2) containing [x, y] coordinates
-        None if no geometry column found
+        Float tensor of shape (num_nodes, 2) containing [x, y] coordinates.
+        None if no geometry column found.
+
+    See Also
+    --------
+    _create_node_features : Convert node attributes to tensors.
 
     Notes
     -----
     - Uses centroid coordinates for all geometry types.
-    - Coordinates are in the original CRS of the GeoDataFrame
+    - Coordinates are in the original CRS of the GeoDataFrame.
+
+    Examples
+    --------
+    >>> import geopandas as gpd
+    >>> from shapely.geometry import Point
+    >>> gdf = gpd.GeoDataFrame(geometry=[Point(0, 0), Point(1, 1)])
+    >>> coords = _create_node_positions(gdf)
     """
     # Get the device for tensor creation
     device = _get_device(device)
@@ -784,7 +828,8 @@ def _create_edge_features(
     device: str | torch.device | None = None,
     dtype: torch.dtype | None = None,
 ) -> torch.Tensor:
-    """Convert edge attributes to PyTorch feature tensors.
+    """
+    Convert edge attributes to PyTorch feature tensors.
 
     Similar to node features but for edge data. Commonly used for edge weights,
     distances, or other relationship-specific attributes.
@@ -792,16 +837,28 @@ def _create_edge_features(
     Parameters
     ----------
     edge_gdf : geopandas.GeoDataFrame
-        GeoDataFrame containing edge data
+        GeoDataFrame containing edge data.
     feature_cols : list[str], optional
-        List of column names to use as features
+        List of column names to use as features.
     device : str or torch.device, optional
-        Target device for tensor creation
+        Target device for tensor creation.
+    dtype : torch.dtype, optional
+        Data type for the tensor.
 
     Returns
     -------
     torch.Tensor
-        Float tensor of shape (num_edges, num_features) containing edge features
+        Float tensor of shape (num_edges, num_features) containing edge features.
+
+    See Also
+    --------
+    _create_node_features : Convert node attributes to tensors.
+
+    Examples
+    --------
+    >>> import geopandas as gpd
+    >>> gdf = gpd.GeoDataFrame({'weight': [1.0, 2.0]})
+    >>> tensor = _create_edge_features(gdf, ['weight'])
     """
     device = _get_device(device)
     dtype = dtype or torch.float32
@@ -829,7 +886,40 @@ def _create_edge_indices(
     source_mapping: dict[str | int, int],
     target_mapping: dict[str | int, int] | None = None,
 ) -> list[list[int]]:
-    """Create edge connectivity matrix from edge data using MultiIndex."""
+    """
+    Create edge connectivity matrix from edge data using MultiIndex.
+
+    Extracts source and target node IDs from the MultiIndex of the edge GeoDataFrame
+    and maps them to sequential integer indices required by PyTorch Geometric.
+
+    Parameters
+    ----------
+    edge_gdf : geopandas.GeoDataFrame
+        GeoDataFrame with MultiIndex containing (source_id, target_id) pairs.
+    source_mapping : dict[str | int, int]
+        Mapping from original source node IDs to integer indices.
+    target_mapping : dict[str | int, int], optional
+        Mapping from original target node IDs to integer indices.
+        If None, uses source_mapping.
+
+    Returns
+    -------
+    list[list[int]]
+        Edge connectivity matrix as [source_indices, target_indices].
+
+    See Also
+    --------
+    _create_node_mapping : Create node ID mappings.
+
+    Examples
+    --------
+    >>> import geopandas as gpd
+    >>> import pandas as pd
+    >>> idx = pd.MultiIndex.from_tuples([(0, 1), (1, 2)])
+    >>> gdf = gpd.GeoDataFrame(index=idx)
+    >>> mapping = {0: 0, 1: 1, 2: 2}
+    >>> edges = _create_edge_index(gdf, mapping)
+    """
     target_mapping = target_mapping or source_mapping
 
     # Extract source and target IDs from MultiIndex
@@ -843,7 +933,34 @@ def _create_edge_indices(
 
 
 def _extract_edge_ids(edge_gdf: gpd.GeoDataFrame) -> tuple[pd.Series, pd.Series]:
-    """Extract source and target IDs from MultiIndex DataFrame."""
+    """
+    Extract source and target IDs from MultiIndex DataFrame.
+
+    This helper function extracts the source and target node identifiers from
+    the two levels of a MultiIndex, which represent edge relationships.
+
+    Parameters
+    ----------
+    edge_gdf : geopandas.GeoDataFrame
+        GeoDataFrame with MultiIndex containing (source_id, target_id) pairs.
+
+    Returns
+    -------
+    tuple[pd.Series, pd.Series]
+        Source IDs and target IDs from the MultiIndex levels.
+
+    See Also
+    --------
+    _create_edge_index : Create edge connectivity matrix.
+
+    Examples
+    --------
+    >>> import geopandas as gpd
+    >>> import pandas as pd
+    >>> idx = pd.MultiIndex.from_tuples([(0, 1), (1, 2)])
+    >>> gdf = gpd.GeoDataFrame(index=idx)
+    >>> src, tgt = _extract_edge_ids(gdf)
+    """
     return (
         edge_gdf.index.get_level_values(0),  # First level = source
         edge_gdf.index.get_level_values(1),
@@ -856,7 +973,40 @@ def _map_edge_ids_to_indices(
     source_mapping: dict[str | int, int],
     target_mapping: dict[str | int, int],
 ) -> list[list[int]]:
-    """Map edge IDs to indices."""
+    """
+    Map edge IDs to indices.
+
+    This function converts original edge node IDs to sequential integer indices
+    required by PyTorch Geometric, filtering out invalid edges in the process.
+
+    Parameters
+    ----------
+    source_ids : pd.Series
+        Series of source node IDs.
+    target_ids : pd.Series
+        Series of target node IDs.
+    source_mapping : dict[str | int, int]
+        Mapping from source node IDs to indices.
+    target_mapping : dict[str | int, int]
+        Mapping from target node IDs to indices.
+
+    Returns
+    -------
+    list[list[int]]
+        Edge connectivity matrix as [source_indices, target_indices].
+
+    See Also
+    --------
+    _extract_edge_ids : Extract IDs from MultiIndex.
+
+    Examples
+    --------
+    >>> import pandas as pd
+    >>> src = pd.Series([0, 1])
+    >>> tgt = pd.Series([1, 2])
+    >>> mapping = {0: 0, 1: 1, 2: 2}
+    >>> edges = _map_edge_ids_to_indices(src, tgt, mapping, mapping)
+    """
     # Find edges with valid source and target nodes
     valid_src_mask = source_ids.isin(source_mapping.keys())
     valid_dst_mask = target_ids.isin(target_mapping.keys())
@@ -892,20 +1042,36 @@ def _create_linestring_geometries(
 
     Parameters
     ----------
-        edge_index_array: Array of shape (2, num_edges) with source/target indices
-        src_pos: Array of source node coordinates
-        dst_pos: Array of target node coordinates
+    edge_index_array : np.ndarray
+        Array of shape (2, num_edges) with source/target indices.
+    src_pos : np.ndarray
+        Array of source node coordinates.
+    dst_pos : np.ndarray
+        Array of target node coordinates.
 
     Returns
     -------
-        List of LineString objects connecting source to target nodes
-        None entries for invalid/out-of-bounds edges
+    list[LineString | None]
+        List of LineString objects connecting source to target nodes.
+        None entries for invalid/out-of-bounds edges.
+
+    See Also
+    --------
+    _create_edge_index : Create edge connectivity matrix.
 
     Notes
     -----
-        - Performs bounds checking to avoid index errors
-        - Only uses first 2 dimensions of position data (x, y)
-        - Returns None for edges with invalid node indices
+    - Performs bounds checking to avoid index errors.
+    - Only uses first 2 dimensions of position data (x, y).
+    - Returns None for edges with invalid node indices.
+
+    Examples
+    --------
+    >>> import numpy as np
+    >>> edge_index = np.array([[0, 1], [1, 2]])
+    >>> src_pos = np.array([[0, 0], [1, 1]])
+    >>> dst_pos = np.array([[1, 1], [2, 2]])
+    >>> lines = _create_edge_geometries(edge_index, src_pos, dst_pos)
     """
     if edge_index_array.size == 0:
         return []
@@ -969,24 +1135,42 @@ def _build_homogeneous_graph(
 
     Parameters
     ----------
-        nodes_gdf: GeoDataFrame containing node data (index used for IDs)
-        edges_gdf: GeoDataFrame containing edge data (MultiIndex used for relationships)
-        node_feature_cols: Columns to use as node features
-        node_label_cols: Columns to use as node labels
-        edge_feature_cols: Columns to use as edge features
-        device: Target device for tensor creation
-        dtype: Data type for float tensors
+    nodes_gdf : geopandas.GeoDataFrame
+        GeoDataFrame containing node data (index used for IDs).
+    edges_gdf : geopandas.GeoDataFrame, optional
+        GeoDataFrame containing edge data (MultiIndex used for relationships).
+    node_feature_cols : list[str], optional
+        Columns to use as node features.
+    node_label_cols : list[str], optional
+        Columns to use as node labels.
+    edge_feature_cols : list[str], optional
+        Columns to use as edge features.
+    device : str or torch.device, optional
+        Target device for tensor creation.
+    dtype : torch.dtype, optional
+        Data type for float tensors.
 
     Returns
     -------
-        PyTorch Geometric Data object with all graph components
+    Data
+        PyTorch Geometric Data object with all graph components.
+
+    See Also
+    --------
+    create_heterogeneous_graph : Create multi-type graphs.
 
     Notes
     -----
-        - Preserves original index names and values for reconstruction
-        - Stores metadata for bidirectional conversion
-        - Handles missing edges gracefully (creates empty edge tensors)
-        - Maintains CRS information if available
+    - Preserves original index names and values for reconstruction.
+    - Stores metadata for bidirectional conversion.
+    - Handles missing edges gracefully (creates empty edge tensors).
+    - Maintains CRS information if available.
+
+    Examples
+    --------
+    >>> import geopandas as gpd
+    >>> nodes = gpd.GeoDataFrame({'feature': [1, 2]})
+    >>> data = create_homogeneous_graph(nodes)
     """
     device = _get_device(device)
 
@@ -1065,7 +1249,46 @@ def _build_heterogeneous_graph(
     device: str | torch.device | None = None,
     dtype: torch.dtype | None = None,
 ) -> HeteroData:
-    """Build heterogeneous PyTorch Geometric HeteroData object."""
+    """
+    Build heterogeneous PyTorch Geometric HeteroData object.
+
+    Creates a multi-type graph where nodes and edges can have different types and
+    schemas. Each node type can have different features and each edge type can
+    connect different node types with different relationship semantics.
+
+    Parameters
+    ----------
+    nodes_dict : dict[str, geopandas.GeoDataFrame]
+        Dictionary mapping node type names to their corresponding GeoDataFrames.
+    edges_dict : dict[tuple[str, str, str], geopandas.GeoDataFrame], optional
+        Dictionary mapping edge type tuples (source_type, relation, target_type)
+        to their corresponding GeoDataFrames.
+    node_feature_cols : dict[str, list[str]], optional
+        Dictionary mapping node types to lists of feature column names.
+    node_label_cols : dict[str, list[str]], optional
+        Dictionary mapping node types to lists of label column names.
+    edge_feature_cols : dict[str, list[str]], optional
+        Dictionary mapping edge types to lists of feature column names.
+    device : str or torch.device, optional
+        Target device for tensor creation.
+    dtype : torch.dtype, optional
+        Data type for float tensors.
+
+    Returns
+    -------
+    HeteroData
+        PyTorch Geometric HeteroData object with all graph components.
+
+    See Also
+    --------
+    create_homogeneous_graph : Create single-type graphs.
+
+    Examples
+    --------
+    >>> import geopandas as gpd
+    >>> nodes = {'buildings': gpd.GeoDataFrame({'area': [100, 200]})}
+    >>> data = create_heterogeneous_graph(nodes)
+    """
     device = _get_device(device)
     data = HeteroData()
 
@@ -1114,7 +1337,42 @@ def _process_hetero_nodes(
     device: str | torch.device | None,
     dtype: torch.dtype | None,
 ) -> dict[str, dict[str, dict[str | int, int] | str | list[str | int]]]:
-    """Process all node types for heterogeneous graph."""
+    """
+    Process all node types for heterogeneous graph.
+
+    Handles node processing for each node type in a heterogeneous graph, creating
+    mappings, features, and labels for each type independently.
+
+    Parameters
+    ----------
+    data : HeteroData
+        The HeteroData object to populate with node information.
+    nodes_dict : dict[str, geopandas.GeoDataFrame]
+        Dictionary mapping node type names to their GeoDataFrames.
+    node_feature_cols : dict[str, list[str]], optional
+        Dictionary mapping node types to feature column lists.
+    node_label_cols : dict[str, list[str]], optional
+        Dictionary mapping node types to label column lists.
+    device : str or torch.device, optional
+        Target device for tensor creation.
+    dtype : torch.dtype, optional
+        Data type for float tensors.
+
+    Returns
+    -------
+    dict[str, dict[str, dict[str | int, int] | str | list[str | int]]]
+        Dictionary containing node mappings and metadata for each node type.
+
+    See Also
+    --------
+    _process_hetero_edges : Process edge types for heterogeneous graphs.
+
+    Examples
+    --------
+    >>> data = HeteroData()
+    >>> nodes = {'buildings': gpd.GeoDataFrame()}
+    >>> mappings = _process_hetero_nodes(data, nodes, None, None, 'cpu', torch.float32)
+    """
     node_mappings: dict[str, dict[str, dict[str | int, int] | str | list[str | int]]] = {}
     device = _get_device(device)
 
@@ -1151,7 +1409,37 @@ def _process_hetero_edges(
     device: str | torch.device | None,
     dtype: torch.dtype | None,
 ) -> None:
-    """Process all edge types for heterogeneous graph."""
+    """
+    Process all edge types for heterogeneous graph.
+
+    Handles edge processing for each edge type in a heterogeneous graph, creating
+    connectivity matrices and features for relationships between different node types.
+
+    Parameters
+    ----------
+    data : HeteroData
+        The HeteroData object to populate with edge information.
+    edges_dict : dict[tuple[str, str, str], geopandas.GeoDataFrame]
+        Dictionary mapping edge type tuples to their GeoDataFrames.
+    node_mappings : dict[str, dict[str, dict[str | int, int] | str | list[str | int]]]
+        Node mappings and metadata from node processing.
+    edge_feature_cols : dict[str, list[str]], optional
+        Dictionary mapping edge types to feature column lists.
+    device : str or torch.device, optional
+        Target device for tensor creation.
+    dtype : torch.dtype, optional
+        Data type for float tensors.
+
+    See Also
+    --------
+    _process_hetero_nodes : Process node types for heterogeneous graphs.
+
+    Examples
+    --------
+    >>> data = HeteroData()
+    >>> edges = {('building', 'near', 'building'): gpd.GeoDataFrame()}
+    >>> _process_hetero_edges(data, edges, node_mappings, None, 'cpu', torch.float32)
+    """
     device = _get_device(device)
 
     for edge_type, edge_gdf in edges_dict.items():
@@ -1203,7 +1491,39 @@ def _store_hetero_metadata(
     node_label_cols: dict[str, list[str]] | None,
     edge_feature_cols: dict[str, list[str]] | None,
 ) -> None:
-    """Store metadata for heterogeneous graph."""
+    """
+    Store metadata for heterogeneous graph.
+
+    Stores all necessary metadata for bidirectional conversion between HeteroData
+    and GeoDataFrames, including mappings, column information, and graph structure.
+
+    Parameters
+    ----------
+    data : HeteroData
+        The HeteroData object to store metadata in.
+    node_mappings : dict[str, dict[str, dict[str | int, int] | str | list[str | int]]]
+        Node mappings and metadata from node processing.
+    nodes_dict : dict[str, geopandas.GeoDataFrame]
+        Dictionary mapping node type names to their GeoDataFrames.
+    edges_dict : dict[tuple[str, str, str], geopandas.GeoDataFrame]
+        Dictionary mapping edge type tuples to their GeoDataFrames.
+    node_feature_cols : dict[str, list[str]], optional
+        Dictionary mapping node types to feature column lists.
+    node_label_cols : dict[str, list[str]], optional
+        Dictionary mapping node types to label column lists.
+    edge_feature_cols : dict[str, list[str]], optional
+        Dictionary mapping edge types to feature column lists.
+
+    See Also
+    --------
+    _process_hetero_nodes : Process node types for heterogeneous graphs.
+    _process_hetero_edges : Process edge types for heterogeneous graphs.
+
+    Examples
+    --------
+    >>> data = HeteroData()
+    >>> _store_hetero_metadata(data, mappings, nodes, edges, None, None, None)
+    """
     # Store mappings and column metadata
     metadata = GraphMetadata(is_hetero=True)
     metadata.node_types = list(nodes_dict.keys())
@@ -1272,6 +1592,16 @@ def validate_pyg(data: Data | HeteroData) -> GraphMetadata:
         If data is not a valid PyTorch Geometric object.
     ValueError
         If the data object is missing required metadata or is inconsistent.
+
+    See Also
+    --------
+    _validate_hetero_structure : Validate heterogeneous graph structure.
+    _validate_homo_structure : Validate homogeneous graph structure.
+
+    Examples
+    --------
+    >>> data = create_homogeneous_graph(nodes_gdf)
+    >>> metadata = _validate_pyg_data(data)
     """
     # Check PyTorch availability first
     if not TORCH_AVAILABLE:
@@ -1333,7 +1663,29 @@ def validate_pyg(data: Data | HeteroData) -> GraphMetadata:
 
 
 def _validate_hetero_structure(data: HeteroData, metadata: GraphMetadata) -> None:
-    """Validate structural consistency of heterogeneous PyG data."""
+    """
+    Validate structural consistency of heterogeneous PyG data.
+
+    Performs comprehensive validation of heterogeneous graph structure, ensuring
+    that node types, edge types, and tensor dimensions are consistent.
+
+    Parameters
+    ----------
+    data : HeteroData
+        The heterogeneous PyTorch Geometric data object to validate.
+    metadata : GraphMetadata
+        Metadata containing expected graph structure information.
+
+    See Also
+    --------
+    _validate_homo_structure : Validate homogeneous graph structure.
+
+    Examples
+    --------
+    >>> data = create_heterogeneous_graph(nodes_dict)
+    >>> metadata = data._metadata
+    >>> _validate_hetero_structure(data, metadata)
+    """
     # Check that node types in metadata match actual node types in data
     if metadata.node_types:
         actual_node_types = set(data.node_types)
@@ -1388,7 +1740,29 @@ def _validate_hetero_structure(data: HeteroData, metadata: GraphMetadata) -> Non
 
 
 def _validate_homo_structure(data: Data, metadata: GraphMetadata) -> None:
-    """Validate structural consistency of homogeneous PyG data."""
+    """
+    Validate structural consistency of homogeneous PyG data.
+
+    Performs comprehensive validation of homogeneous graph structure, ensuring
+    that tensor dimensions are consistent and metadata is properly structured.
+
+    Parameters
+    ----------
+    data : Data
+        The homogeneous PyTorch Geometric data object to validate.
+    metadata : GraphMetadata
+        Metadata containing expected graph structure information.
+
+    See Also
+    --------
+    _validate_hetero_structure : Validate heterogeneous graph structure.
+
+    Examples
+    --------
+    >>> data = create_homogeneous_graph(nodes_gdf)
+    >>> metadata = data._metadata
+    >>> _validate_homo_structure(data, metadata)
+    """
     # Validate that metadata has the expected structure for homogeneous graphs
     if metadata.node_types and len(metadata.node_types) > 0:
         msg = "Homogeneous graph metadata should not have node_types specified"
@@ -1462,7 +1836,34 @@ def _extract_tensor_data(
     tensor: torch.Tensor | None,
     column_names: list[str] | None = None,
 ) -> dict[str, np.ndarray[tuple[int, ...], np.dtype[np.float32]]]:
-    """Extract data from tensor with proper column names."""
+    """
+    Extract data from tensor with proper column names.
+
+    Converts PyTorch tensors to numpy arrays and maps them to column names
+    for reconstruction of GeoDataFrame columns.
+
+    Parameters
+    ----------
+    tensor : torch.Tensor, optional
+        Input tensor containing feature data.
+    column_names : list[str], optional
+        List of column names to map tensor columns to.
+
+    Returns
+    -------
+    dict[str, np.ndarray]
+        Dictionary mapping column names to numpy arrays.
+
+    See Also
+    --------
+    _get_node_data_info : Get node data and count information.
+
+    Examples
+    --------
+    >>> tensor = torch.tensor([[1.0, 2.0], [3.0, 4.0]])
+    >>> cols = ['feature1', 'feature2']
+    >>> data = _extract_tensor_data(tensor, cols)
+    """
     if tensor is None or tensor.numel() == 0 or column_names is None:
         return {}
 
@@ -1476,7 +1877,34 @@ def _get_node_data_info(
     node_type: str | None,
     metadata: GraphMetadata,
 ) -> tuple[Data | HeteroData, int]:
-    """Get node data and number of nodes."""
+    """
+    Get node data and number of nodes.
+
+    Extracts node-specific data from PyG objects, handling both homogeneous
+    and heterogeneous graphs appropriately.
+
+    Parameters
+    ----------
+    data : Data or HeteroData
+        PyTorch Geometric data object.
+    node_type : str, optional
+        Node type for heterogeneous graphs.
+    metadata : GraphMetadata
+        Metadata containing graph structure information.
+
+    Returns
+    -------
+    tuple[Data | HeteroData, int]
+        Node data object and number of nodes.
+
+    See Also
+    --------
+    _extract_tensor_data : Extract data from tensors.
+
+    Examples
+    --------
+    >>> node_data, num_nodes = _get_node_data_info(data, 'building', metadata)
+    """
     node_data = data[node_type] if metadata.is_hetero and node_type else data
     return node_data, int(node_data.num_nodes)
 
@@ -1485,7 +1913,34 @@ def _get_mapping_info(
     node_type: str | None,
     metadata: GraphMetadata,
 ) -> dict[str, dict[str | int, int] | str | list[str | int]] | None:
-    """Get mapping info for the given node type."""
+    """
+    Get mapping info for the given node type.
+
+    This function retrieves mapping information from the metadata for a specific
+    node type, handling both homogeneous and heterogeneous graphs.
+
+    Parameters
+    ----------
+    node_type : str or None
+        The type of node to get mapping info for. If None, uses default mapping.
+    metadata : GraphMetadata
+        The graph metadata containing node mappings.
+
+    Returns
+    -------
+    dict or None
+        Dictionary containing mapping information with keys like 'original_ids',
+        or None if no mapping exists for the given node type.
+
+    See Also
+    --------
+    _extract_index_values : Extract index values from mapping info.
+
+    Examples
+    --------
+    >>> metadata = GraphMetadata(is_hetero=True, node_mappings={'building': {...}})
+    >>> mapping = _get_mapping_info('building', metadata)
+    """
     mapping_key = "default" if not metadata.is_hetero or not node_type else node_type
     return metadata.node_mappings.get(mapping_key)
 
@@ -1494,7 +1949,34 @@ def _extract_index_values(
     mapping_info: dict[str, dict[str | int, int] | str | list[str | int]],
     num_nodes: int,
 ) -> list[str | int]:
-    """Extract index values from mapping info."""
+    """
+    Extract index values from mapping info.
+
+    This function extracts the original node IDs from mapping information,
+    ensuring the returned list has the correct length.
+
+    Parameters
+    ----------
+    mapping_info : dict
+        Dictionary containing mapping information with 'original_ids' key.
+    num_nodes : int
+        Number of nodes to extract IDs for.
+
+    Returns
+    -------
+    list of str or int
+        List of original node IDs, truncated to num_nodes length.
+
+    See Also
+    --------
+    _get_mapping_info : Get mapping info for a given node type.
+
+    Examples
+    --------
+    >>> mapping_info = {'original_ids': ['a', 'b', 'c', 'd']}
+    >>> ids = _extract_index_values(mapping_info, 3)
+    >>> print(ids)  # ['a', 'b', 'c']
+    """
     original_ids = mapping_info.get("original_ids", list(range(num_nodes)))
 
     # Convert to list if not already, then slice to num_nodes
@@ -1503,7 +1985,34 @@ def _extract_index_values(
 
 
 def _create_geometry_from_positions(node_data: Data | HeteroData) -> gpd.array.GeometryArray | None:
-    """Create geometry from node positions."""
+    """
+    Create geometry from node positions.
+
+    This function converts node position tensors into GeoPandas geometry objects
+    for spatial analysis and visualization.
+
+    Parameters
+    ----------
+    node_data : Data or HeteroData
+        PyTorch Geometric data object containing node positions.
+
+    Returns
+    -------
+    gpd.array.GeometryArray or None
+        Array of Point geometries created from node positions, or None if
+        no position data is available.
+
+    See Also
+    --------
+    _extract_node_features_and_labels : Extract features and labels from node data.
+
+    Examples
+    --------
+    >>> import torch
+    >>> from torch_geometric.data import Data
+    >>> data = Data(pos=torch.tensor([[0.0, 1.0], [2.0, 3.0]]))
+    >>> geom = _create_geometry_from_positions(data)
+    """
     if not hasattr(node_data, "pos") or node_data.pos is None:
         return None
     pos_array: np.ndarray[tuple[int, ...], np.dtype[np.float32]] = (
@@ -1517,7 +2026,38 @@ def _extract_node_features_and_labels(
     node_type: str | None,
     metadata: GraphMetadata,
 ) -> dict[str, np.ndarray[tuple[int, ...], np.dtype[np.float32]]]:
-    """Extract features and labels from node data."""
+    """
+    Extract features and labels from node data.
+
+    This function extracts node features and labels from PyTorch Geometric data
+    objects, handling both homogeneous and heterogeneous graphs.
+
+    Parameters
+    ----------
+    node_data : Data or HeteroData
+        PyTorch Geometric data object containing node features and labels.
+    node_type : str or None
+        The type of nodes to extract data for. Required for heterogeneous graphs.
+    metadata : GraphMetadata
+        Graph metadata containing information about feature and label mappings.
+
+    Returns
+    -------
+    dict
+        Dictionary mapping column names to numpy arrays containing the extracted
+        features and labels.
+
+    See Also
+    --------
+    _create_geometry_from_positions : Create geometry from node positions.
+
+    Examples
+    --------
+    >>> import torch
+    >>> from torch_geometric.data import Data
+    >>> data = Data(x=torch.tensor([[1.0, 2.0], [3.0, 4.0]]))
+    >>> features = _extract_node_features_and_labels(data, None, metadata)
+    """
     gdf_data = {}
     is_hetero = metadata.is_hetero
 
@@ -1551,7 +2091,31 @@ def _set_gdf_index_and_crs(
     node_type: str | None,
     metadata: GraphMetadata,
 ) -> None:
-    """Set index names and CRS on GeoDataFrame."""
+    """
+    Set index names and CRS on GeoDataFrame.
+
+    This function configures the index names and coordinate reference system
+    for a GeoDataFrame based on metadata information.
+
+    Parameters
+    ----------
+    gdf : gpd.GeoDataFrame
+        The GeoDataFrame to configure.
+    node_type : str or None
+        The type of nodes in the GeoDataFrame.
+    metadata : GraphMetadata
+        Graph metadata containing index names and CRS information.
+
+    See Also
+    --------
+    _reconstruct_node_gdf : Reconstruct node GeoDataFrame from PyTorch data.
+
+    Examples
+    --------
+    >>> import geopandas as gpd
+    >>> gdf = gpd.GeoDataFrame({'col1': [1, 2]})
+    >>> _set_gdf_index_and_crs(gdf, 'building', metadata)
+    """
     # Set index names
     if metadata.node_index_names:
         index_names: list[str] | None = None
@@ -1586,7 +2150,39 @@ def _reconstruct_node_gdf(
     metadata: GraphMetadata,
     node_type: str | None = None,
 ) -> gpd.GeoDataFrame:
-    """Reconstruct node GeoDataFrame from PyTorch Geometric data."""
+    """
+    Reconstruct node GeoDataFrame from PyTorch Geometric data.
+
+    This function reconstructs a GeoDataFrame containing node information
+    from PyTorch Geometric data objects and metadata.
+
+    Parameters
+    ----------
+    data : Data or HeteroData
+        PyTorch Geometric data object containing node information.
+    metadata : GraphMetadata
+        Graph metadata with mapping and feature information.
+    node_type : str, optional
+        The type of nodes to reconstruct. Required for heterogeneous graphs.
+
+    Returns
+    -------
+    gpd.GeoDataFrame
+        GeoDataFrame containing reconstructed node data with geometry,
+        features, and proper indexing.
+
+    See Also
+    --------
+    _extract_node_features_and_labels : Extract features and labels from node data.
+    _create_geometry_from_positions : Create geometry from node positions.
+
+    Examples
+    --------
+    >>> from torch_geometric.data import Data
+    >>> import torch
+    >>> data = Data(x=torch.tensor([[1.0, 2.0]]), pos=torch.tensor([[0.0, 1.0]]))
+    >>> gdf = _reconstruct_node_gdf(data, metadata)
+    """
     node_data, num_nodes = _get_node_data_info(data, node_type, metadata)
     mapping_info = _get_mapping_info(node_type, metadata)
 
@@ -1612,7 +2208,37 @@ def _reconstruct_edge_index(
     edge_data_dict: dict[str, np.ndarray[tuple[int, ...], np.dtype[np.float32]]],
     metadata: GraphMetadata,
 ) -> pd.Index | pd.MultiIndex | None:
-    """Reconstruct edge index from stored values."""
+    """
+    Reconstruct edge index from stored values.
+
+    This function reconstructs pandas Index or MultiIndex objects for edges
+    from stored values in the metadata.
+
+    Parameters
+    ----------
+    edge_type : str, tuple, or None
+        The type of edges to reconstruct index for.
+    is_hetero : bool
+        Whether the graph is heterogeneous.
+    edge_data_dict : dict
+        Dictionary containing edge data arrays.
+    metadata : GraphMetadata
+        Graph metadata containing stored edge index values.
+
+    Returns
+    -------
+    pd.Index, pd.MultiIndex, or None
+        Reconstructed index for the edges, or None if no stored values exist.
+
+    See Also
+    --------
+    _extract_edge_features : Extract edge features from data.
+
+    Examples
+    --------
+    >>> edge_data = {'feature1': np.array([1, 2, 3])}
+    >>> index = _reconstruct_edge_index('road', False, edge_data, metadata)
+    """
     stored_values: list[list[str | int]] | None = None
     if is_hetero and edge_type and isinstance(metadata.edge_index_values, dict):
         if isinstance(edge_type, tuple):
@@ -1637,7 +2263,40 @@ def _extract_edge_features(
     is_hetero: bool,
     metadata: GraphMetadata,
 ) -> dict[str, np.ndarray[tuple[int, ...], np.dtype[np.float32]]]:
-    """Extract edge features from edge data."""
+    """
+    Extract edge features from edge data.
+
+    This function extracts edge features from PyTorch Geometric data objects,
+    handling both homogeneous and heterogeneous graphs.
+
+    Parameters
+    ----------
+    edge_data : Data or HeteroData
+        PyTorch Geometric data object containing edge information.
+    edge_type : str, tuple, or None
+        The type of edges to extract features for.
+    is_hetero : bool
+        Whether the graph is heterogeneous.
+    metadata : GraphMetadata
+        Graph metadata containing edge feature column information.
+
+    Returns
+    -------
+    dict
+        Dictionary mapping feature column names to numpy arrays containing
+        the extracted edge features.
+
+    See Also
+    --------
+    _create_edge_geometries : Create edge geometries from edge indices.
+
+    Examples
+    --------
+    >>> import torch
+    >>> from torch_geometric.data import Data
+    >>> data = Data(edge_attr=torch.tensor([[1.0, 2.0], [3.0, 4.0]]))
+    >>> features = _extract_edge_features(data, None, False, metadata)
+    """
     edge_data_dict: dict[str, np.ndarray[tuple[int, ...], np.dtype[np.float32]]] = {}
 
     if not (hasattr(edge_data, "edge_attr") and edge_data.edge_attr is not None):
@@ -1665,7 +2324,41 @@ def _create_edge_geometries(
     is_hetero: bool,
     data: Data | HeteroData,
 ) -> gpd.array.GeometryArray | None:
-    """Create edge geometries from edge indices and node positions."""
+    """
+    Create edge geometries from edge indices and node positions.
+
+    This function creates LineString geometries for edges by connecting
+    the positions of source and destination nodes.
+
+    Parameters
+    ----------
+    edge_data : Data
+        PyTorch Geometric data object containing edge information.
+    edge_type : str, tuple, or None
+        The type of edges to create geometries for.
+    is_hetero : bool
+        Whether the graph is heterogeneous.
+    data : Data or HeteroData
+        Complete PyTorch Geometric data object containing node positions.
+
+    Returns
+    -------
+    gpd.array.GeometryArray or None
+        Array of LineString geometries for the edges, or None if
+        node positions are not available.
+
+    See Also
+    --------
+    _extract_edge_features : Extract edge features from data.
+
+    Examples
+    --------
+    >>> import torch
+    >>> from torch_geometric.data import Data
+    >>> data = Data(edge_index=torch.tensor([[0, 1], [1, 0]]),
+    ...             pos=torch.tensor([[0.0, 0.0], [1.0, 1.0]]))
+    >>> geom = _create_edge_geometries(data, None, False, data)
+    """
     # Get edge index array
     edge_index_array = edge_data.edge_index.detach().cpu().numpy()
 
@@ -1702,7 +2395,33 @@ def _set_edge_index_names(
     is_hetero: bool,
     metadata: GraphMetadata,
 ) -> None:
-    """Set index names on edge GeoDataFrame."""
+    """
+    Set index names on edge GeoDataFrame.
+
+    This function configures the index names for an edge GeoDataFrame
+    based on metadata information.
+
+    Parameters
+    ----------
+    gdf : gpd.GeoDataFrame
+        The edge GeoDataFrame to configure.
+    edge_type : str, tuple, or None
+        The type of edges in the GeoDataFrame.
+    is_hetero : bool
+        Whether the graph is heterogeneous.
+    metadata : GraphMetadata
+        Graph metadata containing edge index name information.
+
+    See Also
+    --------
+    _reconstruct_edge_gdf : Reconstruct edge GeoDataFrame from PyTorch data.
+
+    Examples
+    --------
+    >>> import geopandas as gpd
+    >>> gdf = gpd.GeoDataFrame({'col1': [1, 2]})
+    >>> _set_edge_index_names(gdf, 'road', False, metadata)
+    """
     index_names: list[str] | None = None
     if is_hetero and edge_type and isinstance(metadata.edge_index_names, dict):
         if isinstance(edge_type, tuple):
@@ -1724,7 +2443,39 @@ def _reconstruct_edge_gdf(
     metadata: GraphMetadata,
     edge_type: str | tuple[str, str, str] | None = None,
 ) -> gpd.GeoDataFrame:
-    """Reconstruct edge GeoDataFrame from PyTorch Geometric data."""
+    """
+    Reconstruct edge GeoDataFrame from PyTorch Geometric data.
+
+    This function reconstructs a GeoDataFrame containing edge information
+    from PyTorch Geometric data objects and metadata.
+
+    Parameters
+    ----------
+    data : Data or HeteroData
+        PyTorch Geometric data object containing edge information.
+    metadata : GraphMetadata
+        Graph metadata with mapping and feature information.
+    edge_type : str, tuple, or None, optional
+        The type of edges to reconstruct. Required for heterogeneous graphs.
+
+    Returns
+    -------
+    gpd.GeoDataFrame
+        GeoDataFrame containing reconstructed edge data with geometry,
+        features, and proper indexing.
+
+    See Also
+    --------
+    _extract_edge_features : Extract edge features from data.
+    _create_edge_geometries : Create edge geometries from edge indices.
+
+    Examples
+    --------
+    >>> from torch_geometric.data import Data
+    >>> import torch
+    >>> data = Data(edge_index=torch.tensor([[0, 1], [1, 0]]))
+    >>> gdf = _reconstruct_edge_gdf(data, metadata)
+    """
     is_hetero = metadata.is_hetero
 
     edge_data = data[edge_type] if is_hetero and edge_type else data
@@ -1774,7 +2525,32 @@ def _reconstruct_edge_gdf(
 
 
 def _add_homo_nodes_to_graph(graph: nx.Graph, data: Data) -> None:
-    """Add homogeneous nodes to NetworkX graph."""
+    """
+    Add homogeneous nodes to NetworkX graph.
+
+    This function adds nodes from homogeneous PyTorch Geometric data
+    to a NetworkX graph with their attributes.
+
+    Parameters
+    ----------
+    graph : nx.Graph
+        NetworkX graph to add nodes to.
+    data : Data
+        PyTorch Geometric data object containing node information.
+
+    See Also
+    --------
+    _add_homo_edges_to_graph : Add homogeneous edges to NetworkX graph.
+
+    Examples
+    --------
+    >>> import networkx as nx
+    >>> import torch
+    >>> from torch_geometric.data import Data
+    >>> graph = nx.Graph()
+    >>> data = Data(x=torch.tensor([[1.0, 2.0]]))
+    >>> _add_homo_nodes_to_graph(graph, data)
+    """
     metadata = data.graph_metadata
     node_mapping_info = metadata.node_mappings.get("default", {})
     original_ids = node_mapping_info.get("original_ids", [])
@@ -1813,7 +2589,32 @@ def _add_homo_nodes_to_graph(graph: nx.Graph, data: Data) -> None:
 
 
 def _add_homo_edges_to_graph(graph: nx.Graph, data: Data) -> None:
-    """Add homogeneous edges to NetworkX graph."""
+    """
+    Add homogeneous edges to NetworkX graph.
+
+    This function adds edges from homogeneous PyTorch Geometric data
+    to a NetworkX graph with their attributes.
+
+    Parameters
+    ----------
+    graph : nx.Graph
+        NetworkX graph to add edges to.
+    data : Data
+        PyTorch Geometric data object containing edge information.
+
+    See Also
+    --------
+    _add_homo_nodes_to_graph : Add homogeneous nodes to NetworkX graph.
+
+    Examples
+    --------
+    >>> import networkx as nx
+    >>> import torch
+    >>> from torch_geometric.data import Data
+    >>> graph = nx.Graph()
+    >>> data = Data(edge_index=torch.tensor([[0, 1], [1, 0]]))
+    >>> _add_homo_edges_to_graph(graph, data)
+    """
     metadata = data.graph_metadata
     edge_feature_cols = metadata.edge_feature_cols
     original_edge_indices = metadata.edge_index_values
@@ -1844,7 +2645,36 @@ def _add_homo_edges_to_graph(graph: nx.Graph, data: Data) -> None:
 
 
 def _add_hetero_nodes_to_graph(graph: nx.Graph, data: HeteroData) -> dict[str, int]:
-    """Add heterogeneous nodes to NetworkX graph and return node offsets."""
+    """
+    Add heterogeneous nodes to NetworkX graph and return node offsets.
+
+    This function adds nodes from heterogeneous PyTorch Geometric data
+    to a NetworkX graph and tracks node type offsets.
+
+    Parameters
+    ----------
+    graph : nx.Graph
+        NetworkX graph to add nodes to.
+    data : HeteroData
+        PyTorch Geometric heterogeneous data object containing node information.
+
+    Returns
+    -------
+    dict[str, int]
+        Dictionary mapping node types to their starting offsets in the graph.
+
+    See Also
+    --------
+    _add_hetero_edges_to_graph : Add heterogeneous edges to NetworkX graph.
+
+    Examples
+    --------
+    >>> import networkx as nx
+    >>> from torch_geometric.data import HeteroData
+    >>> graph = nx.Graph()
+    >>> data = HeteroData()
+    >>> offsets = _add_hetero_nodes_to_graph(graph, data)
+    """
     node_offset = {}
     current_offset = 0
     metadata = data.graph_metadata
@@ -1905,7 +2735,33 @@ def _add_hetero_edges_to_graph(
     data: HeteroData,
     node_offset: dict[str, int],
 ) -> None:
-    """Add heterogeneous edges to NetworkX graph."""
+    """
+    Add heterogeneous edges to NetworkX graph.
+
+    This function adds edges from heterogeneous PyTorch Geometric data
+    to a NetworkX graph using node offsets for proper indexing.
+
+    Parameters
+    ----------
+    graph : nx.Graph
+        NetworkX graph to add edges to.
+    data : HeteroData
+        PyTorch Geometric heterogeneous data object containing edge information.
+    node_offset : dict[str, int]
+        Dictionary mapping node types to their starting offsets in the graph.
+
+    See Also
+    --------
+    _add_hetero_nodes_to_graph : Add heterogeneous nodes to NetworkX graph.
+
+    Examples
+    --------
+    >>> import networkx as nx
+    >>> from torch_geometric.data import HeteroData
+    >>> graph = nx.Graph()
+    >>> offsets = {'building': 0, 'road': 100}
+    >>> _add_hetero_edges_to_graph(graph, data, offsets)
+    """
     metadata = data.graph_metadata
 
     for edge_type in metadata.edge_types:
@@ -1942,7 +2798,42 @@ def _create_edge_attrs_dataframe(
     edge_type: tuple[str, str, str],
     num_edges: int,
 ) -> pd.DataFrame:
-    """Create edge attributes DataFrame with features and original indices."""
+    """
+    Create edge attributes DataFrame with features and original indices.
+
+    This function extracts edge attributes from a PyTorch Geometric edge store
+    and creates a pandas DataFrame with feature columns and original edge indices.
+
+    Parameters
+    ----------
+    edge_store : Data
+        PyTorch Geometric Data object containing edge information.
+    metadata : GraphMetadata
+        Metadata object containing graph structure information.
+    rel_type : str
+        Relationship type identifier for the edges.
+    edge_type : tuple[str, str, str]
+        Tuple specifying the edge type (source_type, relation, target_type).
+    num_edges : int
+        Number of edges in the edge store.
+
+    Returns
+    -------
+    pd.DataFrame
+        DataFrame containing edge attributes and original indices.
+
+    See Also
+    --------
+    _get_edge_attrs_array : Extract edge attributes array from edge store.
+    _get_edge_feature_columns : Get feature column names.
+
+    Examples
+    --------
+    >>> edge_store = Data(edge_attr=torch.randn(100, 5))
+    >>> metadata = GraphMetadata(...)
+    >>> df = _create_edge_attrs_dataframe(edge_store, metadata, "connects",
+    ...                                   ("node", "connects", "node"), 100)
+    """
     # Start with base DataFrame
     attrs_df = pd.DataFrame(index=range(num_edges))
 
@@ -1966,7 +2857,35 @@ def _create_edge_attrs_dataframe(
 def _get_edge_attrs_array(
     edge_store: Data,
 ) -> np.ndarray[tuple[int, ...], np.dtype[np.float32]] | None:
-    """Extract edge attributes array from edge store, or None if not available."""
+    """
+    Extract edge attributes array from edge store, or None if not available.
+
+    This function safely extracts the edge attribute tensor from a PyTorch Geometric
+    Data object and converts it to a NumPy array. Returns None if no edge attributes
+    are present.
+
+    Parameters
+    ----------
+    edge_store : Data
+        PyTorch Geometric Data object that may contain edge attributes.
+
+    Returns
+    -------
+    np.ndarray or None
+        Edge attributes as a NumPy array of shape (num_edges, num_features),
+        or None if no edge attributes are available.
+
+    See Also
+    --------
+    _create_edge_attrs_dataframe : Create edge attributes DataFrame.
+
+    Examples
+    --------
+    >>> edge_store = Data(edge_attr=torch.randn(100, 5))
+    >>> attrs = _get_edge_attrs_array(edge_store)
+    >>> attrs.shape
+    (100, 5)
+    """
     return (
         edge_store.edge_attr.detach().cpu().numpy()
         if hasattr(edge_store, "edge_attr") and edge_store.edge_attr is not None
@@ -1979,7 +2898,37 @@ def _get_edge_feature_columns(
     rel_type: str,
     num_features: int,
 ) -> list[str]:
-    """Get feature column names, using metadata or generating defaults."""
+    """
+    Get feature column names, using metadata or generating defaults.
+
+    This function retrieves edge feature column names from metadata if available,
+    or generates default column names based on the number of features.
+
+    Parameters
+    ----------
+    metadata : GraphMetadata
+        Metadata object containing graph structure information.
+    rel_type : str
+        Relationship type identifier for the edges.
+    num_features : int
+        Number of edge features.
+
+    Returns
+    -------
+    list[str]
+        List of column names for edge features.
+
+    See Also
+    --------
+    _create_edge_attrs_dataframe : Create edge attributes DataFrame.
+
+    Examples
+    --------
+    >>> metadata = GraphMetadata(...)
+    >>> cols = _get_edge_feature_columns(metadata, "connects", 5)
+    >>> cols
+    ['edge_feat_0', 'edge_feat_1', 'edge_feat_2', 'edge_feat_3', 'edge_feat_4']
+    """
     feature_cols = None
     if isinstance(metadata.edge_feature_cols, dict):
         feature_cols = metadata.edge_feature_cols.get(rel_type)
@@ -1989,7 +2938,38 @@ def _get_edge_feature_columns(
 
 
 def _convert_homo_pyg_to_nx(data: Data, metadata: GraphMetadata) -> nx.Graph:
-    """Convert homogeneous PyG data to NetworkX graph."""
+    """
+    Convert homogeneous PyG data to NetworkX graph.
+
+    This function converts a homogeneous PyTorch Geometric Data object to a
+    NetworkX Graph, preserving node and edge attributes along with metadata.
+
+    Parameters
+    ----------
+    data : Data
+        Homogeneous PyTorch Geometric Data object to convert.
+    metadata : GraphMetadata
+        Metadata object containing graph structure information.
+
+    Returns
+    -------
+    nx.Graph
+        NetworkX graph with nodes, edges, and attributes from the PyG data.
+
+    See Also
+    --------
+    _convert_hetero_pyg_to_nx : Convert heterogeneous PyG data to NetworkX.
+    _add_homo_nodes_to_graph : Add homogeneous nodes to graph.
+    _add_homo_edges_to_graph : Add homogeneous edges to graph.
+
+    Examples
+    --------
+    >>> data = Data(x=torch.randn(100, 10), edge_index=torch.randint(0, 100, (2, 200)))
+    >>> metadata = GraphMetadata(...)
+    >>> graph = _convert_homo_pyg_to_nx(data, metadata)
+    >>> len(graph.nodes)
+    100
+    """
     graph = nx.Graph()
 
     # Add metadata
@@ -2008,7 +2988,41 @@ def _convert_homo_pyg_to_nx(data: Data, metadata: GraphMetadata) -> nx.Graph:
 
 
 def _convert_hetero_pyg_to_nx(data: HeteroData, metadata: GraphMetadata) -> nx.Graph:
-    """Convert heterogeneous PyG data to NetworkX graph."""
+    """
+    Convert heterogeneous PyG data to NetworkX graph.
+
+    This function converts a heterogeneous PyTorch Geometric HeteroData object to a
+    NetworkX Graph, flattening the heterogeneous structure while preserving node
+    and edge attributes along with type information.
+
+    Parameters
+    ----------
+    data : HeteroData
+        Heterogeneous PyTorch Geometric HeteroData object to convert.
+    metadata : GraphMetadata
+        Metadata object containing graph structure information.
+
+    Returns
+    -------
+    nx.Graph
+        NetworkX graph with nodes, edges, and attributes from the hetero PyG data.
+
+    See Also
+    --------
+    _convert_homo_pyg_to_nx : Convert homogeneous PyG data to NetworkX.
+    _add_hetero_nodes_to_graph : Add heterogeneous nodes to graph.
+    _add_hetero_edges_to_graph : Add heterogeneous edges to graph.
+
+    Examples
+    --------
+    >>> data = HeteroData()
+    >>> data['node'].x = torch.randn(100, 10)
+    >>> data['edge'].x = torch.randn(50, 5)
+    >>> metadata = GraphMetadata(...)
+    >>> graph = _convert_hetero_pyg_to_nx(data, metadata)
+    >>> graph.graph['is_hetero']
+    True
+    """
     graph = nx.Graph()
 
     # Add metadata

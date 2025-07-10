@@ -60,12 +60,61 @@ __all__ = ["get_od_pairs", "load_gtfs", "travel_summary_graph"]
 
 
 def _read_csv_bytes(buf: bytes) -> pd.DataFrame:
-    """Read a CSV sitting entirely in memory and return *string-typed* columns."""
+    r"""
+    Read a CSV sitting entirely in memory and return *string-typed* columns.
+
+    This function reads CSV data from a bytes buffer and ensures all columns
+    are returned as string type for consistent processing.
+
+    Parameters
+    ----------
+    buf : bytes
+        Bytes buffer containing CSV data.
+
+    Returns
+    -------
+    pd.DataFrame
+        DataFrame with all columns as string type.
+
+    See Also
+    --------
+    _load_gtfs_zip : Load GTFS data from zip file.
+
+    Examples
+    --------
+    >>> import io
+    >>> csv_data = b"col1,col2\\n1,2\\n3,4"
+    >>> df = _read_csv_bytes(csv_data)
+    """
     return pd.read_csv(io.BytesIO(buf), dtype=str, encoding="utf-8-sig")
 
 
 def _time_to_seconds(value: str | float | None) -> float:
-    """Convert a GTFS ``HH:MM:SS`` string (24 h+ supported) into seconds."""
+    """
+    Convert a GTFS ``HH:MM:SS`` string (24 h+ supported) into seconds.
+
+    This function converts GTFS time format strings to seconds since midnight,
+    supporting times beyond 24:00:00 for next-day services.
+
+    Parameters
+    ----------
+    value : str, float, or None
+        Time value in HH:MM:SS format or numeric seconds.
+
+    Returns
+    -------
+    float
+        Time converted to seconds since midnight.
+
+    See Also
+    --------
+    _timestamp : Combine GTFS time with date to create timestamp.
+
+    Examples
+    --------
+    >>> seconds = _time_to_seconds("14:30:45")
+    >>> print(seconds)  # 52245.0
+    """
     # Convert None and numeric values to float directly
     if not isinstance(value, str):
         return float(value or 0)
@@ -76,9 +125,33 @@ def _time_to_seconds(value: str | float | None) -> float:
 
 
 def _timestamp(gtfs_time: str | float | None, service_date: datetime) -> datetime | None:
-    """Combine a GTFS time string with a **date** producing a proper timestamp.
+    """
+    Combine a GTFS time string with a **date** producing a proper timestamp.
 
-    Times beyond 24 : 00 : 00 are correctly rolled over to the next day.
+    Times beyond 24:00:00 are correctly rolled over to the next day.
+    This function handles GTFS time format and creates proper datetime objects.
+
+    Parameters
+    ----------
+    gtfs_time : str, float, or None
+        Time value in GTFS HH:MM:SS format or numeric seconds.
+    service_date : datetime
+        The service date to combine with the time.
+
+    Returns
+    -------
+    datetime or None
+        Combined timestamp, or None if gtfs_time is None.
+
+    See Also
+    --------
+    _time_to_seconds : Convert GTFS time string to seconds.
+
+    Examples
+    --------
+    >>> from datetime import datetime
+    >>> date = datetime(2023, 1, 1)
+    >>> ts = _timestamp("14:30:00", date)
     """
     if not isinstance(gtfs_time, str):
         # Handle None or numeric values by converting to seconds first
@@ -99,7 +172,31 @@ def _timestamp(gtfs_time: str | float | None, service_date: datetime) -> datetim
 
 
 def _load_gtfs_zip(path: str | Path) -> dict[str, pd.DataFrame]:
-    """Unzip every *.txt* file found inside *path* into a raw DataFrame."""
+    """
+    Unzip every *.txt* file found inside *path* into a raw DataFrame.
+
+    This function extracts and loads all GTFS text files from a zip archive
+    into pandas DataFrames for processing.
+
+    Parameters
+    ----------
+    path : str or Path
+        Path to the GTFS zip file.
+
+    Returns
+    -------
+    dict
+        Dictionary mapping GTFS file names (without .txt extension) to DataFrames.
+
+    See Also
+    --------
+    _read_csv_bytes : Read CSV data from bytes buffer.
+
+    Examples
+    --------
+    >>> gtfs_data = _load_gtfs_zip("gtfs.zip")
+    >>> print(list(gtfs_data.keys()))  # ['stops', 'routes', 'trips', ...]
+    """
     gtfs: dict[str, pd.DataFrame] = {}
     with zipfile.ZipFile(path) as zf:
         for name in zf.namelist():
@@ -113,7 +210,27 @@ def _load_gtfs_zip(path: str | Path) -> dict[str, pd.DataFrame]:
 
 
 def _coerce_types(gtfs: dict[str, pd.DataFrame]) -> None:
-    """Cast common numeric / boolean columns **in-place** for easier analysis."""
+    """
+    Cast common numeric / boolean columns **in-place** for easier analysis.
+
+    This function converts string columns to appropriate numeric and boolean
+    types for GTFS data processing and analysis.
+
+    Parameters
+    ----------
+    gtfs : dict
+        Dictionary of GTFS DataFrames to process in-place.
+
+    See Also
+    --------
+    _load_gtfs_zip : Load GTFS data from zip file.
+
+    Examples
+    --------
+    >>> gtfs_data = {'stops': pd.DataFrame({'stop_lat': ['1.0', '2.0']})}
+    >>> _coerce_types(gtfs_data)
+    >>> print(gtfs_data['stops']['stop_lat'].dtype)  # float64
+    """
     # Coerce stops.txt coordinates
     if (stops := gtfs.get("stops")) is not None:
         for col in ("stop_lat", "stop_lon"):
@@ -144,7 +261,43 @@ def _get_service_counts(
     start_date_str: str,
     end_date_str: str,
 ) -> pd.Series:
-    """Calculate the number of active days for each service_id within a date range."""
+    """
+    Calculate the number of active days for each service_id within a date range.
+
+    This function analyzes GTFS calendar data to determine how many days each
+    service operates within the specified date range, considering both regular
+    calendar schedules and calendar date exceptions.
+
+    Parameters
+    ----------
+    gtfs_data : dict[str, pd.DataFrame | gpd.GeoDataFrame]
+        Dictionary containing GTFS data tables with 'calendar' and optionally
+        'calendar_dates' keys.
+    start_date_str : str
+        Start date in YYYYMMDD format.
+    end_date_str : str
+        End date in YYYYMMDD format.
+
+    Returns
+    -------
+    pd.Series
+        Series with service_id as index and count of active days as values.
+
+    See Also
+    --------
+    _get_service_dates_from_calendar : Get service dates from calendar.
+    _get_service_dates_from_calendar_dates : Get service dates from calendar_dates.
+
+    Examples
+    --------
+    >>> gtfs_data = {'calendar': calendar_df, 'calendar_dates': calendar_dates_df}
+    >>> counts = _get_service_counts(gtfs_data, "20230101", "20230131")
+    >>> counts.head()
+    service_id
+    1    31
+    2    22
+    dtype: int64
+    """
     calendar = gtfs_data.get("calendar")
     calendar_dates = gtfs_data.get("calendar_dates")
 
@@ -217,7 +370,33 @@ def _get_service_counts(
 
 
 def _point_geometries(df: pd.DataFrame) -> gpd.GeoSeries:
-    """Return an EPSG:4326 GeoSeries built from ``stop_lon`` / ``stop_lat``."""
+    """
+    Return an EPSG:4326 GeoSeries built from ``stop_lon`` / ``stop_lat``.
+
+    This function creates Point geometries from longitude and latitude columns
+    in a DataFrame, handling missing values appropriately.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        DataFrame containing 'stop_lon' and 'stop_lat' columns.
+
+    Returns
+    -------
+    gpd.GeoSeries
+        GeoSeries with Point geometries in EPSG:4326 coordinate system.
+
+    See Also
+    --------
+    _linestring_geometries : Create LineString geometries from shapes.
+
+    Examples
+    --------
+    >>> df = pd.DataFrame({'stop_lon': [-74.0, -74.1], 'stop_lat': [40.7, 40.8]})
+    >>> geoms = _point_geometries(df)
+    >>> geoms.iloc[0]
+    <POINT (-74 40.7)>
+    """
     pts = [
         Point(lon, lat) if pd.notna(lon) and pd.notna(lat) else None
         for lon, lat in zip(df["stop_lon"], df["stop_lat"], strict=False)
@@ -226,7 +405,37 @@ def _point_geometries(df: pd.DataFrame) -> gpd.GeoSeries:
 
 
 def _linestring_geometries(shapes: pd.DataFrame) -> gpd.GeoSeries:
-    """Create LineStrings grouped by *shape_id* ordered by *shape_pt_sequence*."""
+    """
+    Create LineStrings grouped by *shape_id* ordered by *shape_pt_sequence*.
+
+    This function groups shape points by shape_id and creates LineString
+    geometries from the ordered sequence of coordinates.
+
+    Parameters
+    ----------
+    shapes : pd.DataFrame
+        DataFrame containing 'shape_id', 'shape_pt_lat', 'shape_pt_lon',
+        and 'shape_pt_sequence' columns.
+
+    Returns
+    -------
+    gpd.GeoSeries
+        GeoSeries with LineString geometries for each shape_id.
+
+    See Also
+    --------
+    _point_geometries : Create Point geometries from coordinates.
+
+    Examples
+    --------
+    >>> shapes = pd.DataFrame({
+    ...     'shape_id': ['A', 'A'], 'shape_pt_lat': [40.7, 40.8],
+    ...     'shape_pt_lon': [-74.0, -74.1], 'shape_pt_sequence': [1, 2]
+    ... })
+    >>> geoms = _linestring_geometries(shapes)
+    >>> geoms.iloc[0]
+    <LINESTRING (-74 40.7, -74.1 40.8)>
+    """
     # Ensure the relevant columns are numeric
     shapes = shapes.copy()
     shapes[["shape_pt_lat", "shape_pt_lon", "shape_pt_sequence"]] = shapes[
@@ -254,7 +463,13 @@ def _linestring_geometries(shapes: pd.DataFrame) -> gpd.GeoSeries:
 
 
 def load_gtfs(path: str | Path) -> dict[str, pd.DataFrame | gpd.GeoDataFrame]:
-    """Parse a GTFS zip file and *enrich* ``stops`` / ``shapes`` with geometry.
+    """
+    Parse a GTFS zip file and enrich stops/shapes with geometry.
+
+    This function loads a GTFS (General Transit Feed Specification) zip file
+    and converts it into a dictionary of pandas/GeoPandas DataFrames. Stop
+    locations and route shapes are automatically converted to geometric objects
+    for spatial analysis.
 
     Parameters
     ----------
@@ -263,9 +478,14 @@ def load_gtfs(path: str | Path) -> dict[str, pd.DataFrame | gpd.GeoDataFrame]:
 
     Returns
     -------
-    dict
+    dict[str, pd.DataFrame | gpd.GeoDataFrame]
         Keys are the original GTFS file names (without extension) and values
         are pandas or GeoPandas DataFrames ready for analysis.
+
+    See Also
+    --------
+    _enrich_stops_with_geometry : Add geometry to stops data.
+    _enrich_shapes_with_geometry : Add geometry to shapes data.
 
     Notes
     -----
@@ -318,7 +538,33 @@ def load_gtfs(path: str | Path) -> dict[str, pd.DataFrame | gpd.GeoDataFrame]:
 
 
 def _create_basic_od(stop_times: pd.DataFrame) -> pd.DataFrame:
-    """Within each trip build *successive* stop pairs (u → v)."""
+    """
+    Within each trip build successive stop pairs (u → v).
+
+    This function processes GTFS stop_times data to create origin-destination
+    pairs by pairing consecutive stops within each trip.
+
+    Parameters
+    ----------
+    stop_times : pd.DataFrame
+        GTFS stop_times DataFrame with trip_id, stop_id, and stop_sequence columns.
+
+    Returns
+    -------
+    pd.DataFrame
+        DataFrame with origin-destination pairs and trip information.
+
+    See Also
+    --------
+    get_od_pairs : Create comprehensive OD pairs with service dates.
+
+    Examples
+    --------
+    >>> stop_times = pd.DataFrame({
+    ...     'trip_id': ['T1', 'T1'], 'stop_id': ['S1', 'S2'], 'stop_sequence': [1, 2]
+    ... })
+    >>> od_pairs = _create_basic_od(stop_times)
+    """
     # Ensure stop_times has the necessary columns and types
     st = stop_times.copy()
     st["stop_sequence"] = pd.to_numeric(st["stop_sequence"], errors="coerce")
@@ -346,7 +592,38 @@ def _service_day_map(
     start: datetime,
     end: datetime,
 ) -> dict[str, list[datetime]]:
-    """Return ``{service_id: [date, …]}`` within the given period."""
+    """
+    Return ``{service_id: [date, …]}`` within the given period.
+
+    This function processes GTFS calendar data to create a mapping of service IDs
+    to their active dates within the specified time period.
+
+    Parameters
+    ----------
+    calendar : pd.DataFrame
+        GTFS calendar DataFrame containing service schedule information.
+    start : datetime
+        Start date for the period of interest.
+    end : datetime
+        End date for the period of interest.
+
+    Returns
+    -------
+    dict[str, list[datetime]]
+        Dictionary mapping service_id to list of active dates.
+
+    See Also
+    --------
+    _apply_calendar_exceptions : Apply calendar date exceptions.
+
+    Examples
+    --------
+    >>> from datetime import datetime
+    >>> calendar = pd.DataFrame({'service_id': ['S1'], 'monday': [1]})
+    >>> start = datetime(2023, 1, 1)
+    >>> end = datetime(2023, 1, 7)
+    >>> service_map = _service_day_map(calendar, start, end)
+    """
     # Prepare the calendar table
     day_idx = {
         0: "monday",
@@ -377,7 +654,31 @@ def _apply_calendar_exceptions(
     calendar_dates: pd.DataFrame,
     srv_dates: dict[str, list[datetime]],
 ) -> None:
-    """Mutate *srv_dates* **in-place** with exception rules."""
+    """
+    Mutate *srv_dates* **in-place** with exception rules.
+
+    This function applies calendar date exceptions from GTFS calendar_dates.txt
+    to modify the service dates dictionary by adding or removing specific dates.
+
+    Parameters
+    ----------
+    calendar_dates : pd.DataFrame
+        GTFS calendar_dates DataFrame containing service exceptions.
+    srv_dates : dict[str, list[datetime]]
+        Dictionary mapping service_id to list of active dates, modified in-place.
+
+    See Also
+    --------
+    _service_day_map : Create initial service date mapping.
+
+    Examples
+    --------
+    >>> calendar_dates = pd.DataFrame({
+    ...     'service_id': ['S1'], 'date': ['20230101'], 'exception_type': [2]
+    ... })
+    >>> srv_dates = {'S1': [datetime(2023, 1, 1)]}
+    >>> _apply_calendar_exceptions(calendar_dates, srv_dates)
+    """
     # Ensure calendar_dates has the necessary columns and types
     for _, row in calendar_dates.iterrows():
         sid = row["service_id"]
@@ -392,7 +693,35 @@ def _apply_calendar_exceptions(
 
 
 def _expand_with_dates(od: pd.DataFrame, srv_dates: dict[str, list[datetime]]) -> pd.DataFrame:
-    """Cartesian multiply *od* rows by their active **service dates**."""
+    """
+    Cartesian multiply *od* rows by their active **service dates**.
+
+    This function expands origin-destination pairs by replicating each row
+    for every active service date, creating a comprehensive dataset of all
+    trip instances.
+
+    Parameters
+    ----------
+    od : pd.DataFrame
+        Origin-destination pairs DataFrame with service_id column.
+    srv_dates : dict[str, list[datetime]]
+        Dictionary mapping service_id to list of active dates.
+
+    Returns
+    -------
+    pd.DataFrame
+        Expanded DataFrame with date column added for each service instance.
+
+    See Also
+    --------
+    get_od_pairs : Create comprehensive OD pairs with service dates.
+
+    Examples
+    --------
+    >>> od = pd.DataFrame({'service_id': ['S1'], 'from_stop': ['A'], 'to_stop': ['B']})
+    >>> srv_dates = {'S1': [datetime(2023, 1, 1), datetime(2023, 1, 2)]}
+    >>> expanded = _expand_with_dates(od, srv_dates)
+    """
     rows: list[dict[str, object]] = []
 
     for _, r in od.iterrows():
@@ -421,7 +750,12 @@ def get_od_pairs(
     end_date: str | None = None,
     include_geometry: bool = True,
 ) -> pd.DataFrame | gpd.GeoDataFrame:
-    """Materialise origin-destination pairs for every trip and service day.
+    """
+    Materialise origin-destination pairs for every trip and service day.
+
+    This function creates a comprehensive dataset of all origin-destination pairs
+    for transit trips within the specified date range, optionally including
+    geometric information for spatial analysis.
 
     Parameters
     ----------
@@ -440,6 +774,11 @@ def get_od_pairs(
     pandas.DataFrame or geopandas.GeoDataFrame
         One row per *trip-day-leg* with departure / arrival timestamps,
         travel time in seconds and, optionally, geometry.
+
+    See Also
+    --------
+    load_gtfs : Load GTFS data from zip file.
+    travel_summary_graph : Create network representation from GTFS data.
 
     Examples
     --------
@@ -507,7 +846,12 @@ def travel_summary_graph(
     calendar_end: str | None = None,
     as_nx: bool = False,
 ) -> tuple[gpd.GeoDataFrame, gpd.GeoDataFrame] | nx.Graph:
-    """Aggregate stop-to-stop travel time & frequency into an edge list.
+    """
+    Aggregate stop-to-stop travel time & frequency into an edge list.
+
+    This function analyzes GTFS data to create a network representation of
+    transit connections, computing average travel times and service frequencies
+    between consecutive stops.
 
     Parameters
     ----------
@@ -532,6 +876,11 @@ def travel_summary_graph(
         • **Nodes** - every stop with a valid geometry.
         • **Edges** - columns = ``from_stop_id, to_stop_id, mean_travel_time,
           frequency, geometry``.
+
+    See Also
+    --------
+    get_od_pairs : Create origin-destination pairs from GTFS data.
+    load_gtfs : Load GTFS data from zip file.
 
     Examples
     --------
@@ -645,7 +994,30 @@ def _validate_calendar_dates(
     calendar_start: str | None,
     calendar_end: str | None,
 ) -> None:
-    """Validate that calendar_start and calendar_end are within GTFS date range."""
+    """
+    Validate that calendar_start and calendar_end are within GTFS date range.
+
+    This function checks that the provided calendar date range is valid and
+    falls within the date range available in the GTFS calendar data.
+
+    Parameters
+    ----------
+    gtfs : dict[str, pd.DataFrame | gpd.GeoDataFrame]
+        Dictionary containing GTFS data tables.
+    calendar_start : str or None
+        Start date in YYYYMMDD format, or None to use GTFS minimum.
+    calendar_end : str or None
+        End date in YYYYMMDD format, or None to use GTFS maximum.
+
+    See Also
+    --------
+    travel_summary_graph : Main function using this validation.
+
+    Examples
+    --------
+    >>> gtfs = {'calendar': pd.DataFrame({'start_date': ['20230101'], 'end_date': ['20231231']})}
+    >>> _validate_calendar_dates(gtfs, "20230601", "20230630")
+    """
     if "calendar" not in gtfs:
         msg = "calendar_start/calendar_end specified but GTFS feed has no calendar.txt"
         raise ValueError(msg)

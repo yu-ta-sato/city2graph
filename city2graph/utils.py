@@ -41,13 +41,61 @@ logger = logging.getLogger(__name__)
 
 
 class GraphMetadata:
-    """Centralized graph metadata management."""
+    """
+    Centralized graph metadata management.
+
+    This class provides a centralized way to manage metadata for graph objects,
+    including coordinate reference systems and heterogeneous graph information.
+
+    Parameters
+    ----------
+    crs : str, int, dict, or None, optional
+        Coordinate reference system specification.
+    is_hetero : bool, default False
+        Whether the graph is heterogeneous.
+
+    See Also
+    --------
+    gdf_to_nx : Convert GeoDataFrame to NetworkX graph.
+    nx_to_gdf : Convert NetworkX graph to GeoDataFrame.
+
+    Examples
+    --------
+    >>> metadata = GraphMetadata(crs='EPSG:4326', is_hetero=False)
+    >>> metadata.crs
+    'EPSG:4326'
+    """
 
     def __init__(
         self,
         crs: str | int | dict[str, object] | object | None = None,
         is_hetero: bool = False,
     ) -> None:
+        """
+        Initialize GraphMetadata with coordinate reference system and graph type.
+
+        This constructor creates a new GraphMetadata instance to store essential
+        information about graph structure and spatial properties for conversion
+        between different graph representations.
+
+        Parameters
+        ----------
+        crs : str, int, dict, object, or None, optional
+            Coordinate reference system specification.
+        is_hetero : bool, default False
+            Whether the graph is heterogeneous.
+
+        See Also
+        --------
+        to_dict : Convert metadata to dictionary.
+        from_dict : Create metadata from dictionary.
+
+        Examples
+        --------
+        >>> metadata = GraphMetadata(crs='EPSG:4326', is_hetero=False)
+        >>> metadata.crs
+        'EPSG:4326'
+        """
         # Core metadata
         self.crs = crs
         self.is_hetero = is_hetero
@@ -76,12 +124,58 @@ class GraphMetadata:
         ) = None
 
     def to_dict(self) -> dict[str, object]:
-        """Convert to dictionary for NetworkX graph metadata."""
+        """
+        Convert to dictionary for NetworkX graph metadata.
+
+        This method serializes the GraphMetadata instance into a dictionary
+        format suitable for storage as NetworkX graph attributes.
+
+        Returns
+        -------
+        dict[str, object]
+            Dictionary containing metadata for NetworkX graph storage.
+
+        See Also
+        --------
+        from_dict : Create GraphMetadata from dictionary.
+
+        Examples
+        --------
+        >>> metadata = GraphMetadata(crs='EPSG:4326')
+        >>> metadata.to_dict()
+        {'crs': 'EPSG:4326', 'is_hetero': False, ...}
+        """
         return self.__dict__
 
     @classmethod
     def from_dict(cls, data: dict[str, object]) -> "GraphMetadata":
-        """Create from dictionary."""
+        """
+        Create from dictionary.
+
+        This class method creates a GraphMetadata instance from a dictionary,
+        typically used when reconstructing metadata from NetworkX graph attributes.
+
+        Parameters
+        ----------
+        data : dict[str, object]
+            Dictionary containing metadata information.
+
+        Returns
+        -------
+        GraphMetadata
+            New GraphMetadata instance created from the dictionary.
+
+        See Also
+        --------
+        to_dict : Convert GraphMetadata to dictionary.
+
+        Examples
+        --------
+        >>> data = {'crs': 'EPSG:4326', 'is_hetero': False}
+        >>> metadata = GraphMetadata.from_dict(data)
+        >>> metadata.crs
+        'EPSG:4326'
+        """
         crs = data.get("crs")
         is_hetero_obj = data.get("is_hetero", False)
 
@@ -102,7 +196,22 @@ class GraphMetadata:
 
 
 class GeoDataProcessor:
-    """Common processor for GeoDataFrame operations."""
+    """
+    Common processor for GeoDataFrame operations.
+
+    This class provides static methods for validating and processing
+    GeoDataFrames in preparation for graph conversion operations.
+
+    See Also
+    --------
+    GraphConverter : Main graph conversion class.
+
+    Examples
+    --------
+    >>> processor = GeoDataProcessor()
+    >>> # Use static methods for validation
+    >>> GeoDataProcessor.validate_gdf(gdf)
+    """
 
     @staticmethod
     def validate_gdf(
@@ -110,7 +219,42 @@ class GeoDataProcessor:
         expected_geom_types: list[str] | None = None,
         allow_empty: bool = True,
     ) -> gpd.GeoDataFrame | None:
-        """Unified GeoDataFrame validation."""
+        """
+        Unified GeoDataFrame validation.
+
+        This function validates a GeoDataFrame for common issues including
+        geometry types, empty geometries, and coordinate reference systems.
+        It provides comprehensive validation to ensure data quality before
+        processing in spatial analysis workflows.
+
+        Parameters
+        ----------
+        gdf : gpd.GeoDataFrame or None
+            GeoDataFrame to validate.
+        expected_geom_types : list[str] or None, optional
+            Expected geometry types (e.g., ['Point', 'LineString']).
+        allow_empty : bool, default True
+            Whether to allow empty GeoDataFrames.
+
+        Returns
+        -------
+        gpd.GeoDataFrame or None
+            Validated GeoDataFrame, or None if input was None.
+
+        See Also
+        --------
+        validate_nx : Validate NetworkX graphs.
+        ensure_crs_consistency : Ensure consistent CRS across GeoDataFrames.
+
+        Examples
+        --------
+        >>> import geopandas as gpd
+        >>> from shapely.geometry import Point
+        >>> gdf = gpd.GeoDataFrame({'geometry': [Point(0, 0)]})
+        >>> validated = GeoDataProcessor.validate_gdf(gdf, ['Point'])
+        >>> validated is not None
+        True
+        """
         if gdf is None:
             return None
 
@@ -148,7 +292,8 @@ class GeoDataProcessor:
 
     @staticmethod
     def validate_nx(graph: nx.Graph | nx.MultiGraph) -> None:
-        """Validate a NetworkX graph.
+        """
+        Validate a NetworkX graph.
 
         Checks if the input is a NetworkX graph, ensures it is not empty,
         and verifies that it contains the necessary metadata for conversion
@@ -165,6 +310,21 @@ class GeoDataProcessor:
             If the input is not a NetworkX graph.
         ValueError
             If the graph has no nodes, no edges, or is missing essential metadata.
+
+        See Also
+        --------
+        validate_gdf : Validate a GeoDataFrame.
+
+        Examples
+        --------
+        >>> import networkx as nx
+        >>> G = nx.Graph(is_hetero=False, crs="EPSG:4326")
+        >>> G.add_node(0, pos=(0, 0))
+        >>> try:
+        ...     GeoDataProcessor.validate_nx(G)
+        ... except ValueError as e:
+        ...     print(e)
+        Graph has no edges
         """
         if graph.number_of_nodes() == 0:
             msg = "Graph has no nodes"
@@ -218,7 +378,45 @@ class GeoDataProcessor:
     def ensure_crs_consistency(
         *gdfs: gpd.GeoDataFrame | None,
     ) -> tuple[gpd.GeoDataFrame | None, ...]:
-        """Ensure all GeoDataFrames have consistent CRS."""
+        """
+        Ensure all GeoDataFrames have a consistent Coordinate Reference System (CRS).
+
+        This function iterates through a list of GeoDataFrames and verifies that they all
+        share the same CRS. It is a crucial validation step before performing any spatial
+        operations that require alignment between different geospatial datasets.
+
+        Parameters
+        ----------
+        *gdfs : geopandas.GeoDataFrame or None
+            A variable number of GeoDataFrames to check for CRS consistency.
+
+        Returns
+        -------
+        tuple[geopandas.GeoDataFrame | None, ...]
+            The original tuple of GeoDataFrames if all are consistent.
+
+        Raises
+        ------
+        ValueError
+            If any of the GeoDataFrames have a different CRS.
+
+        See Also
+        --------
+        validate_gdf : Validate a GeoDataFrame, including its CRS.
+
+        Examples
+        --------
+        >>> import geopandas as gpd
+        >>> from shapely.geometry import Point
+        >>> gdf1 = gpd.GeoDataFrame(geometry=[Point(0, 0)], crs="EPSG:4326")
+        >>> gdf2 = gpd.GeoDataFrame(geometry=[Point(1, 1)], crs="EPSG:4326")
+        >>> try:
+        ...     GeoDataProcessor.ensure_crs_consistency(gdf1, gdf2)
+        ...     print("CRS is consistent.")
+        ... except ValueError as e:
+        ...     print(e)
+        CRS is consistent.
+        """
         non_empty_gdfs = [gdf for gdf in gdfs if gdf is not None and not gdf.empty]
         if not non_empty_gdfs:
             return gdfs
@@ -233,7 +431,44 @@ class GeoDataProcessor:
 
     @staticmethod
     def extract_coordinates(gdf: gpd.GeoDataFrame, start: bool = True) -> pd.Series:
-        """Extract start or end coordinates from LineString geometries."""
+        """
+        Extract start or end coordinates from LineString geometries.
+
+        This utility function efficiently extracts the first (start) or last (end) coordinate
+        pair from a GeoSeries of LineString objects. It is useful for creating graph
+        topologies from road networks or other linear features where the endpoints
+        represent nodes.
+
+        Parameters
+        ----------
+        gdf : geopandas.GeoDataFrame
+            The GeoDataFrame containing the LineString geometries.
+        start : bool, default True
+            If True, extracts the start coordinate of each LineString. If False, extracts
+            the end coordinate.
+
+        Returns
+        -------
+        pandas.Series
+            A Series containing the (x, y) coordinate tuples for each geometry.
+
+        See Also
+        --------
+        segments_to_graph : Convert LineString segments to a graph structure.
+
+        Examples
+        --------
+        >>> import geopandas as gpd
+        >>> from shapely.geometry import LineString
+        >>> gdf = gpd.GeoDataFrame(
+        ...     geometry=[LineString([(0, 0), (1, 1)]), LineString([(2, 2), (3, 3)])]
+        ... )
+        >>> start_points = GeoDataProcessor.extract_coordinates(gdf, start=True)
+        >>> print(start_points)
+        0    (0.0, 0.0)
+        1    (2.0, 2.0)
+        dtype: object
+        """
         if start:
             coords: pd.Series = gdf.geometry.apply(lambda g: g.coords[0] if g else None)
         else:
@@ -242,7 +477,40 @@ class GeoDataProcessor:
 
     @staticmethod
     def compute_centroids(gdf: gpd.GeoDataFrame) -> gpd.GeoSeries:
-        """Compute centroids efficiently."""
+        """
+        Compute centroids efficiently.
+
+        This function calculates the geometric centroid for each geometry in a
+        GeoDataFrame. It provides a simple and direct way to get the central point
+        of polygons or lines, which is often used to represent the location of a
+        larger geometry in graph-based analyses.
+
+        Parameters
+        ----------
+        gdf : geopandas.GeoDataFrame
+            The GeoDataFrame for which to compute centroids.
+
+        Returns
+        -------
+        geopandas.GeoSeries
+            A GeoSeries containing the centroid points for each input geometry.
+
+        See Also
+        --------
+        create_tessellation : Create tessellations from geometries.
+
+        Examples
+        --------
+        >>> import geopandas as gpd
+        >>> from shapely.geometry import Polygon
+        >>> gdf = gpd.GeoDataFrame(
+        ...     geometry=[Polygon([(0, 0), (1, 0), (1, 1), (0, 1)])]
+        ... )
+        >>> centroids = GeoDataProcessor.compute_centroids(gdf)
+        >>> print(centroids)
+        0    POINT (0.50000 0.50000)
+        dtype: geometry
+        """
         return gdf.geometry.centroid
 
 
@@ -252,7 +520,30 @@ class GeoDataProcessor:
 
 
 class GraphConverter:
-    """Unified graph conversion engine for both homogeneous and heterogeneous graphs."""
+    """
+    Unified graph conversion engine for both homogeneous and heterogeneous graphs.
+
+    This class provides methods to convert between GeoDataFrames and NetworkX graphs,
+    supporting both homogeneous and heterogeneous graph structures.
+
+    Parameters
+    ----------
+    keep_geom : bool, default True
+        Whether to preserve geometry information in the converted graph.
+    multigraph : bool, default False
+        Whether to create a multigraph that allows multiple edges between nodes.
+    directed : bool, default False
+        Whether to create a directed graph.
+
+    See Also
+    --------
+    gdf_to_nx : Convert GeoDataFrames to NetworkX graph.
+
+    Examples
+    --------
+    >>> # Basic usage example
+    >>> pass
+    """
 
     def __init__(
         self,
@@ -260,6 +551,31 @@ class GraphConverter:
         multigraph: bool = False,
         directed: bool = False,
     ) -> None:
+        """
+        Initialize GraphConverter with conversion options.
+
+        This constructor sets up the graph conversion engine with options for
+        preserving geometry, creating multigraphs, and handling directed graphs.
+
+        Parameters
+        ----------
+        keep_geom : bool, default True
+            Whether to preserve geometry information in the converted graph.
+        multigraph : bool, default False
+            Whether to create a multigraph allowing multiple edges between nodes.
+        directed : bool, default False
+            Whether to create a directed graph.
+
+        See Also
+        --------
+        gdf_to_nx : Convert GeoDataFrames to NetworkX graph.
+        nx_to_gdf : Convert NetworkX graph to GeoDataFrames.
+
+        Examples
+        --------
+        >>> converter = GraphConverter(keep_geom=True, directed=False)
+        >>> # Use converter to transform geospatial data
+        """
         self.keep_geom = keep_geom
         self.multigraph = multigraph
         self.directed = directed
@@ -270,7 +586,47 @@ class GraphConverter:
         nodes: gpd.GeoDataFrame | dict[str, gpd.GeoDataFrame] | None = None,
         edges: gpd.GeoDataFrame | dict[tuple[str, str, str], gpd.GeoDataFrame] | None = None,
     ) -> nx.Graph | nx.MultiGraph:
-        """Convert GeoDataFrames to NetworkX graph."""
+        """
+        Convert GeoDataFrames to a NetworkX graph.
+
+        This method serves as the main entry point for converting geospatial data,
+        represented as GeoDataFrames, into a NetworkX graph. It automatically
+        detects whether to create a homogeneous or heterogeneous graph based on the
+        input types and dispatches to the appropriate conversion method.
+
+        Parameters
+        ----------
+        nodes : geopandas.GeoDataFrame or dict[str, geopandas.GeoDataFrame], optional
+            Node data. For homogeneous graphs, a single GeoDataFrame. For
+            heterogeneous graphs, a dictionary mapping node type names to
+            GeoDataFrames.
+        edges : geopandas.GeoDataFrame or dict, optional
+            Edge data. For homogeneous graphs, a single GeoDataFrame. For
+            heterogeneous graphs, a dictionary mapping edge type tuples to
+            GeoDataFrames.
+
+        Returns
+        -------
+        networkx.Graph or networkx.MultiGraph
+            A NetworkX graph object representing the spatial network.
+
+        Raises
+        ------
+        ValueError
+            If both nodes and edges are None.
+
+        See Also
+        --------
+        nx_to_gdf : Convert a NetworkX graph back to GeoDataFrames.
+
+        Examples
+        --------
+        >>> converter = GraphConverter()
+        >>> # Homogeneous conversion
+        >>> G_homo = converter.gdf_to_nx(nodes=nodes_gdf, edges=edges_gdf)
+        >>> # Heterogeneous conversion
+        >>> H_hetero = converter.gdf_to_nx(nodes=nodes_dict, edges=edges_dict)
+        """
         if nodes is None and edges is None:
             msg = "Either nodes or edges must be provided."
             raise ValueError(msg)
@@ -294,7 +650,41 @@ class GraphConverter:
         tuple[gpd.GeoDataFrame, gpd.GeoDataFrame]
         | tuple[dict[str, gpd.GeoDataFrame], dict[tuple[str, str, str], gpd.GeoDataFrame]]
     ):
-        """Convert NetworkX graph to GeoDataFrames."""
+        """
+        Convert a NetworkX graph to GeoDataFrames.
+
+        This method reconstructs GeoDataFrames from a NetworkX graph, effectively
+        reversing the `gdf_to_nx` conversion. It uses metadata stored within the
+        graph to determine whether to reconstruct a homogeneous or heterogeneous
+        set of GeoDataFrames and preserves spatial information by converting node
+        positions back to geometries.
+
+        Parameters
+        ----------
+        graph : networkx.Graph or networkx.MultiGraph
+            The NetworkX graph to convert. Expected to have metadata in `graph.graph`.
+        nodes : bool, default True
+            If True, reconstructs the nodes GeoDataFrame.
+        edges : bool, default True
+            If True, reconstructs the edges GeoDataFrame.
+
+        Returns
+        -------
+        tuple
+            A tuple containing the reconstructed GeoDataFrames. For homogeneous graphs,
+            it's `(nodes_gdf, edges_gdf)`. For heterogeneous graphs, it's
+            `(nodes_dict, edges_dict)`.
+
+        See Also
+        --------
+        gdf_to_nx : Convert GeoDataFrames to a NetworkX graph.
+
+        Examples
+        --------
+        >>> converter = GraphConverter()
+        >>> nodes_gdf, edges_gdf = converter.nx_to_gdf(G_homo)
+        >>> nodes_dict, edges_dict = converter.nx_to_gdf(H_hetero)
+        """
         metadata = GraphMetadata.from_dict(graph.graph)
 
         if metadata.is_hetero:
@@ -306,7 +696,47 @@ class GraphConverter:
         nodes: gpd.GeoDataFrame | None,
         edges: gpd.GeoDataFrame | None,
     ) -> nx.Graph | nx.MultiGraph:
-        """Convert homogeneous GeoDataFrames to NetworkX."""
+        """
+        Convert homogeneous GeoDataFrames to a NetworkX graph.
+
+        This internal method handles the specific logic for converting a single set of
+        node and edge GeoDataFrames into a homogeneous NetworkX graph. It validates
+        the inputs, creates the graph structure, adds nodes and edges with their
+        attributes, and stores the necessary metadata for potential reconstruction.
+
+        Parameters
+        ----------
+        nodes : geopandas.GeoDataFrame or None
+            The GeoDataFrame containing node data.
+        edges : geopandas.GeoDataFrame or None
+            The GeoDataFrame containing edge data.
+
+        Returns
+        -------
+        networkx.Graph or networkx.MultiGraph
+            The resulting homogeneous NetworkX graph.
+
+        Raises
+        ------
+        ValueError
+            If the edges GeoDataFrame is None.
+
+        See Also
+        --------
+        _convert_heterogeneous : Convert heterogeneous GeoDataFrames to NetworkX graph.
+        gdf_to_nx : Public interface for converting GeoDataFrames to NetworkX.
+
+        Examples
+        --------
+        >>> import geopandas as gpd
+        >>> from shapely.geometry import Point, LineString
+        >>> nodes = gpd.GeoDataFrame({'geometry': [Point(0, 0), Point(1, 1)]})
+        >>> edges = gpd.GeoDataFrame({'geometry': [LineString([(0, 0), (1, 1)])]})
+        >>> converter = GraphConverter()
+        >>> graph = converter._convert_homogeneous(nodes, edges)
+        >>> graph.number_of_nodes()
+        2
+        """
         # Validate inputs
         nodes = self.processor.validate_gdf(nodes, allow_empty=True)
         edges = self.processor.validate_gdf(
@@ -354,7 +784,42 @@ class GraphConverter:
         nodes_dict: dict[str, gpd.GeoDataFrame] | None,
         edges_dict: dict[tuple[str, str, str], gpd.GeoDataFrame] | None,
     ) -> nx.Graph | nx.MultiGraph:
-        """Convert heterogeneous GeoDataFrames to NetworkX."""
+        """
+        Convert heterogeneous GeoDataFrames to a NetworkX graph.
+
+        This internal method handles the logic for converting dictionaries of typed
+        node and edge GeoDataFrames into a single, unified NetworkX graph. It adds
+        nodes and edges with type information as attributes and stores comprehensive
+        metadata to support reconstruction of the typed structure.
+
+        Parameters
+        ----------
+        nodes_dict : dict[str, geopandas.GeoDataFrame] or None
+            A dictionary mapping node type names to their GeoDataFrames.
+        edges_dict : dict[tuple[str, str, str], geopandas.GeoDataFrame] or None
+            A dictionary mapping edge type tuples to their GeoDataFrames.
+
+        Returns
+        -------
+        networkx.Graph or networkx.MultiGraph
+            The resulting heterogeneous NetworkX graph with typed nodes and edges.
+
+        See Also
+        --------
+        _convert_homogeneous : Convert homogeneous GeoDataFrames to NetworkX graph.
+        gdf_to_nx : Public interface for converting GeoDataFrames to NetworkX.
+
+        Examples
+        --------
+        >>> import geopandas as gpd
+        >>> from shapely.geometry import Point, LineString
+        >>> nodes_dict = {'building': gpd.GeoDataFrame({'geometry': [Point(0, 0)]})}
+        >>> edges_dict = {('building', 'connects', 'street'): gpd.GeoDataFrame({'geometry': [LineString([(0, 0), (1, 1)])]})}
+        >>> converter = GraphConverter()
+        >>> graph = converter._convert_heterogeneous(nodes_dict, edges_dict)
+        >>> graph.number_of_nodes()
+        1
+        """
         # Validate inputs
         if nodes_dict is not None:
             for node_type, node_gdf in nodes_dict.items():
@@ -399,7 +864,20 @@ class GraphConverter:
         graph: nx.Graph | nx.MultiGraph,
         nodes_gdf: gpd.GeoDataFrame,
     ) -> None:
-        """Add homogeneous nodes to graph."""
+        """
+        Add homogeneous nodes to the graph.
+
+        This method processes a GeoDataFrame of nodes and adds them to the NetworkX
+        graph. It extracts attributes, computes centroids for spatial positioning,
+        and preserves the original index of the GeoDataFrame for metadata tracking.
+
+        Parameters
+        ----------
+        graph : networkx.Graph or networkx.MultiGraph
+            The NetworkX graph to which the nodes will be added.
+        nodes_gdf : geopandas.GeoDataFrame
+            The GeoDataFrame containing the node data to add.
+        """
         centroids = self.processor.compute_centroids(nodes_gdf)
         node_data = nodes_gdf if self.keep_geom else nodes_gdf.drop(columns="geometry")
 
@@ -429,7 +907,24 @@ class GraphConverter:
         edges_gdf: gpd.GeoDataFrame,
         nodes_gdf: gpd.GeoDataFrame,
     ) -> None:
-        """Add homogeneous edges to graph."""
+        """
+        Add homogeneous edges to the graph.
+
+        This method adds edges from a GeoDataFrame to the NetworkX graph. It maps
+        the edge geometries to the corresponding nodes in the graph, either by using
+        a pre-existing node-to-coordinate mapping or by creating nodes from the edge
+        endpoints if no nodes GeoDataFrame is provided. All attributes from the
+        edges GeoDataFrame are carried over to the graph edges.
+
+        Parameters
+        ----------
+        graph : networkx.Graph or networkx.MultiGraph
+            The NetworkX graph to which the edges will be added.
+        edges_gdf : geopandas.GeoDataFrame
+            The GeoDataFrame containing the edge data.
+        nodes_gdf : geopandas.GeoDataFrame
+            The GeoDataFrame containing the node data, used for mapping edges.
+        """
         if edges_gdf.empty:
             return
 
@@ -470,7 +965,28 @@ class GraphConverter:
         nodes_dict: dict[str, gpd.GeoDataFrame],
         metadata: "GraphMetadata",
     ) -> dict[str, int]:
-        """Add heterogeneous nodes to graph."""
+        """
+        Add heterogeneous nodes to the graph.
+
+        This method iterates through a dictionary of typed node GeoDataFrames and adds
+        them to the NetworkX graph. Each node is given a `node_type` attribute, and
+        an offset is used to ensure unique node identifiers across all types. It also
+        updates the graph's metadata with index and type information.
+
+        Parameters
+        ----------
+        graph : networkx.Graph or networkx.MultiGraph
+            The NetworkX graph to which the nodes will be added.
+        nodes_dict : dict[str, geopandas.GeoDataFrame]
+            A dictionary mapping node type names to their GeoDataFrames.
+        metadata : GraphMetadata
+            The metadata object to be updated with node information.
+
+        Returns
+        -------
+        dict[str, int]
+            A dictionary mapping each node type to its starting offset in the graph.
+        """
         if metadata.node_index_names is None or not isinstance(metadata.node_index_names, dict):
             metadata.node_index_names = {}
 
@@ -510,7 +1026,34 @@ class GraphConverter:
         edges_dict: dict[tuple[str, str, str], gpd.GeoDataFrame],
         metadata: "GraphMetadata",
     ) -> None:
-        """Add heterogeneous edges to graph."""
+        """
+        Add heterogeneous edges to the graph.
+
+        This method adds edges from a dictionary of typed GeoDataFrames to the
+        NetworkX graph. It uses a node lookup to connect edges to the correct typed
+        nodes and assigns an `edge_type` attribute to each edge. It also updates
+        the graph's metadata with edge index information.
+
+        Parameters
+        ----------
+        graph : networkx.Graph or networkx.MultiGraph
+            The NetworkX graph to which the edges will be added.
+        edges_dict : dict[tuple[str, str, str], geopandas.GeoDataFrame]
+            A dictionary mapping edge type tuples to their GeoDataFrames.
+        metadata : GraphMetadata
+            The metadata object to be updated with edge information.
+
+        See Also
+        --------
+        _add_homogeneous_edges : Add edges for homogeneous graphs.
+        _create_edge_list : Create and add edge lists to graphs.
+
+        Examples
+        --------
+        >>> converter = GraphConverter()
+        >>> # edges_dict and metadata would be prepared beforehand
+        >>> converter._add_heterogeneous_edges(graph, edges_dict, metadata)
+        """
         if metadata.edge_index_names is None:
             metadata.edge_index_names = {}
 
@@ -560,7 +1103,29 @@ class GraphConverter:
         keep_geom: bool,
         edge_type: str | tuple[str, str, str] | None = None,
     ) -> None:
-        """Create edge list for adding to graph."""
+        """
+        Create and add a list of edges to the graph.
+
+        This helper function constructs a list of edges with their attributes and adds
+        them to the graph in a single, efficient operation. It handles both regular
+        graphs and multigraphs by including edge keys where appropriate. It also
+        attaches the original edge index and type information as attributes.
+
+        Parameters
+        ----------
+        graph : networkx.Graph or networkx.MultiGraph
+            The graph to which the edges will be added.
+        u_nodes : pandas.Series
+            A Series of source node identifiers.
+        v_nodes : pandas.Series
+            A Series of target node identifiers.
+        edges_gdf : geopandas.GeoDataFrame
+            The GeoDataFrame containing the edge data and attributes.
+        keep_geom : bool
+            If True, preserves the geometry attribute.
+        edge_type : str or tuple, optional
+            The type of the edges being added, for heterogeneous graphs.
+        """
         attrs_df = edges_gdf if keep_geom else edges_gdf.drop(columns="geometry")
         edge_attrs = attrs_df.to_dict("records")
 
@@ -621,7 +1186,26 @@ class GraphConverter:
         graph: nx.Graph | nx.MultiGraph,
         node_types: list[str],
     ) -> dict[str, dict[str, int]]:
-        """Create lookup dictionary for heterogeneous nodes."""
+        """
+        Create a lookup dictionary for heterogeneous nodes.
+
+        This method builds a nested dictionary that maps original node indices to the
+        actual node identifiers in the NetworkX graph, organized by node type. This
+        is essential for correctly connecting edges in a heterogeneous graph where
+        node identifiers are offset.
+
+        Parameters
+        ----------
+        graph : networkx.Graph or networkx.MultiGraph
+            The graph containing the heterogeneous nodes.
+        node_types : list[str]
+            The list of node types to include in the lookup.
+
+        Returns
+        -------
+        dict[str, dict[str, int]]
+            A nested dictionary: `{node_type: {original_index: graph_node_id}}`.
+        """
         node_lookup: dict[str, dict[str, int]] = {}
         for node_id, node_data in graph.nodes(data=True):
             node_type = node_data.get("node_type")
@@ -641,7 +1225,30 @@ class GraphConverter:
         nodes: bool = True,
         edges: bool = True,
     ) -> tuple[gpd.GeoDataFrame | None, gpd.GeoDataFrame | None] | gpd.GeoDataFrame:
-        """Reconstruct homogeneous GeoDataFrames from NetworkX graph."""
+        """
+        Reconstruct homogeneous GeoDataFrames from a NetworkX graph.
+
+        This internal method handles the logic for converting a homogeneous NetworkX
+        graph back into node and edge GeoDataFrames. It uses the graph's metadata
+        to correctly reconstruct geometries, attributes, and indices.
+
+        Parameters
+        ----------
+        graph : networkx.Graph or networkx.MultiGraph
+            The homogeneous NetworkX graph to reconstruct.
+        metadata : GraphMetadata
+            The metadata object containing information for reconstruction.
+        nodes : bool, default True
+            Whether to reconstruct the nodes GeoDataFrame.
+        edges : bool, default True
+            Whether to reconstruct the edges GeoDataFrame.
+
+        Returns
+        -------
+        tuple[geopandas.GeoDataFrame | None, geopandas.GeoDataFrame | None] or geopandas.GeoDataFrame
+            A tuple of (nodes_gdf, edges_gdf), or a single GeoDataFrame if only one
+            is requested.
+        """
         result: list[gpd.GeoDataFrame] = []
 
         if nodes:
@@ -663,7 +1270,32 @@ class GraphConverter:
         nodes: bool = True,
         edges: bool = True,
     ) -> tuple[dict[str, gpd.GeoDataFrame], dict[tuple[str, str, str], gpd.GeoDataFrame]]:
-        """Reconstruct heterogeneous GeoDataFrames from NetworkX graph."""
+        """
+        Reconstruct heterogeneous GeoDataFrames from a NetworkX graph.
+
+        This internal method handles the complex logic of converting a NetworkX graph
+        with typed nodes and edges back into separate, typed GeoDataFrames. It uses
+        the graph's extensive metadata to split the nodes and edges by their type
+        and reconstruct each GeoDataFrame with its correct attributes, geometry,
+        and index.
+
+        Parameters
+        ----------
+        graph : networkx.Graph or networkx.MultiGraph
+            The heterogeneous NetworkX graph to reconstruct.
+        metadata : GraphMetadata
+            The metadata object containing type and index information.
+        nodes : bool, default True
+            Whether to reconstruct the node GeoDataFrames.
+        edges : bool, default True
+            Whether to reconstruct the edge GeoDataFrames.
+
+        Returns
+        -------
+        tuple[dict[str, gpd.GeoDataFrame], dict[tuple[str, str, str], gpd.GeoDataFrame]]
+            A tuple containing a dictionary of node GeoDataFrames and a dictionary
+            of edge GeoDataFrames.
+        """
         nodes_dict = {}
         edges_dict = {}
 
@@ -685,7 +1317,26 @@ class GraphConverter:
         graph: nx.Graph | nx.MultiGraph,
         metadata: "GraphMetadata",
     ) -> gpd.GeoDataFrame:
-        """Create homogeneous nodes GeoDataFrame."""
+        """
+        Create a homogeneous nodes GeoDataFrame from a NetworkX graph.
+
+        This method extracts all nodes from a homogeneous graph, reconstructs their
+        geometries from position attributes, and restores their original attributes
+        and index using the provided metadata. The result is a single GeoDataFrame
+        representing all nodes in the graph.
+
+        Parameters
+        ----------
+        graph : networkx.Graph or networkx.MultiGraph
+            The homogeneous NetworkX graph.
+        metadata : GraphMetadata
+            The metadata for reconstruction.
+
+        Returns
+        -------
+        geopandas.GeoDataFrame
+            The reconstructed nodes GeoDataFrame.
+        """
         node_data = dict(graph.nodes(data=True))
 
         # Extract original indices and create records
@@ -738,7 +1389,26 @@ class GraphConverter:
         graph: nx.Graph | nx.MultiGraph,
         metadata: "GraphMetadata",
     ) -> dict[str, gpd.GeoDataFrame]:
-        """Create heterogeneous nodes dictionary."""
+        """
+        Create a dictionary of heterogeneous node GeoDataFrames.
+
+        This method filters the nodes of a heterogeneous graph by their `node_type`
+        attribute and creates a separate GeoDataFrame for each type. It reconstructs
+        the geometry, attributes, and original index for each typed GeoDataFrame,
+        returning them in a dictionary.
+
+        Parameters
+        ----------
+        graph : networkx.Graph or networkx.MultiGraph
+            The heterogeneous NetworkX graph.
+        metadata : GraphMetadata
+            The metadata for reconstruction.
+
+        Returns
+        -------
+        dict[str, geopandas.GeoDataFrame]
+            A dictionary mapping node type names to their reconstructed GeoDataFrames.
+        """
         nodes_dict = {}
 
         for node_type in metadata.node_types:
@@ -787,7 +1457,25 @@ class GraphConverter:
         graph: nx.Graph | nx.MultiGraph,
         metadata: "GraphMetadata",
     ) -> gpd.GeoDataFrame:
-        """Create homogeneous edges GeoDataFrame."""
+        """
+        Create a homogeneous edges GeoDataFrame from a NetworkX graph.
+
+        This method extracts all edges from a homogeneous graph, reconstructs their
+        LineString geometries from the positions of their source and target nodes,
+        and restores their original attributes and index from the provided metadata.
+
+        Parameters
+        ----------
+        graph : networkx.Graph or networkx.MultiGraph
+            The homogeneous NetworkX graph.
+        metadata : GraphMetadata
+            The metadata for reconstruction.
+
+        Returns
+        -------
+        geopandas.GeoDataFrame
+            The reconstructed edges GeoDataFrame.
+        """
         if graph.number_of_edges() == 0:
             # Create empty GeoDataFrame with expected columns
             return gpd.GeoDataFrame({"weight": [], "geometry": []}, crs=metadata.crs)
@@ -855,7 +1543,26 @@ class GraphConverter:
         graph: nx.Graph | nx.MultiGraph,
         metadata: "GraphMetadata",
     ) -> dict[tuple[str, str, str], gpd.GeoDataFrame]:
-        """Create heterogeneous edges dictionary."""
+        """
+        Create a dictionary of heterogeneous edge GeoDataFrames.
+
+        This method filters the edges of a heterogeneous graph by their `edge_type`
+        attribute and creates a separate GeoDataFrame for each type. It reconstructs
+        the geometry, attributes, and original MultiIndex for each typed edge
+        GeoDataFrame, returning them in a dictionary keyed by the edge type tuple.
+
+        Parameters
+        ----------
+        graph : networkx.Graph or networkx.MultiGraph
+            The heterogeneous NetworkX graph.
+        metadata : GraphMetadata
+            The metadata for reconstruction.
+
+        Returns
+        -------
+        dict[tuple[str, str, str], geopandas.GeoDataFrame]
+            A dictionary mapping edge type tuples to their reconstructed GeoDataFrames.
+        """
         edges_dict = {}
         is_multigraph = isinstance(graph, nx.MultiGraph)
 
@@ -946,9 +1653,22 @@ class GraphConverter:
 
 
 class GraphAnalyzer:
-    """Unified graph analysis operations."""
+    """
+    Unified graph analysis operations.
+
+    This class provides methods for analyzing and filtering graphs based on
+    spatial and topological criteria. It encapsulates functionalities for
+    spatial filtering, isochrone generation, and other graph-based analyses
+    relevant to urban and spatial data.
+    """
 
     def __init__(self) -> None:
+        """
+        Initialize GraphAnalyzer with processor and converter instances.
+
+        This constructor creates a new GraphAnalyzer instance with default
+        GeoDataProcessor and GraphConverter components for spatial analysis.
+        """
         self.processor = GeoDataProcessor()
         self.converter = GraphConverter()
 
@@ -960,7 +1680,41 @@ class GraphAnalyzer:
         edge_attr: str = "length",
         node_id_col: str | None = None,
     ) -> gpd.GeoDataFrame | nx.Graph | nx.MultiGraph:
-        """Extract a filtered graph containing only elements within a given shortest-path distance."""
+        """
+        Filter a graph to include only elements within a specified distance.
+
+        This function extracts a subgraph containing all nodes and edges that are
+        within a given shortest-path distance from a specified center point. It can
+        operate on both NetworkX graphs and GeoDataFrames of edges, making it a
+        versatile tool for spatial network analysis.
+
+        The filtering process involves identifying the nearest graph nodes to the
+        `center_point` and then performing a shortest-path search (e.g., Dijkstra's
+        algorithm) to find all reachable nodes and edges within the specified `distance`.
+        The resulting subgraph maintains the original graph's structure and attributes,
+        allowing for further analysis on the spatially constrained network.
+        algorithm) to find all reachable nodes and edges within the specified `distance`.
+        The resulting subgraph maintains the original graph's structure and attributes,
+        allowing for further analysis on the spatially constrained network.
+
+        Parameters
+        ----------
+        graph : geopandas.GeoDataFrame or networkx.Graph or networkx.MultiGraph
+            The graph to filter.
+        center_point : Point or geopandas.GeoSeries
+            The origin point(s) for the distance calculation.
+        distance : float
+            The maximum shortest-path distance.
+        edge_attr : str, default "length"
+            The edge attribute to use as weight for path calculations.
+        node_id_col : str, optional
+            The node identifier column if the input is a GeoDataFrame.
+
+        Returns
+        -------
+        gpd.GeoDataFrame or nx.Graph or nx.MultiGraph
+            The filtered subgraph, with the same type as the input.
+        """
         is_graph_input = isinstance(graph, (nx.Graph, nx.MultiGraph))
 
         # Convert to NetworkX if needed
@@ -1010,7 +1764,30 @@ class GraphAnalyzer:
         distance: float,
         edge_attr: str = "length",
     ) -> gpd.GeoDataFrame:
-        """Generate isochrone polygon(s) as convex hull of reachable areas within distance."""
+        """
+        Generate an isochrone polygon for a given graph and center point.
+
+        This function computes the area reachable from a center point within a specified
+        distance along the network. It first filters the graph to find all reachable
+        nodes and edges, then generates a convex hull around them to create the
+        isochrone polygon, which is useful for visualizing accessibility.
+
+        Parameters
+        ----------
+        graph : geopandas.GeoDataFrame or networkx.Graph or networkx.MultiGraph
+            The network graph.
+        center_point : Point or geopandas.GeoSeries or geopandas.GeoDataFrame
+            The origin point(s) for the isochrone.
+        distance : float
+            The maximum travel distance defining the isochrone boundary.
+        edge_attr : str, default "length"
+            The edge attribute to use as travel cost.
+
+        Returns
+        -------
+        geopandas.GeoDataFrame
+            A GeoDataFrame containing the isochrone polygon.
+        """
         reachable = self.filter_graph_by_distance(graph, center_point, distance, edge_attr)
 
         # Convert to GeoDataFrame if NetworkX
@@ -1029,7 +1806,25 @@ class GraphAnalyzer:
         self,
         graph: nx.Graph | nx.MultiGraph,
     ) -> dict[object, object] | None:
-        """Extract node positions from a NetworkX graph."""
+        """
+        Extract node positions from a NetworkX graph.
+
+        This helper function retrieves the spatial positions of nodes from their
+        `pos` attribute in the graph. It provides a consistent way to access
+        coordinate data, which is fundamental for any spatial analysis or
+        conversion task.
+
+        Parameters
+        ----------
+        graph : networkx.Graph or networkx.MultiGraph
+            The graph from which to extract node positions.
+
+        Returns
+        -------
+        dict[object, object] or None
+            A dictionary mapping node identifiers to their position tuples, or None
+            if no `pos` attribute is found.
+        """
         pos_dict: dict[object, object] = nx.get_node_attributes(graph, "pos")
 
         if pos_dict:
@@ -1043,7 +1838,28 @@ class GraphAnalyzer:
         node_id_col: str,
         crs: str | int | None,
     ) -> gpd.GeoDataFrame:
-        """Create a GeoDataFrame from node positions."""
+        """
+        Create a GeoDataFrame from a dictionary of node positions.
+
+        This function converts a dictionary of node positions into a GeoDataFrame,
+        which is a necessary intermediate step for performing spatial operations
+        like distance calculations. It creates Point geometries from the coordinates
+        and assigns the specified CRS.
+
+        Parameters
+        ----------
+        pos_dict : dict[object, object]
+            A dictionary mapping node identifiers to their position tuples.
+        node_id_col : str
+            The name to assign to the node identifier column.
+        crs : str or int or None
+            The Coordinate Reference System to assign to the new GeoDataFrame.
+
+        Returns
+        -------
+        geopandas.GeoDataFrame
+            A GeoDataFrame of nodes with Point geometries.
+        """
         node_ids, coordinates = zip(*pos_dict.items(), strict=False)
         geometries = [Point(coord) for coord in coordinates]
 
@@ -1056,7 +1872,24 @@ class GraphAnalyzer:
         self,
         center_point: Point | gpd.GeoSeries,
     ) -> list[Point] | gpd.GeoSeries:
-        """Normalize center point input to a consistent format."""
+        """
+        Normalize the center point input to a consistent format.
+
+        This helper function ensures that the center point input, whether it's a
+        single Point or a GeoSeries of points, is handled consistently. It returns
+        a list or GeoSeries of points that can be iterated over for distance
+        calculations.
+
+        Parameters
+        ----------
+        center_point : Point or geopandas.GeoSeries
+            The center point(s) to normalize.
+
+        Returns
+        -------
+        list[Point] or geopandas.GeoSeries
+            A list or GeoSeries of center points.
+        """
         if isinstance(center_point, gpd.GeoSeries):
             return center_point
         return [center_point]
@@ -1070,7 +1903,34 @@ class GraphAnalyzer:
         edge_attr: str,
         node_id_name: str,
     ) -> set[object]:
-        """Compute all nodes within distance from any center point."""
+        """
+        Compute the set of all nodes within a given distance from any center point.
+
+        This function first finds the nearest graph node for each center point and then
+        performs a single-source Dijkstra search from each of these source nodes to find
+        all reachable nodes within the specified distance. The results from all
+        searches are combined into a single set of unique node identifiers.
+
+        Parameters
+        ----------
+        graph : networkx.Graph or networkx.MultiGraph
+            The graph to search within.
+        center_points : list[Point] or geopandas.GeoSeries
+            The center points for the distance calculation.
+        nodes_gdf : geopandas.GeoDataFrame
+            A GeoDataFrame of the graph nodes, used for finding the nearest nodes.
+        distance : float
+            The maximum shortest-path distance.
+        edge_attr : str
+            The edge attribute to use as weight.
+        node_id_name : str
+            The name of the node identifier column.
+
+        Returns
+        -------
+        set[object]
+            A set of node identifiers that are within the distance.
+        """
         center_points_list = (
             center_points.tolist() if hasattr(center_points, "tolist") else list(center_points)
         )
@@ -1099,7 +1959,27 @@ class GraphAnalyzer:
         nodes_gdf: gpd.GeoDataFrame,
         node_id: str,
     ) -> object:
-        """Find the nearest node in a GeoDataFrame."""
+        """
+        Find the nearest node in a GeoDataFrame to a given point.
+
+        This function efficiently finds the closest node in a GeoDataFrame of nodes
+        to a specified point by calculating the Euclidean distance. It is a key step
+        in connecting off-network locations to the graph for analysis.
+
+        Parameters
+        ----------
+        point : Point or geopandas.GeoSeries
+            The point to find the nearest node to.
+        nodes_gdf : geopandas.GeoDataFrame
+            The GeoDataFrame of nodes to search within.
+        node_id : str
+            The name of the node identifier column.
+
+        Returns
+        -------
+        object
+            The identifier of the nearest node.
+        """
         nearest_idx = nodes_gdf.distance(point).idxmin()
         return nodes_gdf.loc[nearest_idx, node_id]
 
@@ -1109,7 +1989,28 @@ class GraphAnalyzer:
         original_crs: str | int | None,
         graph_type: type = nx.Graph,
     ) -> gpd.GeoDataFrame | nx.Graph | nx.MultiGraph:
-        """Create an empty result in the appropriate format."""
+        """
+        Create an empty result in the appropriate format.
+
+        This helper function generates an empty result container—either a GeoDataFrame
+        or a NetworkX graph—that matches the expected output type. This is used to
+        provide a consistent return value when an operation results in no data, such
+        as when no nodes are found within a given distance.
+
+        Parameters
+        ----------
+        is_graph_input : bool
+            True if the original input was a NetworkX graph.
+        original_crs : str or int or None
+            The original CRS to assign to an empty GeoDataFrame.
+        graph_type : type, default networkx.Graph
+            The type of empty graph to create if needed.
+
+        Returns
+        -------
+        gpd.GeoDataFrame or nx.Graph or nx.MultiGraph
+            An empty result of the appropriate type.
+        """
         return (
             gpd.GeoDataFrame(geometry=[], crs=original_crs) if not is_graph_input else graph_type()
         )
@@ -1157,6 +2058,10 @@ def dual_graph(
           they shared a node in the primal graph). The geometry is a LineString connecting
           the centroids of the two dual nodes. The index is a MultiIndex of the connected
           dual node IDs.
+
+    See Also
+    --------
+    segments_to_graph : Convert LineString segments to a graph structure.
 
     Examples
     --------
@@ -1430,7 +2335,8 @@ def gdf_to_nx(
     multigraph: bool = False,
     directed: bool = False,
 ) -> nx.Graph | nx.MultiGraph | nx.DiGraph | nx.MultiDiGraph:
-    """Convert GeoDataFrames of nodes and edges to a NetworkX graph.
+    """
+    Convert GeoDataFrames of nodes and edges to a NetworkX graph.
 
     This function provides a high-level interface to convert geospatial data,
     represented as GeoDataFrames, into a NetworkX graph. It supports both
@@ -1469,6 +2375,10 @@ def gdf_to_nx(
         A NetworkX graph object representing the spatial network. Graph-level
         metadata, such as CRS and heterogeneity information, is stored in
         `graph.graph`.
+
+    See Also
+    --------
+    nx_to_gdf : Convert a NetworkX graph back to GeoDataFrames.
 
     Examples
     --------
@@ -1542,7 +2452,8 @@ def nx_to_gdf(
     | tuple[gpd.GeoDataFrame, gpd.GeoDataFrame]
     | tuple[dict[str, gpd.GeoDataFrame], dict[tuple[str, str, str], gpd.GeoDataFrame]]
 ):
-    r"""Convert a NetworkX graph to GeoDataFrames for nodes and/or edges.
+    """
+    Convert a NetworkX graph to GeoDataFrames for nodes and/or edges.
 
     This function reconstructs GeoDataFrames from a NetworkX graph that was
     created by `gdf_to_nx` or follows a similar structure. It can handle both
@@ -1576,6 +2487,10 @@ def nx_to_gdf(
     ValueError
         If both `nodes` and `edges` are False.
 
+    See Also
+    --------
+    gdf_to_nx : Convert GeoDataFrames to a NetworkX graph.
+
     Examples
     --------
     >>> import networkx as nx
@@ -1608,7 +2523,8 @@ def filter_graph_by_distance(
     edge_attr: str = "length",
     node_id_col: str | None = None,
 ) -> gpd.GeoDataFrame | nx.Graph | nx.MultiGraph:
-    """Filter a graph to include only elements within a specified distance from a center point.
+    """
+    Filter a graph to include only elements within a specified distance from a center point.
 
     This function calculates the shortest path from a center point to all nodes
     in the graph and returns a subgraph containing only the nodes (and their
@@ -1640,6 +2556,10 @@ def filter_graph_by_distance(
         If the input was a GeoDataFrame, the output is a GeoDataFrame of the
         filtered edges.
 
+    See Also
+    --------
+    create_isochrone : Generate an isochrone polygon from a graph.
+
     Examples
     --------
     >>> import networkx as nx
@@ -1667,7 +2587,8 @@ def create_isochrone(
     distance: float,
     edge_attr: str = "length",
 ) -> gpd.GeoDataFrame:
-    """Generate an isochrone polygon from a graph.
+    """
+    Generate an isochrone polygon from a graph.
 
     An isochrone represents the area reachable from a center point within a
     given travel distance or time. This function computes the set of reachable
@@ -1693,6 +2614,10 @@ def create_isochrone(
     geopandas.GeoDataFrame
         A GeoDataFrame containing a single Polygon geometry that represents the
         isochrone.
+
+    See Also
+    --------
+    filter_graph_by_distance : Filter a graph by distance from a center point.
 
     Examples
     --------
@@ -1724,7 +2649,8 @@ def create_tessellation(
     n_jobs: int = -1,
     **kwargs: object,
 ) -> gpd.GeoDataFrame:
-    """Create tessellations from given geometries, with optional barriers.
+    """
+    Create tessellations from given geometries, with optional barriers.
 
     This function generates either morphological or enclosed tessellations based on
     the input geometries. If `primary_barriers` are provided, it creates an
@@ -1766,6 +2692,11 @@ def create_tessellation(
         If `primary_barriers` are not provided and the geometry is in a
         geographic CRS (e.g., EPSG:4326), as morphological tessellation
         requires a projected CRS.
+
+    See Also
+    --------
+    momepy.morphological_tessellation : Generate morphological tessellation.
+    momepy.enclosed_tessellation : Generate enclosed tessellation.
 
     Examples
     --------
@@ -1878,7 +2809,8 @@ def validate_gdf(
     gpd.GeoDataFrame | dict[tuple[str, str, str], gpd.GeoDataFrame] | None,
     bool,
 ]:
-    """Validate node and edge GeoDataFrames with type detection.
+    """
+    Validate node and edge GeoDataFrames with type detection.
 
     This function validates both homogeneous and heterogeneous GeoDataFrame inputs,
     performs type checking, and determines whether the input represents a
@@ -2002,7 +2934,8 @@ def validate_gdf(
 
 
 def validate_nx(graph: nx.Graph | nx.MultiGraph) -> None:
-    """Validate a NetworkX graph with comprehensive type checking.
+    """
+    Validate a NetworkX graph with comprehensive type checking.
 
     Checks if the input is a NetworkX graph, ensures it is not empty
     (i.e., it has both nodes and edges), and verifies that it contains the

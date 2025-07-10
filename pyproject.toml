@@ -245,3 +245,10 @@ max-branches = 15
 [tool.pytest.ini_options]
 addopts = "--cov=city2graph --cov-report term-missing"
 pythonpath = "."
+
+[tool.numpydoc_validation]
+checks = [
+    "all",   # report on all checks, except the below
+    "EX01",  # No examples section found
+    "SA01",  # See Also section not found
+]
