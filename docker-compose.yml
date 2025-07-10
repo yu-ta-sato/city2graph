@@ -4,7 +4,7 @@ services:
   city2graph:
     build: .
     ports:
-      - "8888:8888"
+      - 8888:8888
     environment:
       - JUPYTER_ENABLE_LAB=yes
     develop:

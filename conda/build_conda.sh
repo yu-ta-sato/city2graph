@@ -20,7 +20,7 @@ conda build . \
   -c pyg \
   -c conda-forge \
   --output-folder $CONDA_BLD_PATH
-  
+
 echo "Build completed. Packages are in $CONDA_BLD_PATH"
 
 # Clean up AFTER the build is done

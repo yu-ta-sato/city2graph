@@ -30,9 +30,21 @@ __all__ = ["load_overture_data", "process_overture_segments"]
 
 # Valid Overture Maps data types for validation
 VALID_OVERTURE_TYPES = {
-    "address", "bathymetry", "building", "building_part", "division",
-    "division_area", "division_boundary", "place", "segment", "connector",
-    "infrastructure", "land", "land_cover", "land_use", "water",
+    "address",
+    "bathymetry",
+    "building",
+    "building_part",
+    "division",
+    "division_area",
+    "division_boundary",
+    "place",
+    "segment",
+    "connector",
+    "infrastructure",
+    "land",
+    "land_cover",
+    "land_use",
+    "water",
 }
 
 # Standard coordinate reference system
@@ -47,7 +59,8 @@ def load_overture_data(
     save_to_file: bool = True,
     return_data: bool = True,
 ) -> dict[str, gpd.GeoDataFrame]:
-    """Load data from Overture Maps using the CLI tool and optionally save to GeoJSON files.
+    """
+    Load data from Overture Maps using the CLI tool and optionally save to GeoJSON files.
 
     This function downloads geospatial data from Overture Maps for a specified area
     and data types. It can save the data to GeoJSON files and/or return it as
@@ -82,6 +95,10 @@ def load_overture_data(
     subprocess.CalledProcessError
         If the Overture Maps CLI command fails.
 
+    See Also
+    --------
+    process_overture_segments : Process segments from Overture Maps.
+
     Examples
     --------
     >>> # Download building and segment data for a bounding box
@@ -108,7 +125,13 @@ def load_overture_data(
     result = {}
     for data_type in types:
         gdf = _download_and_process_type(
-            data_type, bbox_str, output_dir, prefix, save_to_file, return_data, clip_geom,
+            data_type,
+            bbox_str,
+            output_dir,
+            prefix,
+            save_to_file,
+            return_data,
+            clip_geom,
         )
         if return_data:
             result[data_type] = gdf
@@ -122,7 +145,8 @@ def process_overture_segments(
     connectors_gdf: gpd.GeoDataFrame | None = None,
     threshold: float = 1.0,
 ) -> gpd.GeoDataFrame:
-    """Process segments from Overture Maps to be split by connectors and extract barriers.
+    """
+    Process segments from Overture Maps to be split by connectors and extract barriers.
 
     This function processes road segments by splitting them at connector points and
     optionally generates barrier geometries based on level rules. It also performs
@@ -148,6 +172,10 @@ def process_overture_segments(
         - 'split_from', 'split_to': Split positions if segments were split
         - 'length': Length of each segment
         - 'barrier_geometry': Passable geometry if get_barriers=True
+
+    See Also
+    --------
+    load_overture_data : Load data from Overture Maps.
 
     Examples
     --------
@@ -188,10 +216,39 @@ def process_overture_segments(
 
 
 def _prepare_area_and_bbox(area: list[float] | Polygon) -> tuple[str, Polygon | None]:
-    """Prepare area input and convert to bbox string and clipping geometry."""
+    """
+    Prepare area input and convert to bbox string and clipping geometry.
+
+    This function processes area input to create a bounding box string for API queries
+    and optionally a clipping geometry for precise spatial filtering.
+
+    Parameters
+    ----------
+    area : list[float] or Polygon
+        The area of interest. Can be either a bounding box as [min_lon, min_lat, max_lon, max_lat]
+        or a Polygon geometry.
+
+    Returns
+    -------
+    tuple[str, Polygon or None]
+        Tuple containing bbox string and optional clipping geometry.
+
+    See Also
+    --------
+    _download_and_process_type : Uses this function for area preparation.
+
+    Examples
+    --------
+    >>> bbox = [-74.1, 40.7, -74.0, 40.8]
+    >>> bbox_str, clip_geom = _prepare_area_and_bbox(bbox)
+    >>> bbox_str
+    '-74.1,40.7,-74.0,40.8'
+    """
     if isinstance(area, Polygon):
         # Convert to WGS84 if needed
-        area_wgs84 = area.to_crs(WGS84_CRS) if hasattr(area, "crs") and area.crs != WGS84_CRS else area
+        area_wgs84 = (
+            area.to_crs(WGS84_CRS) if hasattr(area, "crs") and area.crs != WGS84_CRS else area
+        )
         bbox_str = ",".join(str(round(c, 10)) for c in area_wgs84.bounds)
         clip_geom = area_wgs84
     else:
@@ -210,7 +267,43 @@ def _download_and_process_type(
     return_data: bool,
     clip_geom: Polygon | None,
 ) -> gpd.GeoDataFrame:
-    """Download and process a single data type from Overture Maps."""
+    """
+    Download and process a single data type from Overture Maps.
+
+    This function handles the download and processing of a specific data type
+    from Overture Maps, including optional clipping and file saving.
+
+    Parameters
+    ----------
+    data_type : str
+        Type of data to download (e.g., 'building', 'transportation').
+    bbox_str : str
+        Bounding box string for the API query.
+    output_dir : str
+        Directory to save output files.
+    prefix : str
+        Prefix for output filenames.
+    save_to_file : bool
+        Whether to save data to file.
+    return_data : bool
+        Whether to return the data.
+    clip_geom : Polygon or None
+        Optional geometry for precise clipping.
+
+    Returns
+    -------
+    gpd.GeoDataFrame
+        Processed geospatial data.
+
+    See Also
+    --------
+    get_overture_data : Main function using this helper.
+
+    Examples
+    --------
+    >>> gdf = _download_and_process_type('building', '-74.1,40.7,-74.0,40.8',
+    ...                                  './data', 'nyc', True, True, None)
+    """
     output_path = Path(output_dir) / f"{prefix}{data_type}.geojson"
 
     # Build and execute download command
@@ -224,7 +317,11 @@ def _download_and_process_type(
         return gpd.GeoDataFrame(geometry=[], crs=WGS84_CRS)
 
     # Load and clip data if needed
-    gdf = gpd.read_file(output_path) if save_to_file and output_path.exists() else gpd.GeoDataFrame(geometry=[], crs=WGS84_CRS)
+    gdf = (
+        gpd.read_file(output_path)
+        if save_to_file and output_path.exists()
+        else gpd.GeoDataFrame(geometry=[], crs=WGS84_CRS)
+    )
 
     if clip_geom is not None and not gdf.empty:
         clip_gdf = gpd.GeoDataFrame(geometry=[clip_geom], crs=WGS84_CRS)
@@ -246,7 +343,34 @@ def _split_segments_at_connectors(
     segments_gdf: gpd.GeoDataFrame,
     connectors_gdf: gpd.GeoDataFrame | None,
 ) -> gpd.GeoDataFrame:
-    """Split segments at connector positions."""
+    """
+    Split segments at connector positions.
+
+    This function splits road segments at connector positions to create
+    a more detailed network representation suitable for graph analysis.
+
+    Parameters
+    ----------
+    segments_gdf : geopandas.GeoDataFrame
+        GeoDataFrame containing road segments.
+    connectors_gdf : geopandas.GeoDataFrame or None
+        GeoDataFrame containing connector information.
+
+    Returns
+    -------
+    gpd.GeoDataFrame
+        GeoDataFrame with segments split at connector positions.
+
+    See Also
+    --------
+    _extract_connector_positions : Extract connector positions from segments.
+
+    Examples
+    --------
+    >>> segments = gpd.GeoDataFrame({'geometry': [LineString([(0,0), (1,1)])]})
+    >>> connectors = gpd.GeoDataFrame({'id': ['c1']})
+    >>> split_segments = _split_segments_at_connectors(segments, connectors)
+    """
     if connectors_gdf is None or connectors_gdf.empty:
         return segments_gdf
 
@@ -262,7 +386,36 @@ def _split_segments_at_connectors(
 
 
 def _extract_connector_positions(segment: pd.Series, valid_connector_ids: set[str]) -> list[float]:
-    """Extract valid connector positions from a segment."""
+    """
+    Extract valid connector positions from a segment.
+
+    This function parses connector information from a segment and returns
+    the positions of valid connectors along the segment.
+
+    Parameters
+    ----------
+    segment : pd.Series
+        Series containing segment data with connector information.
+    valid_connector_ids : set[str]
+        Set of valid connector IDs to filter by.
+
+    Returns
+    -------
+    list[float]
+        List of connector positions along the segment (0.0 to 1.0).
+
+    See Also
+    --------
+    _split_segments_at_connectors : Main function using this helper.
+
+    Examples
+    --------
+    >>> segment = pd.Series({'connectors': '[{"id": "c1", "at": 0.5}]'})
+    >>> valid_ids = {'c1'}
+    >>> positions = _extract_connector_positions(segment, valid_ids)
+    >>> positions
+    [0.0, 0.5, 1.0]
+    """
     connectors_str = segment.get("connectors", "")
     if not connectors_str:
         return [0.0, 1.0]
@@ -290,7 +443,34 @@ def _extract_connector_positions(segment: pd.Series, valid_connector_ids: set[st
 
 
 def _create_segment_splits(segment: pd.Series, positions: list[float]) -> list[pd.Series]:
-    """Create split segments from position list."""
+    """
+    Create split segments from position list.
+
+    This function takes a segment and a list of split positions and creates
+    multiple segment parts based on those positions.
+
+    Parameters
+    ----------
+    segment : pd.Series
+        Original segment to be split.
+    positions : list[float]
+        List of positions along the segment where splits should occur.
+
+    Returns
+    -------
+    list[pd.Series]
+        List of split segment parts.
+
+    See Also
+    --------
+    _split_segments_at_connectors : Main function using this helper.
+
+    Examples
+    --------
+    >>> segment = pd.Series({'geometry': LineString([(0,0), (1,1)])})
+    >>> positions = [0.0, 0.5, 1.0]
+    >>> splits = _create_segment_splits(segment, positions)
+    """
     if len(positions) <= 2:
         return [segment]
 
@@ -307,14 +487,43 @@ def _create_segment_splits(segment: pd.Series, positions: list[float]) -> list[p
             new_segment.geometry = part_geom
             new_segment["split_from"] = start_pct
             new_segment["split_to"] = end_pct
-            new_segment["id"] = f"{original_id}_{i+1}" if len(positions) > 2 else original_id
+            new_segment["id"] = f"{original_id}_{i + 1}" if len(positions) > 2 else original_id
             split_parts.append(new_segment)
 
     return split_parts
 
 
-def _cluster_segment_endpoints(segments_gdf: gpd.GeoDataFrame, threshold: float) -> gpd.GeoDataFrame:
-    """Cluster segment endpoints to snap nearby points together."""
+def _cluster_segment_endpoints(
+    segments_gdf: gpd.GeoDataFrame,
+    threshold: float,
+) -> gpd.GeoDataFrame:
+    """
+    Cluster segment endpoints to snap nearby points together.
+
+    This function performs spatial clustering of segment endpoints to snap
+    nearby points together, improving network connectivity.
+
+    Parameters
+    ----------
+    segments_gdf : gpd.GeoDataFrame
+        GeoDataFrame containing road segments.
+    threshold : float
+        Distance threshold for clustering endpoints.
+
+    Returns
+    -------
+    gpd.GeoDataFrame
+        GeoDataFrame with adjusted segment endpoints.
+
+    See Also
+    --------
+    process_overture_segments : Main function using this helper.
+
+    Examples
+    --------
+    >>> segments = gpd.GeoDataFrame({'geometry': [LineString([(0,0), (1,1)])]})
+    >>> clustered = _cluster_segment_endpoints(segments, 0.1)
+    """
     # Extract all endpoints
     endpoints_data = []
     for idx, geom in segments_gdf.geometry.items():
@@ -324,10 +533,12 @@ def _cluster_segment_endpoints(segments_gdf: gpd.GeoDataFrame, threshold: float)
             endpoints_data.append((idx, "end", coords[-1]))
 
     # Create DataFrame for clustering
-    endpoints_df = pd.DataFrame([
-        {"seg_id": idx, "pos": pos, "x": coord[0], "y": coord[1]}
-        for idx, pos, coord in endpoints_data
-    ])
+    endpoints_df = pd.DataFrame(
+        [
+            {"seg_id": idx, "pos": pos, "x": coord[0], "y": coord[1]}
+            for idx, pos, coord in endpoints_data
+        ],
+    )
 
     # Perform spatial clustering using binning
     endpoints_df["bin_x"] = (endpoints_df["x"] / threshold).round().astype(int)
@@ -356,7 +567,32 @@ def _cluster_segment_endpoints(segments_gdf: gpd.GeoDataFrame, threshold: float)
 
 
 def _generate_barrier_geometries(segments_gdf: gpd.GeoDataFrame) -> gpd.GeoSeries:
-    """Generate barrier geometries from level rules."""
+    """
+    Generate barrier geometries from level rules.
+
+    This function processes level rules to create barrier geometries that
+    represent passable portions of road segments.
+
+    Parameters
+    ----------
+    segments_gdf : gpd.GeoDataFrame
+        GeoDataFrame containing segments with level rules.
+
+    Returns
+    -------
+    gpd.GeoSeries
+        Series of barrier geometries.
+
+    See Also
+    --------
+    _parse_level_rules : Parse level rules from string.
+    _create_barrier_geometry : Create geometry from intervals.
+
+    Examples
+    --------
+    >>> segments = gpd.GeoDataFrame({'level_rules': [''], 'geometry': [LineString([(0,0), (1,1)])]})
+    >>> barriers = _generate_barrier_geometries(segments)
+    """
     barrier_geometries = []
 
     for _, row in segments_gdf.iterrows():
@@ -374,7 +610,33 @@ def _generate_barrier_geometries(segments_gdf: gpd.GeoDataFrame) -> gpd.GeoSerie
 
 
 def _parse_level_rules(level_rules_str: str) -> list[tuple[float, float]] | str:
-    """Parse level rules string and extract barrier intervals."""
+    """
+    Parse level rules string and extract barrier intervals.
+
+    This function parses JSON-formatted level rules to extract barrier intervals
+    that define restricted access areas along road segments.
+
+    Parameters
+    ----------
+    level_rules_str : str
+        JSON string containing level rules data.
+
+    Returns
+    -------
+    list[tuple[float, float]] or str
+        List of barrier intervals as (start, end) tuples, or "full_barrier" string.
+
+    See Also
+    --------
+    _generate_barrier_geometries : Main function using this parser.
+
+    Examples
+    --------
+    >>> rules = '[{"value": 1, "between": [0.2, 0.8]}]'
+    >>> intervals = _parse_level_rules(rules)
+    >>> intervals
+    [(0.2, 0.8)]
+    """
     if not level_rules_str:
         return []
 
@@ -403,7 +665,35 @@ def _create_barrier_geometry(
     geometry: LineString,
     barrier_intervals: list[tuple[float, float]] | str,
 ) -> LineString | MultiLineString | None:
-    """Create barrier geometry from intervals."""
+    """
+    Create barrier geometry from intervals.
+
+    This function creates passable geometry by removing barrier intervals
+    from the original geometry, resulting in accessible road segments.
+
+    Parameters
+    ----------
+    geometry : LineString
+        Original road segment geometry.
+    barrier_intervals : list[tuple[float, float]] or str
+        Barrier intervals or "full_barrier" indicator.
+
+    Returns
+    -------
+    LineString, MultiLineString, or None
+        Passable geometry after removing barriers, or None if fully blocked.
+
+    See Also
+    --------
+    _calculate_passable_intervals : Calculate complement of barrier intervals.
+
+    Examples
+    --------
+    >>> from shapely.geometry import LineString
+    >>> geom = LineString([(0, 0), (1, 0)])
+    >>> barriers = [(0.2, 0.8)]
+    >>> passable = _create_barrier_geometry(geom, barriers)
+    """
     if barrier_intervals == "full_barrier":
         return None
 
@@ -422,7 +712,6 @@ def _create_barrier_geometry(
     # Create geometry parts from passable intervals
     parts = []
     for start_pct, end_pct in passable_intervals:
-
         part = substring(geometry, start_pct, end_pct, normalized=True)
 
         if part and not part.is_empty:
@@ -433,8 +722,36 @@ def _create_barrier_geometry(
     return MultiLineString(parts)
 
 
-def _calculate_passable_intervals(barrier_intervals: list[tuple[float, float]]) -> list[tuple[float, float]]:
-    """Calculate passable intervals as complement of barrier intervals."""
+def _calculate_passable_intervals(
+    barrier_intervals: list[tuple[float, float]],
+) -> list[tuple[float, float]]:
+    """
+    Calculate passable intervals as complement of barrier intervals.
+
+    This function computes the passable portions of a segment by finding
+    the complement of barrier intervals within the [0, 1] range.
+
+    Parameters
+    ----------
+    barrier_intervals : list[tuple[float, float]]
+        List of barrier intervals as (start, end) tuples.
+
+    Returns
+    -------
+    list[tuple[float, float]]
+        List of passable intervals as (start, end) tuples.
+
+    See Also
+    --------
+    _create_barrier_geometry : Main function using this calculation.
+
+    Examples
+    --------
+    >>> barriers = [(0.2, 0.4), (0.6, 0.8)]
+    >>> passable = _calculate_passable_intervals(barriers)
+    >>> passable
+    [(0.0, 0.2), (0.4, 0.6), (0.8, 1.0)]
+    """
     sorted_intervals = sorted(barrier_intervals)
     passable_intervals = []
     current = 0.0

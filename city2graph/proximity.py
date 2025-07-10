@@ -23,6 +23,7 @@ import logging
 from itertools import combinations
 from itertools import permutations
 from typing import TYPE_CHECKING
+from typing import cast
 
 # Third-party imports
 import networkx as nx
@@ -71,7 +72,8 @@ def knn_graph(
     target_gdf: gpd.GeoDataFrame | None = None,
     as_nx: bool = False,
 ) -> tuple[gpd.GeoDataFrame, gpd.GeoDataFrame] | nx.Graph:
-    r"""Generate a k-nearest neighbour graph from a GeoDataFrame of points.
+    r"""
+    Generate a k-nearest neighbour graph from a GeoDataFrame of points.
 
     This function constructs a graph where each node is connected to its k nearest neighbors
     based on the specified distance metric. The resulting graph captures local spatial
@@ -118,9 +120,9 @@ def knn_graph(
 
     See Also
     --------
-    delaunay_graph : Generate a Delaunay triangulation graph
-    fixed_radius_graph : Generate a fixed-radius graph
-    waxman_graph : Generate a probabilistic Waxman graph
+    delaunay_graph : Generate a Delaunay triangulation graph.
+    fixed_radius_graph : Generate a fixed-radius graph.
+    waxman_graph : Generate a probabilistic Waxman graph.
 
     Notes
     -----
@@ -219,17 +221,18 @@ def knn_graph(
     if distance_metric == "network":
         dm = _distance_matrix(coords, "network", network_gdf, gdf.crs)
         order = np.argsort(dm, axis=1)[:, 1 : k + 1]
-        edges = [(node_ids[i], node_ids[j]) for i in range(len(node_ids)) for j in order[i] if dm[i, j] < np.inf]
+        edges = [
+            (node_ids[i], node_ids[j])
+            for i in range(len(node_ids))
+            for j in order[i]
+            if dm[i, j] < np.inf
+        ]
     else:
         nn_metric = "cityblock" if distance_metric == "manhattan" else "euclidean"
         n_neigh = min(k + 1, len(coords))
         nn = NearestNeighbors(n_neighbors=n_neigh, metric=nn_metric).fit(coords)
         _, idxs = nn.kneighbors(coords)
-        edges = [
-            (node_ids[i], node_ids[j])
-            for i, neigh in enumerate(idxs)
-            for j in neigh[1:]
-        ]
+        edges = [(node_ids[i], node_ids[j]) for i, neigh in enumerate(idxs) for j in neigh[1:]]
 
     # Add edges with weights and geometries
     _add_edges(G, edges, coords, node_ids, metric=distance_metric, dm=dm, network_gdf=network_gdf)
@@ -243,7 +246,8 @@ def delaunay_graph(
     *,
     as_nx: bool = False,
 ) -> tuple[gpd.GeoDataFrame, gpd.GeoDataFrame] | nx.Graph:
-    """Generate a Delaunay triangulation graph from a GeoDataFrame of points.
+    """
+    Generate a Delaunay triangulation graph from a GeoDataFrame of points.
 
     This function constructs a graph based on the Delaunay triangulation of the
     input points. Each edge in the graph corresponds to an edge in the Delaunay
@@ -326,7 +330,9 @@ def delaunay_graph(
 
     # Candidate edges: Delaunay triangulation
     tri = Delaunay(coords)
-    edges = {(node_ids[i], node_ids[j]) for simplex in tri.simplices for i, j in combinations(simplex, 2)}
+    edges = {
+        (node_ids[i], node_ids[j]) for simplex in tri.simplices for i, j in combinations(simplex, 2)
+    }
 
     # Add weights and geometries
     dm = None
@@ -344,7 +350,8 @@ def gabriel_graph(
     *,
     as_nx: bool = False,
 ) -> tuple[gpd.GeoDataFrame, gpd.GeoDataFrame] | nx.Graph:
-    r"""Generate a Gabriel graph from a GeoDataFrame of points.
+    r"""
+    Generate a Gabriel graph from a GeoDataFrame of points.
 
     In a Gabriel graph two nodes *u* and *v* are connected iff the closed
     disc that has $uv$ as its diameter contains no other node of the set.
@@ -405,9 +412,7 @@ def gabriel_graph(
     else:
         tri = Delaunay(coords)
         delaunay_edges = {
-            tuple(sorted((i, j)))
-            for simplex in tri.simplices
-            for i, j in combinations(simplex, 2)
+            tuple(sorted((i, j))) for simplex in tri.simplices for i, j in combinations(simplex, 2)
         }
 
     # Gabriel filtering
@@ -451,7 +456,8 @@ def relative_neighborhood_graph(
     *,
     as_nx: bool = False,
 ) -> tuple[gpd.GeoDataFrame, gpd.GeoDataFrame] | nx.Graph:
-    r"""Generate a Relative-Neighbourhood Graph (RNG) from a GeoDataFrame.
+    r"""
+    Generate a Relative-Neighbourhood Graph (RNG) from a GeoDataFrame.
 
     In an RNG two nodes *u* and *v* are connected iff there is **no third node
     *w*** such that both $$d(u,w) < d(u,v)$$ **and** $$d(v,w) < d(u,v)$$.
@@ -512,9 +518,7 @@ def relative_neighborhood_graph(
     else:
         tri = Delaunay(coords)
         cand_edges = {
-            tuple(sorted((i, j)))
-            for simplex in tri.simplices
-            for i, j in combinations(simplex, 2)
+            tuple(sorted((i, j))) for simplex in tri.simplices for i, j in combinations(simplex, 2)
         }
 
     # RNG filtering
@@ -557,7 +561,8 @@ def euclidean_minimum_spanning_tree(
     *,
     as_nx: bool = False,
 ) -> tuple[gpd.GeoDataFrame, gpd.GeoDataFrame] | nx.Graph:
-    r"""Generate a (generalised) Euclidean Minimum Spanning Tree from a GeoDataFrame of points.
+    r"""
+    Generate a (generalised) Euclidean Minimum Spanning Tree from a GeoDataFrame of points.
 
     The classical Euclidean Minimum Spanning Tree (EMST) is the minimum-
     total-length tree that connects a set of points when edge weights are the
@@ -592,6 +597,16 @@ def euclidean_minimum_spanning_tree(
         - edges_gdf: GeoDataFrame of edges with 'weight' and 'geometry' attributes
         If `as_nx` is True, returns a NetworkX graph object with spatial attributes.
 
+    Notes
+    -----
+    •  The resulting graph always contains *n - 1* edges (or 0 / 1 when the
+       input has < 2 points).
+    •  For planar Euclidean inputs the computation is
+
+       $\mathcal O(n \log n)$ thanks to the Delaunay pruning.
+    •  All the usual spatial attributes (*weight*, *geometry*, CRS checks,
+       etc.) are attached through the shared private helpers.
+
     References
     ----------
     March, W. B., Ram, P., & Gray, A. G. (2010, July). Fast euclidean minimum spanning tree:
@@ -602,16 +617,6 @@ def euclidean_minimum_spanning_tree(
     --------
     >>> nodes, edges = euclidean_minimum_spanning_tree(points_gdf)
     >>> G = euclidean_minimum_spanning_tree(points_gdf, as_nx=True)
-
-    Notes
-    -----
-    •  The resulting graph always contains *n - 1* edges (or 0 / 1 when the
-       input has < 2 points).
-    •  For planar Euclidean inputs the computation is
-
-       $$\mathcal O(n \log n)$$ thanks to the Delaunay pruning.
-    •  All the usual spatial attributes (*weight*, *geometry*, CRS checks,
-       etc.) are attached through the shared private helpers.
     """
     # Input validation
     _assert_euclidean(distance_metric, "delaunay_graph")
@@ -631,17 +636,13 @@ def euclidean_minimum_spanning_tree(
     if distance_metric.lower() == "euclidean" and n_points >= 3:
         tri = Delaunay(coords)
         cand_edges = {
-            tuple(sorted((i, j)))
-            for simplex in tri.simplices
-            for i, j in combinations(simplex, 2)
+            tuple(sorted((i, j))) for simplex in tri.simplices for i, j in combinations(simplex, 2)
         }
     else:
         use_complete_graph = True
 
     if use_complete_graph:
-        cand_edges = {
-            (i, j) for i in range(n_points) for j in range(i + 1, n_points)
-        }
+        cand_edges = {(i, j) for i in range(n_points) for j in range(i + 1, n_points)}
 
     # Convert vertex indices to actual node ids
     cand_edges = {(node_ids[i], node_ids[j]) for i, j in cand_edges}
@@ -677,7 +678,8 @@ def fixed_radius_graph(
     target_gdf: gpd.GeoDataFrame | None = None,
     as_nx: bool = False,
 ) -> tuple[gpd.GeoDataFrame, gpd.GeoDataFrame] | nx.Graph:
-    r"""Generate a fixed-radius graph from a GeoDataFrame of points.
+    r"""
+    Generate a fixed-radius graph from a GeoDataFrame of points.
 
     This function constructs a graph where nodes are connected if the distance between
     them is within a specified radius. This model is particularly useful for modeling
@@ -724,15 +726,9 @@ def fixed_radius_graph(
 
     See Also
     --------
-    knn_graph : Generate a k-nearest neighbour graph
-    delaunay_graph : Generate a Delaunay triangulation graph
-    waxman_graph : Generate a probabilistic Waxman graph
-
-    References
-    ----------
-    Bentley, J. L., Stanat, D. F., & Williams Jr, E. H. (1977).
-    The complexity of finding fixed-radius near neighbors.
-    Information processing letters, 6(6), 209-212. [1](https://doi.org/10.1016/0020-0190(77)90070-9)
+    knn_graph : Generate a k-nearest neighbour graph.
+    delaunay_graph : Generate a Delaunay triangulation graph.
+    waxman_graph : Generate a probabilistic Waxman graph.
 
     Notes
     -----
@@ -741,6 +737,12 @@ def fixed_radius_graph(
     - Edge geometries are LineStrings connecting node centroids
     - The graph stores the radius parameter in `G.graph["radius"]`
     - For Manhattan distance, edges follow L-shaped geometric paths
+
+    References
+    ----------
+    Bentley, J. L., Stanat, D. F., & Williams Jr, E. H. (1977).
+    The complexity of finding fixed-radius near neighbors.
+    Information processing letters, 6(6), 209-212. [1](https://doi.org/10.1016/0020-0190(77)90070-9)
 
     Examples
     --------
@@ -851,12 +853,7 @@ def fixed_radius_graph(
         nn_metric = "cityblock" if distance_metric == "manhattan" else "euclidean"
         nn = NearestNeighbors(radius=radius, metric=nn_metric).fit(coords)
         idxs = nn.radius_neighbors(coords, return_distance=False)
-        edges = [
-            (node_ids[i], node_ids[j])
-            for i, neigh in enumerate(idxs)
-            for j in neigh
-            if i < j
-        ]
+        edges = [(node_ids[i], node_ids[j]) for i, neigh in enumerate(idxs) for j in neigh if i < j]
 
     # Add edges with weights and geometries
     _add_edges(G, edges, coords, node_ids, metric=distance_metric, dm=dm, network_gdf=network_gdf)
@@ -874,7 +871,8 @@ def waxman_graph(
     *,
     as_nx: bool = False,
 ) -> tuple[gpd.GeoDataFrame, gpd.GeoDataFrame] | nx.Graph:
-    r"""Generate a probabilistic Waxman graph from a GeoDataFrame of points.
+    r"""
+    Generate a probabilistic Waxman graph from a GeoDataFrame of points.
 
     This function constructs a random graph where the probability of an edge existing
     between two nodes decreases exponentially with their distance. The model is based
@@ -928,9 +926,9 @@ def waxman_graph(
 
     See Also
     --------
-    knn_graph : Generate a k-nearest neighbour graph
-    delaunay_graph : Generate a Delaunay triangulation graph
-    fixed_radius_graph : Generate a fixed-radius graph
+    knn_graph : Generate a k-nearest neighbour graph.
+    delaunay_graph : Generate a Delaunay triangulation graph.
+    fixed_radius_graph : Generate a fixed-radius graph.
 
     Notes
     -----
@@ -1062,7 +1060,8 @@ def bridge_nodes(
     as_nx: bool = False,
     **kwargs: float | str | bool,
 ) -> tuple[dict[str, gpd.GeoDataFrame], dict[tuple[str, str, str], gpd.GeoDataFrame]] | nx.Graph:
-    r"""Build directed proximity edges between every ordered pair of node layers.
+    r"""
+    Build directed proximity edges between every ordered pair of node layers.
 
     This function creates a multi-layer spatial network by generating directed proximity
     edges from nodes in one GeoDataFrame layer to nodes in another. It systematically
@@ -1126,8 +1125,8 @@ def bridge_nodes(
 
     See Also
     --------
-    knn_graph : Generate a k-nearest neighbour graph
-    fixed_radius_graph : Generate a fixed-radius graph
+    knn_graph : Generate a k-nearest neighbour graph.
+    fixed_radius_graph : Generate a fixed-radius graph.
 
     Notes
     -----
@@ -1245,21 +1244,40 @@ def bridge_nodes(
         src_gdf = nodes_dict[src_type]
         dst_gdf = nodes_dict[dst_type]
 
-        if proximity_method.lower() == "knn": # k-nearest neighbors
+        if proximity_method.lower() == "knn":  # k-nearest neighbors
             k = int(kwargs.get("k", 1))
+            # Call knn_graph with appropriate arguments (always return GeoDataFrames)
+            distance_metric = kwargs.get("distance_metric", "euclidean")
+            if not isinstance(distance_metric, str):
+                distance_metric = "euclidean"
+
+            network_gdf = kwargs.get("network_gdf")
+
             _, edges_gdf = knn_graph(
                 src_gdf,
                 k=k,
+                distance_metric=distance_metric,
+                network_gdf=network_gdf,
                 target_gdf=dst_gdf,
-                **{k_: v for k_, v in kwargs.items() if k_ not in {"k", "radius"} and isinstance(v, (str, bool))},  # type: ignore[arg-type]
+                as_nx=False,  # Always get GeoDataFrames from individual calls
             )
         else:  # fixed_radius
             radius = float(kwargs["radius"])
+
+            # Call fixed_radius_graph with appropriate arguments (always return GeoDataFrames)
+            distance_metric = kwargs.get("distance_metric", "euclidean")
+            if not isinstance(distance_metric, str):
+                distance_metric = "euclidean"
+
+            network_gdf = kwargs.get("network_gdf")
+
             _, edges_gdf = fixed_radius_graph(
                 src_gdf,
                 radius=radius,
+                distance_metric=distance_metric,
+                network_gdf=network_gdf,
                 target_gdf=dst_gdf,
-                **{k_: v for k_, v in kwargs.items() if k_ != "radius" and isinstance(v, (str, bool))},  # type: ignore[arg-type]
+                as_nx=False,  # Always get GeoDataFrames from individual calls
             )
 
         edge_dict[(src_type, "is_nearby", dst_type)] = edges_gdf
@@ -1280,7 +1298,31 @@ def _prepare_nodes(
     *,
     directed: bool = False,
 ) -> tuple[nx.Graph, npt.NDArray[np.floating], list[int]]:
-    """Return an empty graph with populated nodes plus coord cache."""
+    """
+    Return an empty graph with populated nodes plus coord cache.
+
+    This function prepares a NetworkX graph by adding nodes from a given GeoDataFrame.
+    It extracts centroids as node positions and includes all GeoDataFrame attributes
+    as node attributes.
+
+    Parameters
+    ----------
+    gdf : geopandas.GeoDataFrame
+        The GeoDataFrame containing the nodes to be added to the graph.
+    directed : bool, default False
+        If True, a directed graph (DiGraph) is created; otherwise, an undirected graph (Graph) is created.
+
+    Returns
+    -------
+    tuple[networkx.Graph, numpy.ndarray, list[int]]
+        A tuple containing:
+        - G : networkx.Graph or networkx.DiGraph
+            An empty graph with populated nodes.
+        - coords : numpy.ndarray
+            A 2D NumPy array of node coordinates.
+        - node_ids : list[int]
+            A list of node IDs.
+    """
     validate_gdf(nodes_gdf=gdf)
 
     centroids = gdf.geometry.centroid
@@ -1302,13 +1344,46 @@ def _prepare_nodes(
 
 
 def _euclidean_dm(coords: npt.NDArray[np.floating]) -> npt.NDArray[np.floating]:
-    """Compute Euclidean distance matrix."""
-    return sdist.squareform(sdist.pdist(coords))  # type: ignore[no-any-return]
+    """
+    Compute Euclidean distance matrix.
+
+    This function calculates the pairwise Euclidean distances between all points
+    in the input coordinate array and returns them as a squareform distance matrix.
+
+    Parameters
+    ----------
+    coords : numpy.ndarray
+        A 2D NumPy array of coordinates (n_points, n_dimensions).
+
+    Returns
+    -------
+    numpy.ndarray
+        A squareform Euclidean distance matrix.
+    """
+    return cast("npt.NDArray[np.floating]", sdist.squareform(sdist.pdist(coords)))
 
 
 def _manhattan_dm(coords: npt.NDArray[np.floating]) -> npt.NDArray[np.floating]:
-    """Compute Manhattan distance matrix."""
-    return sdist.squareform(sdist.pdist(coords, metric="cityblock"))  # type: ignore[no-any-return]
+    """
+    Compute Manhattan distance matrix.
+
+    This function calculates the pairwise Manhattan (city-block) distances between all points
+    in the input coordinate array and returns them as a squareform distance matrix.
+
+    Parameters
+    ----------
+    coords : numpy.ndarray
+        A 2D NumPy array of coordinates (n_points, n_dimensions).
+
+    Returns
+    -------
+    numpy.ndarray
+        A squareform Manhattan distance matrix.
+    """
+    return cast(
+        "npt.NDArray[np.floating]",
+        sdist.squareform(sdist.pdist(coords, metric="cityblock")),
+    )
 
 
 def _network_dm(
@@ -1316,7 +1391,31 @@ def _network_dm(
     network_gdf: gpd.GeoDataFrame,
     gdf_crs: gpd.crs.CRS | None = None,
 ) -> npt.NDArray[np.floating]:
-    """Compute network distance matrix."""
+    """
+    Compute network distance matrix.
+
+    This function calculates a distance matrix based on shortest paths within a
+    given network. It maps the input coordinates to the nearest nodes in the
+    network and then computes all-pairs shortest paths between these mapped nodes.
+
+    Parameters
+    ----------
+    coords : numpy.ndarray
+        A 2D NumPy array of coordinates (n_points, n_dimensions) for which to compute distances.
+    network_gdf : geopandas.GeoDataFrame
+        A GeoDataFrame representing the network (e.g., roads) to use for distance calculations.
+        It must contain LineString geometries and have a valid CRS.
+    gdf_crs : geopandas.crs.CRS or None, optional
+        The Coordinate Reference System (CRS) of the input `coords`. Used for CRS validation
+        against the `network_gdf`.
+
+    Returns
+    -------
+    numpy.ndarray
+        A squareform network distance matrix, where `dm[i, j]` is the shortest path
+        distance between the point corresponding to `coords[i]` and `coords[j]`
+        along the `network_gdf`.
+    """
     # Validate CRS
     if network_gdf.crs != gdf_crs:
         msg = f"CRS mismatch: {gdf_crs} != {network_gdf.crs}"
@@ -1358,7 +1457,37 @@ def _distance_matrix(
     network_gdf: gpd.GeoDataFrame | None,
     gdf_crs: gpd.crs.CRS | None = None,
 ) -> npt.NDArray[np.floating]:
-    """Compute distance matrix based on the specified metric."""
+    """
+    Compute distance matrix based on the specified metric.
+
+    This function acts as a dispatcher, calling the appropriate distance matrix
+    computation function based on the `metric` parameter. It supports Euclidean,
+    Manhattan, and network-based distance calculations.
+
+    Parameters
+    ----------
+    coords : numpy.ndarray
+        A 2D NumPy array of coordinates (n_points, n_dimensions) for which to compute distances.
+    metric : str
+        The distance metric to use. Options are "euclidean", "manhattan", or "network".
+    network_gdf : geopandas.GeoDataFrame or None
+        A GeoDataFrame representing a network (e.g., roads) to use for "network"
+        distance calculations. Required if `metric` is "network".
+    gdf_crs : geopandas.crs.CRS or None, optional
+        The Coordinate Reference System (CRS) of the input `coords`. Used for CRS validation
+        against the `network_gdf`.
+
+    Returns
+    -------
+    numpy.ndarray
+        A squareform distance matrix based on the specified metric.
+
+    Raises
+    ------
+    ValueError
+        If `metric` is "network" but `network_gdf` is not provided.
+        If an unknown `metric` is specified.
+    """
     if metric == "euclidean":
         return _euclidean_dm(coords)
     if metric == "manhattan":
@@ -1387,11 +1516,30 @@ def _add_edges(
     dm: npt.NDArray[np.floating] | None = None,
     network_gdf: gpd.GeoDataFrame | None = None,
 ) -> None:
-    """Add edges to the graph with weights and geometries.
+    """
+    Add edges to the graph with weights and geometries.
 
     When the metric is *network* the geometry is built by tracing the path on
     `network_gdf`, so the resulting LineString corresponds to the real
     shortest-path on that network rather than a straight segment.
+
+    Parameters
+    ----------
+    G : networkx.Graph
+        The graph to which edges will be added.
+    edges : list[tuple[int, int]] or set[tuple[int, int]]
+        A list or set of (u, v) tuples representing the edges to add.
+
+    coords : numpy.ndarray
+        A 2D NumPy array of coordinates.
+    node_ids : list[int]
+        A list of node IDs corresponding to the coordinates.
+    metric : str
+        The distance metric used for edge weights (e.g., "euclidean", "manhattan", "network").
+    dm : numpy.ndarray or None, optional
+        Precomputed distance matrix. If provided, it is used to set edge weights.
+    network_gdf : geopandas.GeoDataFrame or None, optional
+        Required if `metric` is "network". Represents the network for shortest path calculations.
     """
     if not edges:
         return
@@ -1442,11 +1590,7 @@ def _add_edges(
         nearest = {node_ids[i]: net_ids[j[0]] for i, j in enumerate(idxs)}
 
         # Choose weight key if present on the network
-        use_weight = (
-            "length"
-            if any("length" in d for *_, d in net_nx.edges(data=True))
-            else None
-        )
+        use_weight = "length" if any("length" in d for *_, d in net_nx.edges(data=True)) else None
 
         for u, v in G.edges():
             # Shortest path in network
@@ -1459,9 +1603,11 @@ def _add_edges(
             path_coords = [pos[p] for p in path_nodes]
 
             # Remove consecutive duplicates and make sure at least 2 points
-            path_coords = [path_coords[i]
-                           for i in range(len(path_coords))
-                           if i == 0 or path_coords[i] != path_coords[i - 1]]
+            path_coords = [
+                path_coords[i]
+                for i in range(len(path_coords))
+                if i == 0 or path_coords[i] != path_coords[i - 1]
+            ]
 
             if len(path_coords) > 1:
                 geom_attr[(u, v)] = LineString(path_coords)
@@ -1476,7 +1622,11 @@ def _add_edges(
         for u, v in G.edges():
             p1 = coords[idx_map[u]]
             p2 = coords[idx_map[v]]
-            geom = LineString([(p1[0], p1[1]), (p2[0], p1[1]), (p2[0], p2[1])]) if metric.lower() == "manhattan" else LineString([p1, p2])
+            geom = (
+                LineString([(p1[0], p1[1]), (p2[0], p1[1]), (p2[0], p2[1])])
+                if metric.lower() == "manhattan"
+                else LineString([p1, p2])
+            )
             geom_attr[(u, v)] = geom
 
     nx.set_edge_attributes(G, geom_attr, "geometry")
@@ -1492,7 +1642,35 @@ def _directed_edges(
     k: int | None = None,
     radius: float | None = None,
 ) -> list[tuple[int, int]]:
-    """Generate directed edges from source to destination nodes."""
+    """
+    Generate directed edges from source to destination nodes.
+
+    This function creates directed edges between source and destination node sets
+    using either k-nearest neighbors or radius-based proximity methods to establish
+    spatial connections between different node layers.
+
+    Parameters
+    ----------
+    src_coords : numpy.ndarray
+        A 2D NumPy array of coordinates (n_points, n_dimensions) for the source nodes.
+    dst_coords : numpy.ndarray
+        A 2D NumPy array of coordinates (n_points, n_dimensions) for the destination nodes.
+    src_ids : list[int]
+        A list of node IDs corresponding to `src_coords`.
+    dst_ids : list[int]
+        A list of node IDs corresponding to `dst_coords`.
+    metric : str
+        The distance metric to use (e.g., "euclidean", "manhattan").
+    k : int or None, optional
+        The number of nearest neighbors to consider for each source node.
+    radius : float or None, optional
+        The maximum distance for connecting nodes.
+
+    Returns
+    -------
+    list[tuple[int, int]]
+        A list of directed edges as (source_id, destination_id) tuples.
+    """
     if (k is None) == (radius is None):
         msg = "Specify exactly one of k or radius for directed graph"
         raise ValueError(msg)
@@ -1504,20 +1682,12 @@ def _directed_edges(
         n_neigh = min(k, len(dst_coords))
         nn = NearestNeighbors(n_neighbors=n_neigh, metric=nn_metric).fit(dst_coords)
         _, idxs = nn.kneighbors(src_coords)
-        return [
-            (src_ids[i], dst_ids[j])
-            for i, neigh in enumerate(idxs)
-            for j in neigh
-        ]
+        return [(src_ids[i], dst_ids[j]) for i, neigh in enumerate(idxs) for j in neigh]
 
     # Fixed-radius case
     nn = NearestNeighbors(radius=radius, metric=nn_metric).fit(dst_coords)
     idxs = nn.radius_neighbors(src_coords, return_distance=False)
-    return [
-        (src_ids[i], dst_ids[j])
-        for i, neigh in enumerate(idxs)
-        for j in neigh
-    ]
+    return [(src_ids[i], dst_ids[j]) for i, neigh in enumerate(idxs) for j in neigh]
 
 
 # ============================================================================
@@ -1535,7 +1705,36 @@ def _directed_graph(
     as_nx: bool,
     network_gdf: gpd.GeoDataFrame | None = None,
 ) -> tuple[gpd.GeoDataFrame, gpd.GeoDataFrame] | nx.Graph:
-    """Build source → target directed proximity edges."""
+    """
+    Build source → target directed proximity edges.
+
+    This function creates a directed graph with edges from source nodes to target
+    nodes based on proximity criteria, supporting both k-nearest neighbors and
+    radius-based connection methods for spatial network construction.
+
+    Parameters
+    ----------
+    src_gdf : geopandas.GeoDataFrame
+        The source GeoDataFrame.
+    dst_gdf : geopandas.GeoDataFrame
+        The destination GeoDataFrame.
+    distance_metric : str
+        The distance metric to use.
+    method : str
+        The method to use for generating proximity edges ("knn" or "radius").
+    param : float
+        The parameter for the proximity method (k for knn, radius for fixed_radius).
+    as_nx : bool
+        If True, returns a NetworkX graph object.
+    network_gdf : geopandas.GeoDataFrame, optional
+        A GeoDataFrame representing a network for "network" distance calculations.
+
+    Returns
+    -------
+    tuple[geopandas.GeoDataFrame, geopandas.GeoDataFrame] or networkx.Graph
+        If as_nx is False, returns a tuple of (nodes_gdf, edges_gdf).
+        If as_nx is True, returns a NetworkX Graph object.
+    """
     # Validate CRS
     if src_gdf.crs != dst_gdf.crs:
         msg = "CRS mismatch between source and target GeoDataFrames"
@@ -1562,13 +1761,33 @@ def _directed_graph(
     # src_G was created first - use its coords for weight calc
     combined_coords = np.vstack([src_coords, dst_coords])
     combined_ids = src_ids + dst_ids
-    _add_edges(G, edges, combined_coords, combined_ids, metric=distance_metric, network_gdf=network_gdf)
+    _add_edges(
+        G,
+        edges,
+        combined_coords,
+        combined_ids,
+        metric=distance_metric,
+        network_gdf=network_gdf,
+    )
 
     return G if as_nx else nx_to_gdf(G, nodes=True, edges=True)
 
 
 def _assert_euclidean(metric: str, func_name: str) -> None:
-    """Warn if a non-Euclidean metric is used for algorithms based on it."""
+    """
+    Warn if a non-Euclidean metric is used for algorithms based on it.
+
+    This function checks if the provided distance metric is Euclidean and issues
+    a warning if a non-Euclidean metric is used for algorithms that are specifically
+    designed for Euclidean distance calculations.
+
+    Parameters
+    ----------
+    metric : str
+        The distance metric being used.
+    func_name : str
+        The name of the function where the warning is issued.
+    """
     if metric.lower() != "euclidean":
         msg = (
             f"{func_name} supports only 'euclidean' distance for edge identification algorithm; "

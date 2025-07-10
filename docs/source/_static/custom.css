@@ -87,15 +87,15 @@ pre {
 .highlight .n { color: #222222; } /* Name - very dark grey */
 .highlight .p { color: #222222; } /* Punctuation - very dark grey */
 .highlight .o { color: #222222; } /* Operator - very dark grey */
-.highlight .c1, .highlight .c, .highlight .cm, .highlight .cp, .highlight .cs { 
-    color: #999999; 
-    font-style: italic; 
+.highlight .c1, .highlight .c, .highlight .cm, .highlight .cp, .highlight .cs {
+    color: #999999;
+    font-style: italic;
 } /* Comments in light grey */
 .highlight .s1, .highlight .s2 { color: #888888; } /* Strings in light grey */
 .highlight .mi, .highlight .mf { color: #666666; } /* Numbers in medium grey */
-.highlight .k, .highlight .kc, .highlight .kd, .highlight .kn { 
-    color: #333333; 
-    font-weight: bold; 
+.highlight .k, .highlight .kc, .highlight .kd, .highlight .kn {
+    color: #333333;
+    font-weight: bold;
 } /* Keywords in dark grey */
 .highlight .nb { color: #555555; } /* Built-in in medium-dark grey */
 .highlight .bp { color: #555555; } /* Self in medium-dark grey */
@@ -123,17 +123,17 @@ html[data-theme="dark"] pre {
 html[data-theme="dark"] .highlight .n { color: #dddddd; } /* Name - very light grey */
 html[data-theme="dark"] .highlight .p { color: #dddddd; } /* Punctuation - very light grey */
 html[data-theme="dark"] .highlight .o { color: #dddddd; } /* Operator - very light grey */
-html[data-theme="dark"] .highlight .c1, 
-html[data-theme="dark"] .highlight .c, 
-html[data-theme="dark"] .highlight .cm, 
-html[data-theme="dark"] .highlight .cp, 
-html[data-theme="dark"] .highlight .cs { 
-    color: #666666; 
+html[data-theme="dark"] .highlight .c1,
+html[data-theme="dark"] .highlight .c,
+html[data-theme="dark"] .highlight .cm,
+html[data-theme="dark"] .highlight .cp,
+html[data-theme="dark"] .highlight .cs {
+    color: #666666;
     font-style: italic;
 } /* Comments in darker grey */
-html[data-theme="dark"] .highlight .s1, 
-html[data-theme="dark"] .highlight .s2 { 
-    color: #777777; 
+html[data-theme="dark"] .highlight .s1,
+html[data-theme="dark"] .highlight .s2 {
+    color: #777777;
 } /* Strings in medium-dark grey */
 
 /* Add line number styling */
@@ -210,11 +210,11 @@ html[data-theme="dark"] {
     --city-code-border: #3d4352;
 }
 
-html[data-theme="dark"] h1, 
-html[data-theme="dark"] h2, 
-html[data-theme="dark"] h3, 
-html[data-theme="dark"] h4, 
-html[data-theme="dark"] h5, 
+html[data-theme="dark"] h1,
+html[data-theme="dark"] h2,
+html[data-theme="dark"] h3,
+html[data-theme="dark"] h4,
+html[data-theme="dark"] h5,
 html[data-theme="dark"] h6 {
     color: var(--city-dark);
 }
@@ -551,19 +551,19 @@ html[data-theme="dark"] .admonition-title {
     h1 {
         font-size: 2em;
     }
-    
+
     h2 {
         font-size: 1.5em;
     }
-    
+
     h3 {
         font-size: 1.2em;
     }
-    
+
     table.docutils th, table.docutils td {
         padding: 8px 12px;
     }
-    
+
     dl.class, dl.function, dl.method, dl.attribute {
         padding: 15px;
     }
