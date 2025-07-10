@@ -155,8 +155,8 @@ def morphological_graph(  # noqa: PLR0912, PLR0915
     of urban morphology.
     """
     # Define fixed ID column names
-    _final_private_id_col = "private_id"
-    _final_public_id_col = "public_id"
+    private_id_col = "private_id"
+    public_id_col = "public_id"
 
     # Validate input GeoDataFrames (includes geometry type checks)
     _validate_input_gdfs(buildings_gdf, segments_gdf)
@@ -174,53 +174,53 @@ def morphological_graph(  # noqa: PLR0912, PLR0915
     # Ensure CRS consistency between buildings and segments
     segments_gdf = _ensure_crs_consistency(buildings_gdf, segments_gdf)
 
-    # Assign the original index of segments_gdf to _final_public_id_col
+    # Assign the original index of segments_gdf to public_id_col
     # A copy is made to avoid SettingWithCopyWarning if segments_gdf might be a slice,
     # especially before adding/modifying a column.
     segments_gdf = segments_gdf.copy()
-    segments_gdf[_final_public_id_col] = segments_gdf.index  # Use original index as public ID
+    segments_gdf[public_id_col] = segments_gdf.index  # Use original index as public ID
 
     # Convert segments to a graph representation for efficient filtering.
     if not segments_gdf.empty:
         # segments_to_graph returns nodes and edges with a MultiIndex.
         # gdf_to_nx converts these to a NetworkX graph.
-        nodes_unfiltered, edges_unfiltered = segments_to_graph(segments_gdf)
-        graph_for_filtering = gdf_to_nx(nodes=nodes_unfiltered, edges=edges_unfiltered)
+        segment_nodes, segment_edges = segments_to_graph(segments_gdf)
+        segments_graph = gdf_to_nx(nodes=segment_nodes, edges=segment_edges)
     else:
         # Create empty structures to avoid errors downstream
-        nodes_unfiltered, edges_unfiltered = segments_to_graph(segments_gdf)
-        graph_for_filtering = nx.Graph()
+        segment_nodes, segment_edges = segments_to_graph(segments_gdf)
+        segments_graph = nx.Graph()
 
     # Filter segments by network distance for the final graph if center_point and distance are provided
     if center_point is not None and distance is not None and not segments_gdf.empty:
-        segs_graph = filter_graph_by_distance(graph_for_filtering, center_point, distance)
-        segs = nx_to_gdf(segs_graph, nodes=False, edges=True)
+        filtered_segments_graph = filter_graph_by_distance(segments_graph, center_point, distance)
+        segments_filtered = nx_to_gdf(filtered_segments_graph, nodes=False, edges=True)
     else:
-        segs = edges_unfiltered
+        segments_filtered = segment_edges
 
-    # Create a buffered version of the graph for tessellation creation (segs_buffer)
-    # This segs_buffer is used to _prepare_barriers -> create_tessellation
+    # Create a buffered version of the graph for tessellation creation (segments_buffer)
+    # This segments_buffer is used to _prepare_barriers -> create_tessellation
     # and as the segments context for _filter_adjacent_tessellation.
     if center_point is not None and distance is not None and not segments_gdf.empty:
         if not math.isinf(clipping_buffer):
-            # Finite clipping_buffer: use distance + clipping_buffer for segs_buffer radius
-            segs_buffer_radius = distance + clipping_buffer
-            segs_buffer_graph = filter_graph_by_distance(
-                graph_for_filtering, center_point, segs_buffer_radius,
+            # Finite clipping_buffer: use distance + clipping_buffer for segments_buffer radius
+            buffer_radius = distance + clipping_buffer
+            segments_buffer_graph = filter_graph_by_distance(
+                segments_graph, center_point, buffer_radius,
             )
-            segs_buffer = nx_to_gdf(segs_buffer_graph, nodes=False, edges=True)
+            segments_buffer = nx_to_gdf(segments_buffer_graph, nodes=False, edges=True)
         else:  # clipping_buffer is math.inf
-            # Fallback to 'distance' as radius for segs_buffer
-            segs_buffer_graph = filter_graph_by_distance(
-                graph_for_filtering, center_point, distance,
+            # Fallback to 'distance' as radius for segments_buffer
+            segments_buffer_graph = filter_graph_by_distance(
+                segments_graph, center_point, distance,
             )
-            segs_buffer = nx_to_gdf(segs_buffer_graph, nodes=False, edges=True)
+            segments_buffer = nx_to_gdf(segments_buffer_graph, nodes=False, edges=True)
     else:
-        # No center_point or no distance, so segs_buffer is not filtered by distance
-        segs_buffer = edges_unfiltered
+        # No center_point or no distance, so segments_buffer is not filtered by distance
+        segments_buffer = segment_edges
 
-    # Prepare barriers from the buffered segments (segs_buffer) for tessellation
-    barriers = _prepare_barriers(segs_buffer, primary_barrier_col)
+    # Prepare barriers from the buffered segments (segments_buffer) for tessellation
+    barriers = _prepare_barriers(segments_buffer, primary_barrier_col)
     # Create tessellation based on buildings and prepared barriers
     tessellation = create_tessellation(
         buildings_gdf,
@@ -228,19 +228,19 @@ def morphological_graph(  # noqa: PLR0912, PLR0915
     )
 
     # Rename tessellation ID column (typically 'tess_id') to the fixed private ID name
-    tessellation = tessellation.rename(columns={"tess_id": _final_private_id_col})
+    tessellation = tessellation.rename(columns={"tess_id": private_id_col})
 
     # Ensure the fixed private ID column exists, creating a sequential ID if necessary
-    if _final_private_id_col not in tessellation.columns:
-        tessellation[_final_private_id_col] = range(len(tessellation)) # Assign sequential private IDs
+    if private_id_col not in tessellation.columns:
+        tessellation[private_id_col] = range(len(tessellation)) # Assign sequential private IDs
 
     # Determine max_distance for filtering tessellation adjacent to segments
     max_distance_for_adj_filter = distance + clipping_buffer if distance is not None else math.inf
 
-    # Filter tessellation to only include cells adjacent to the (potentially filtered) 'segs'
+    # Filter tessellation to only include cells adjacent to the (potentially filtered) 'segments_filtered'
     tessellation = _filter_adjacent_tessellation(
         tessellation,
-        segs, # Use 'segs' (final graph segments) for adjacency check
+        segments_filtered, # Use 'segments_filtered' (final graph segments) for adjacency check
         max_distance=max_distance_for_adj_filter, # Max distance for adjacency
     )
 
@@ -248,7 +248,7 @@ def morphological_graph(  # noqa: PLR0912, PLR0915
     if center_point is not None and distance is not None:
         tessellation = _filter_tessellation_by_network_distance(
             tessellation,
-            segs, # Use 'segs' for network distance calculation
+            segments_filtered, # Use 'segments_filtered' for network distance calculation
             center_point,
             distance, # Max network distance
         )
@@ -269,41 +269,43 @@ def morphological_graph(  # noqa: PLR0912, PLR0915
         group_col_for_priv_priv = None
 
     # Create private-to-private graph (adjacency between tessellation cells)
-    _, priv_priv_edges = private_to_private_graph(
+    _, private_to_private_edges = private_to_private_graph(
         tessellation,
         group_col=group_col_for_priv_priv,
         contiguity=contiguity,
     )
 
     # Create public-to-public graph (connectivity between street segments)
-    _, pub_pub_edges = public_to_public_graph(segs) # Use 'segs' (final graph segments)
+    _, public_to_public_edges = public_to_public_graph(segments_filtered) # Use 'segments_filtered' (final graph segments)
 
     # Create private-to-public graph (interfaces between tessellation and streets)
-    _, priv_pub_edges = private_to_public_graph(
+    _, private_to_public_edges = private_to_public_graph(
         tessellation,
-        segs, # Use 'segs' (final graph segments)
+        segments_filtered, # Use 'segments_filtered' (final graph segments)
         primary_barrier_col=primary_barrier_col, # Optional alternative geometry for public spaces
         tolerance=tolerance, # Buffer distance for proximity detection
     )
 
     # Log warning if no private-public connections found
-    if priv_pub_edges.empty:
+    if private_to_public_edges.empty:
         logger.warning("No private to public connections found")
 
     # Organize output as a heterogeneous graph structure (nodes and edges dictionaries)
     nodes = {
-        "private": _set_node_index(tessellation, _final_private_id_col), # Private nodes (tessellation)
-        "public": _set_node_index(segs, _final_public_id_col), # Public nodes (segments)
+        "private": _set_node_index(tessellation, private_id_col), # Private nodes (tessellation)
+        "public": _set_node_index(segments_filtered, public_id_col), # Public nodes (segments)
     }
+
+    # Organize edges into a dictionary with relationship types as keys
     edges = {
         ("private", "touched_to", "private"): _set_edge_index(
-            priv_priv_edges, "from_private_id", "to_private_id", # Private-private edges
+            private_to_private_edges, "from_private_id", "to_private_id", # Private-private edges
         ),
         ("public", "connected_to", "public"): _set_edge_index(
-            pub_pub_edges, "from_public_id", "to_public_id", # Public-public edges
+            public_to_public_edges, "from_public_id", "to_public_id", # Public-public edges
         ),
         ("private", "faced_to", "public"): _set_edge_index(
-            priv_pub_edges, "private_id", "public_id", # Private-public edges
+            private_to_public_edges, "private_id", "public_id", # Private-public edges
         ),
     }
 
@@ -368,11 +370,11 @@ def private_to_private_graph(
     # Input validation
     _validate_single_gdf_input(private_gdf, "private_gdf")
 
-    _id_col = "private_id" # Fixed ID column name for private polygons
+    private_id_col = "private_id" # Fixed ID column name for private polygons
 
     # If not empty, require the ID column
-    if not private_gdf.empty and _id_col not in private_gdf.columns:
-        msg = f"Expected ID column '{_id_col}' not found in private_gdf."
+    if not private_gdf.empty and private_id_col not in private_gdf.columns:
+        msg = f"Expected ID column '{private_id_col}' not found in private_gdf."
         raise ValueError(msg)
 
     # Validate that the contiguity type is supported
@@ -402,7 +404,7 @@ def private_to_private_graph(
 
     # Extract adjacency relationships from the spatial weights matrix
     adjacency_data = _extract_adjacency_relationships(
-        spatial_weights, gdf_indexed, _id_col, group_col,
+        spatial_weights, gdf_indexed, private_id_col, group_col,
     )
 
     # Create edge geometries (LineStrings connecting centroids of adjacent polygons)
@@ -479,22 +481,22 @@ def private_to_public_graph(
     _validate_single_gdf_input(private_gdf, "private_gdf")
     _validate_single_gdf_input(public_gdf, "public_gdf")
 
-    _priv_id_col = "private_id" # Fixed ID column name for private spaces
-    _pub_id_col = "public_id"   # Fixed ID column name for public spaces
+    private_id_col = "private_id" # Fixed ID column name for private spaces
+    public_id_col = "public_id"   # Fixed ID column name for public spaces
 
     # Handle empty data: return empty edges GeoDataFrame
     if private_gdf.empty or public_gdf.empty:
-        empty_edges = _create_empty_edges_gdf(private_gdf.crs, _priv_id_col, _pub_id_col)
+        empty_edges = _create_empty_edges_gdf(private_gdf.crs, private_id_col, public_id_col)
         all_nodes = pd.concat([private_gdf, public_gdf], ignore_index=True)
 
         return (all_nodes, empty_edges) if not as_nx else gdf_to_nx(nodes=all_nodes, edges=empty_edges)
 
     # Ensure required ID columns exist in the input GeoDataFrames
-    if _priv_id_col not in private_gdf.columns:
-        msg = f"Expected ID column '{_priv_id_col}' not found in private_gdf."
+    if private_id_col not in private_gdf.columns:
+        msg = f"Expected ID column '{private_id_col}' not found in private_gdf."
         raise ValueError(msg)
-    if _pub_id_col not in public_gdf.columns:
-        msg = f"Expected ID column '{_pub_id_col}' not found in public_gdf."
+    if public_id_col not in public_gdf.columns:
+        msg = f"Expected ID column '{public_id_col}' not found in public_gdf."
         raise ValueError(msg)
 
     # Ensure CRS consistency between private and public GeoDataFrames
@@ -506,7 +508,7 @@ def private_to_public_graph(
                         else public_gdf.geometry)
 
     # Create buffered geometries for public spaces to detect proximity
-    buffered_public_data = {_pub_id_col: public_gdf[_pub_id_col]} # Keep public IDs
+    buffered_public_data = {public_id_col: public_gdf[public_id_col]} # Keep public IDs
     buffered_public = gpd.GeoDataFrame(
         buffered_public_data,
         geometry=join_geom_series.buffer(tolerance), # Buffer the selected public geometry
@@ -515,7 +517,7 @@ def private_to_public_graph(
 
     # Perform spatial join to find intersections between private polygons and buffered public geometries
     joined = gpd.sjoin(
-        private_gdf[[_priv_id_col, "geometry"]], # Private polygons with their IDs
+        private_gdf[[private_id_col, "geometry"]], # Private polygons with their IDs
         buffered_public, # Buffered public geometries with their IDs
         how="inner", # Keep only intersecting pairs
         predicate="intersects", # Use intersection predicate
@@ -523,17 +525,17 @@ def private_to_public_graph(
 
     # If intersections found, keep only the ID columns
     if not joined.empty:
-        id_cols_to_keep = [_priv_id_col, _pub_id_col]
+        id_cols_to_keep = [private_id_col, public_id_col]
         joined = joined[id_cols_to_keep] # Select relevant ID columns
 
     # Drop duplicate pairs of (private_id, public_id)
     joined = joined.drop_duplicates()
 
     # Create maps of centroids for private and public geometries, indexed by their IDs
-    private_centroids_map = (private_gdf.drop_duplicates(subset=[_priv_id_col])
-                             .set_index(_priv_id_col).geometry.centroid)
-    public_centroids_map = (public_gdf.drop_duplicates(subset=[_pub_id_col])
-                            .set_index(_pub_id_col).geometry.centroid)
+    private_centroids_map = (private_gdf.drop_duplicates(subset=[private_id_col])
+                             .set_index(private_id_col).geometry.centroid)
+    public_centroids_map = (public_gdf.drop_duplicates(subset=[public_id_col])
+                            .set_index(public_id_col).geometry.centroid)
 
     # Prepare to add edge geometries to the joined DataFrame
     joined_with_geom = joined.copy()
@@ -545,19 +547,19 @@ def private_to_public_graph(
         return (all_nodes, edges_gdf) if not as_nx else gdf_to_nx(nodes=all_nodes, edges=edges_gdf)
 
     # Get centroid geometries for each pair in the 'joined' DataFrame
-    p1_geoms = private_centroids_map.loc[joined_with_geom[_priv_id_col]].reset_index(drop=True)
-    p2_geoms = public_centroids_map.loc[joined_with_geom[_pub_id_col]].reset_index(drop=True)
+    private_centroids = private_centroids_map.loc[joined_with_geom[private_id_col]].reset_index(drop=True)
+    public_centroids = public_centroids_map.loc[joined_with_geom[public_id_col]].reset_index(drop=True)
 
     # Extract coordinates and ensure 2D array shape
-    coords_p1 = np.array(list(zip(p1_geoms.x, p1_geoms.y, strict=True)))
-    coords_p2 = np.array(list(zip(p2_geoms.x, p2_geoms.y, strict=True)))
+    private_coords = np.array(list(zip(private_centroids.x, private_centroids.y, strict=True)))
+    public_coords = np.array(list(zip(public_centroids.x, public_centroids.y, strict=True)))
 
     # Ensure coords are 2D by reshaping if needed
-    coords_p1 = coords_p1.reshape(-1, 2)
-    coords_p2 = coords_p2.reshape(-1, 2)
+    private_coords = private_coords.reshape(-1, 2)
+    public_coords = public_coords.reshape(-1, 2)
 
     # Stack coordinates for LineString creation
-    line_coords = np.stack((coords_p1, coords_p2), axis=1)
+    line_coords = np.stack((private_coords, public_coords), axis=1)
     joined_with_geom["geometry"] = list(sh_linestrings(line_coords))
 
     # Concatenate private and public GeoDataFrames to create a unified nodes GeoDataFrame
@@ -622,29 +624,29 @@ def public_to_public_graph(
         return (public_gdf, empty_edges) if not as_nx else gdf_to_nx(nodes=public_gdf, edges=empty_edges)
 
     # Create a copy to avoid modifying the original
-    public_gdf_work = public_gdf.copy()
+    public_gdf_copy = public_gdf.copy()
 
     # Check if public_id column already exists (shared with other components)
-    if "public_id" in public_gdf_work.columns:
+    if "public_id" in public_gdf_copy.columns:
         edge_id_col = "public_id"
         # If the public_id column contains MultiIndex tuples, we need to ensure
         # they can be used safely in dual_graph operations
-        has_multiindex = isinstance(public_gdf_work.index, pd.MultiIndex)
-        has_tuple_ids = any(isinstance(pid, tuple) for pid in public_gdf_work["public_id"])
+        has_multiindex = isinstance(public_gdf_copy.index, pd.MultiIndex)
+        has_tuple_ids = any(isinstance(pid, tuple) for pid in public_gdf_copy["public_id"])
         # Always convert public_id to string to ensure consistency
         if has_multiindex or has_tuple_ids:
-            public_gdf_work["public_id"] = public_gdf_work["public_id"].astype(str)
+            public_gdf_copy["public_id"] = public_gdf_copy["public_id"].astype(str)
     else:
         # Create a unique identifier for each row that can handle any index type
         edge_id_col = "_edge_id"
-        public_gdf_work["_edge_id"] = [str(idx) for idx in public_gdf_work.index]
+        public_gdf_copy["_edge_id"] = [str(idx) for idx in public_gdf_copy.index]
 
     # Convert public_gdf to a graph
-    nodes, edges = segments_to_graph(public_gdf_work)
+    segment_nodes, segment_edges = segments_to_graph(public_gdf_copy)
 
     # Create dual graph (nodes are segments, edges are connections)
     _, dual_edges = dual_graph(
-        (nodes, edges), edge_id_col=edge_id_col, keep_original_geom=True,
+        (segment_nodes, segment_edges), edge_id_col=edge_id_col, keep_original_geom=True,
     )
 
     # Rename the MultiIndex levels for clarity and consistency
@@ -794,7 +796,7 @@ def _prepare_barriers(
 
 
 def _filter_adjacent_tessellation(
-    tess: gpd.GeoDataFrame,
+    tessellation: gpd.GeoDataFrame,
     segments: gpd.GeoDataFrame,
     max_distance: float = math.inf,
 ) -> gpd.GeoDataFrame:
@@ -803,7 +805,7 @@ def _filter_adjacent_tessellation(
 
     Parameters
     ----------
-    tess : geopandas.GeoDataFrame
+    tessellation : geopandas.GeoDataFrame
         Tessellation GeoDataFrame
     segments : geopandas.GeoDataFrame
         Street segments GeoDataFrame to measure distance against.
@@ -812,7 +814,7 @@ def _filter_adjacent_tessellation(
         nearest segment (from the `segments` GeoDataFrame).
         In `morphological_graph`, this is typically derived from `distance + clipping_buffer`
         if `distance` is specified, or `math.inf` otherwise.
-        If ``tess`` contains an ``enclosure_index`` column,
+        If ``tessellation`` contains an ``enclosure_index`` column,
         distances are measured using only segments intersecting each enclosure.
         Defaults to ``math.inf`` which retains all cells.
 
@@ -822,29 +824,29 @@ def _filter_adjacent_tessellation(
         Filtered tessellation
     """
     # If tessellation is empty, return an empty GeoDataFrame with the same structure
-    if tess.empty:
-        return tess.copy()
+    if tessellation.empty:
+        return tessellation.copy()
 
     # If max_distance is infinite, no filtering is needed based on distance
     if math.isinf(max_distance):
-        return tess.copy()
+        return tessellation.copy()
 
     # Check if 'enclosure_index' column exists for grouped processing
-    encl_col = "enclosure_index" if "enclosure_index" in tess.columns else None
+    enclosure_col = "enclosure_index" if "enclosure_index" in tessellation.columns else None
 
     # List to store filtered parts of tessellation
     filtered_parts: list[gpd.GeoDataFrame] = []
 
     # Iterate over each enclosure group
-    for _, group in tess.groupby(encl_col):
+    for _, group in tessellation.groupby(enclosure_col):
         # Geometry of the current enclosure
         enclosure_geom = group.union_all()
 
         # Segments intersecting this enclosure
-        segs_in_enclosure = segments[segments.intersects(enclosure_geom)]
+        segments_in_enclosure = segments[segments.intersects(enclosure_geom)]
 
         # Union of segments within this enclosure
-        segment_union_in_enclosure = segs_in_enclosure.union_all()
+        segment_union_in_enclosure = segments_in_enclosure.union_all()
 
         # Centroids of cells in this group
         centroids_in_group = group.geometry.centroid
@@ -860,62 +862,65 @@ def _filter_adjacent_tessellation(
             filtered_parts.append(filtered_group)
 
     # Concatenate all filtered parts into a single GeoDataFrame
-    return gpd.GeoDataFrame(pd.concat(filtered_parts), crs=tess.crs)
+    return gpd.GeoDataFrame(pd.concat(filtered_parts), crs=tessellation.crs)
 
 
 def _build_spatial_graph(
     segments: gpd.GeoDataFrame,
-    tess_centroids: gpd.GeoSeries,
+    tessellation_centroids: gpd.GeoSeries,
 ) -> tuple[nx.Graph, dict[int, str], dict[str, tuple[float, float]]]:
     """Build a spatial graph from segments and tessellation centroids."""
     # Convert segment GeoDataFrame to a NetworkX graph; nodes are segment endpoints, edges are segments
     graph = gdf_to_nx(edges=segments)
+
     # Get positions (coordinates) of segment graph nodes
-    seg_nodes_pos_dict = nx.get_node_attributes(graph, "pos")
+    segment_node_positions = nx.get_node_attributes(graph, "pos")
 
     # Create unique node IDs for each tessellation centroid based on its iloc (integer location)
-    centroid_iloc_to_node_id = {i: f"tess_centroid_{i}" for i, _ in enumerate(tess_centroids)}
+    centroid_iloc_to_node_id = {i: f"tess_centroid_{i}" for i, _ in enumerate(tessellation_centroids)}
+
     # Prepare new nodes (tessellation centroids) to add to the graph with their positions
-    new_nodes_for_graph = [
-        (f"tess_centroid_{i}", {"pos": (pt.x, pt.y), "type": "centroid_node"})
-        for i, pt in enumerate(tess_centroids) # pt is a Shapely Point object
+    centroid_nodes = [
+        (f"tess_centroid_{i}", {"pos": (point.x, point.y), "type": "centroid_node"})
+        for i, point in enumerate(tessellation_centroids) # point is a Shapely Point object
     ]
+
     # Add tessellation centroid nodes to the graph
-    graph.add_nodes_from(new_nodes_for_graph)
-    return graph, centroid_iloc_to_node_id, seg_nodes_pos_dict # Return graph and mappings
+    graph.add_nodes_from(centroid_nodes)
+    return graph, centroid_iloc_to_node_id, segment_node_positions # Return graph and mappings
 
 
 def _connect_centroids_to_segment_graph(
     graph: nx.Graph,
-    centroids: gpd.GeoSeries, # GeoSeries of tessellation centroid Points
+    tessellation_centroids: gpd.GeoSeries, # GeoSeries of tessellation centroid Points
     centroid_iloc_to_node_id: dict[int, str], # Maps centroid iloc to graph node ID
-    seg_nodes_pos_dict: dict[str, tuple[float, float]], # Positions of segment graph nodes
+    segment_node_positions: dict[str, tuple[float, float]], # Positions of segment graph nodes
 ) -> None:
     """Connect centroid nodes to the nearest segment graph nodes using KDTree."""
     # Prepare segment node IDs and their coordinates for KDTree
-    seg_node_ids_list = list(seg_nodes_pos_dict.keys())
-    seg_node_coords_list = [list(coord) for coord in seg_nodes_pos_dict.values()]
-    seg_node_coords_array = np.array(seg_node_coords_list)
+    segment_node_ids = list(segment_node_positions.keys())
+    segment_node_coords = [list(coord) for coord in segment_node_positions.values()]
+    segment_coords_array = np.array(segment_node_coords)
 
     # Build KDTree from segment graph node coordinates for efficient nearest neighbor search
-    tree = KDTree(seg_node_coords_array)
+    kdtree = KDTree(segment_coords_array)
 
     # Prepare centroid coordinates for querying the KDTree
-    centroid_coords_list = [(pt.x, pt.y) for pt in centroids.tolist()]
-    centroid_coords_array = np.array(centroid_coords_list)
+    centroid_coords = [(point.x, point.y) for point in tessellation_centroids.tolist()]
+    centroid_coords_array = np.array(centroid_coords)
 
     # Query KDTree: for each centroid, find the nearest segment graph node and distance to it
-    distances_to_seg, indices_in_seg_nodes = tree.query(centroid_coords_array)
+    distances_to_segments, segment_indices = kdtree.query(centroid_coords_array)
 
     # Prepare edges to connect centroids to their nearest segment graph nodes
     edges_to_add = [
         (
             centroid_iloc_to_node_id[i],  # Graph node ID of the i-th centroid
-            seg_node_ids_list[indices_in_seg_nodes[i]],  # Graph node ID of the nearest segment node
-            {"length": distances_to_seg[i]},  # Euclidean distance as edge length
+            segment_node_ids[segment_indices[i]],  # Graph node ID of the nearest segment node
+            {"length": distances_to_segments[i]},  # Euclidean distance as edge length
         )
-        for i in range(len(centroids)) # Iterate through each centroid
-        if 0 <= indices_in_seg_nodes[i] < len(seg_node_ids_list)  # Ensure index is valid
+        for i in range(len(tessellation_centroids)) # Iterate through each centroid
+        if 0 <= segment_indices[i] < len(segment_node_ids)  # Ensure index is valid
     ]
     # Add the new edges to the graph
     if edges_to_add:
@@ -924,7 +929,7 @@ def _connect_centroids_to_segment_graph(
 
 def _connect_centroids_to_centroids(
     graph: nx.Graph,
-    centroids: gpd.GeoSeries, # Assumed to be a GeoSeries of Point geometries
+    tessellation_centroids: gpd.GeoSeries, # Assumed to be a GeoSeries of Point geometries
     centroid_iloc_to_node_id: dict[int, str], # Maps iloc of centroids to graph node_id
 ) -> None:
     """Connect centroid nodes to each other based on Euclidean distance, vectorized."""
@@ -932,11 +937,11 @@ def _connect_centroids_to_centroids(
     relevant_ilocs = sorted(centroid_iloc_to_node_id.keys())
 
     # Extract centroid Point geometries and their graph node IDs in a consistent, sorted order
-    points_to_connect = centroids.iloc[relevant_ilocs] # GeoSeries of Points
+    points_to_connect = tessellation_centroids.iloc[relevant_ilocs] # GeoSeries of Points
     node_ids_ordered = [centroid_iloc_to_node_id[iloc] for iloc in relevant_ilocs] # List of node IDs
 
     # Create a 2D NumPy array of coordinates (x, y) from the Point geometries
-    coords_array = np.array([(pt.x, pt.y) for pt in points_to_connect])
+    coords_array = np.array([(point.x, point.y) for point in points_to_connect])
 
     # Calculate all pairwise Euclidean distances using scipy.spatial.distance.pdist
     # pdist returns a condensed distance matrix (a 1D array of upper triangular part)
@@ -999,27 +1004,29 @@ def _filter_nodes_by_path_length(
 
 
 def _filter_tessellation_by_network_distance(
-    tess: gpd.GeoDataFrame,
+    tessellation: gpd.GeoDataFrame,
     segments: gpd.GeoDataFrame,
     center_point: gpd.GeoSeries | gpd.GeoDataFrame | Point, # Geographic center for filtering
     max_distance: float, # Maximum network distance
 ) -> gpd.GeoDataFrame:
     """Filter tessellation by network distance from a center point."""
     # Return a copy of tessellation if it or segments are empty
-    if tess.empty or segments.empty:
-        return tess.copy()
+    if tessellation.empty or segments.empty:
+        return tessellation.copy()
 
     # Get centroids of tessellation cells
-    centroids = tess.geometry.centroid
+    tessellation_centroids = tessellation.geometry.centroid
+
     # Build a spatial graph including segment endpoints and tessellation centroids as nodes
-    graph, centroid_iloc_to_node_id, seg_nodes_pos_dict = _build_spatial_graph(segments, centroids)
+    graph, centroid_iloc_to_node_id, segment_node_positions = _build_spatial_graph(segments, tessellation_centroids)
 
     # Connect tessellation centroid nodes to the nearest segment graph nodes
     _connect_centroids_to_segment_graph(
-        graph, centroids, centroid_iloc_to_node_id, seg_nodes_pos_dict,
+        graph, tessellation_centroids, centroid_iloc_to_node_id, segment_node_positions,
     )
+
     # Connect tessellation centroid nodes to each other (e.g., for paths through open spaces)
-    _connect_centroids_to_centroids(graph, centroids, centroid_iloc_to_node_id)
+    _connect_centroids_to_centroids(graph, tessellation_centroids, centroid_iloc_to_node_id)
 
     # Normalize center_point input to a single Shapely Point geometry
     center_geom = center_point.iloc[0] if isinstance(center_point, gpd.GeoSeries) else center_point
@@ -1033,11 +1040,11 @@ def _filter_tessellation_by_network_distance(
     )
 
     # Return the subset of the original tessellation corresponding to the kept ilocs
-    return tess.iloc[sorted(keep_ilocs)].copy()
+    return tessellation.iloc[sorted(keep_ilocs)].copy()
 
 
 def _add_building_info(
-    tess: gpd.GeoDataFrame,
+    tessellation: gpd.GeoDataFrame,
     buildings: gpd.GeoDataFrame,
 ) -> gpd.GeoDataFrame:
     """
@@ -1045,7 +1052,7 @@ def _add_building_info(
 
     Parameters
     ----------
-    tess : geopandas.GeoDataFrame
+    tessellation : geopandas.GeoDataFrame
         Tessellation GeoDataFrame
     buildings : geopandas.GeoDataFrame
         Buildings GeoDataFrame
@@ -1056,21 +1063,25 @@ def _add_building_info(
         Tessellation with building information
     """
     # Perform a spatial join (left join) from tessellation to buildings based on intersection
-    # This adds columns from 'buildings' to 'tess' for intersecting features.
+    # This adds columns from 'buildings' to 'tessellation' for intersecting features.
     # 'index_right' column is added by sjoin, containing the index of the joined building.
-    joined = gpd.sjoin(tess, buildings, how="left", predicate="intersects")
+    joined = gpd.sjoin(tessellation, buildings, how="left", predicate="intersects")
 
     # If 'index_right' exists (meaning some joins occurred), map building geometries
     if "index_right" in joined.columns:
         # Create a mapping from building index to building geometry
         building_geom_map = buildings.geometry.to_dict()
+
         # Use the 'index_right' (building indices) to look up geometries from the map
         # This creates a pandas Series of Shapely geometries.
         building_geometries_series = joined["index_right"].map(building_geom_map)
+
         # Convert this pandas Series to a GeoSeries, assigning the CRS from the source 'buildings' GDF
         joined["building_geometry"] = gpd.GeoSeries(building_geometries_series, crs=buildings.crs)
+
         # Remove the temporary 'index_right' column
         joined = joined.drop(columns=["index_right"])
+
     return joined # Return tessellation with added building geometry (if any)
 
 
@@ -1246,7 +1257,7 @@ def _extract_adjacency_relationships(
     from_ids = from_ids[valid_ids_filter]
     to_ids = to_ids[valid_ids_filter]
     groups = groups[valid_ids_filter]
-    rows = rows[valid_ids_filter] # Keep 'rows' and 'cols' consistent for centroid lookup later
+    rows = rows[valid_ids_filter]
     cols = cols[valid_ids_filter]
 
     # Return a DataFrame containing the adjacency relationships
@@ -1284,49 +1295,49 @@ def _create_adjacency_edges(
         DataFrame with edge geometries
     """
     # Work with a copy to avoid modifying the input DataFrame
-    adj_data_processed = adjacency_data.copy()
+    adjacency_processed = adjacency_data.copy()
 
     # Sort ID pairs to ensure canonical representation (e.g., (A,B) not (B,A)) for deduplication
-    id_pairs = adj_data_processed[["from_private_id", "to_private_id"]].to_numpy()
+    id_pairs = adjacency_processed[["from_private_id", "to_private_id"]].to_numpy()
     sorted_id_pairs = np.sort(id_pairs, axis=1) # Sort each pair [id1, id2]
-    adj_data_processed["from_private_id"] = sorted_id_pairs[:, 0] # Assign smaller ID to 'from'
-    adj_data_processed["to_private_id"] = sorted_id_pairs[:, 1]   # Assign larger ID to 'to'
+    adjacency_processed["from_private_id"] = sorted_id_pairs[:, 0] # Assign smaller ID to 'from'
+    adjacency_processed["to_private_id"] = sorted_id_pairs[:, 1]   # Assign larger ID to 'to'
 
     # Drop duplicate edges based on the sorted (from_id, to_id) and group
-    adj_data_processed = adj_data_processed.drop_duplicates(
+    adjacency_processed = adjacency_processed.drop_duplicates(
         subset=["from_private_id", "to_private_id", group_col],
     )
 
-    if adj_data_processed.empty:
-        return adj_data_processed.reindex(columns=["from_private_id", "to_private_id", group_col, "geometry"])
+    if adjacency_processed.empty:
+        return adjacency_processed.reindex(columns=["from_private_id", "to_private_id", group_col, "geometry"])
 
     # Calculate centroids of all polygons in the input GeoDataFrame 'gdf'
     # 'gdf' is assumed to be the one with 0..N-1 index matching 'row'/'col' in adjacency_data
     centroids = gdf.geometry.centroid
 
     # Get the 0..N-1 indices for 'from' and 'to' polygons from adjacency_data
-    rows_idx = adj_data_processed["row"].to_numpy() # Indices for 'from' centroids
-    cols_idx = adj_data_processed["col"].to_numpy() # Indices for 'to' centroids
+    rows_idx = adjacency_processed["row"].to_numpy() # Indices for 'from' centroids
+    cols_idx = adjacency_processed["col"].to_numpy() # Indices for 'to' centroids
 
     # Look up centroid geometries using these indices
-    points_p1 = centroids.iloc[rows_idx] # Centroids of 'from' polygons
-    points_p2 = centroids.iloc[cols_idx] # Centroids of 'to' polygons
+    from_centroids = centroids.iloc[rows_idx] # Centroids of 'from' polygons
+    to_centroids = centroids.iloc[cols_idx] # Centroids of 'to' polygons
 
-    # Extract (x,y) coordinates for p1 and p2 centroids
-    coords_p1 = np.array(list(zip(points_p1.x, points_p1.y, strict=True)))
-    coords_p2 = np.array(list(zip(points_p2.x, points_p2.y, strict=True)))
+    # Extract (x,y) coordinates for from_centroids and to_centroids
+    from_coords = np.array(list(zip(from_centroids.x, from_centroids.y, strict=True)))
+    to_coords = np.array(list(zip(to_centroids.x, to_centroids.y, strict=True)))
 
     # Stack coordinates to form pairs for LineString creation [(x1,y1), (x2,y2)]
-    line_coords = np.stack((coords_p1, coords_p2), axis=1)
+    line_coords = np.stack((from_coords, to_coords), axis=1)
 
     # Create LineStrings and assign to the 'geometry' column
-    adj_data_processed["geometry"] = list(sh_linestrings(line_coords))
+    adjacency_processed["geometry"] = list(sh_linestrings(line_coords))
 
     # Drop intermediate 'row' and 'col' index columns if they exist
-    columns_to_drop = [col for col in ["row", "col"] if col in adj_data_processed.columns]
+    columns_to_drop = [col for col in ["row", "col"] if col in adjacency_processed.columns]
 
     # Define final columns for the output DataFrame
     final_columns = ["from_private_id", "to_private_id", group_col, "geometry"]
 
     # Return the processed DataFrame with selected columns
-    return adj_data_processed.drop(columns=columns_to_drop)[final_columns]
+    return adjacency_processed.drop(columns=columns_to_drop)[final_columns]

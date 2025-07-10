@@ -417,9 +417,11 @@ def gabriel_graph(
     for i, j in delaunay_edges:
         mid = 0.5 * (coords[i] + coords[j])
         rad2 = np.sum((coords[i] - coords[j]) ** 2) * 0.25  # (|pi-pj|/2)^2
+
         # Squared distance of all points to the midpoint
         d2 = np.sum((coords - mid) ** 2, axis=1)
         mask = d2 <= rad2 + tol
+
         # Exactly the two endpoints inside the disc?
         if np.count_nonzero(mask) == 2:
             kept_edges.add((node_ids[i], node_ids[j]))
@@ -517,12 +519,15 @@ def relative_neighborhood_graph(
 
     # RNG filtering
     kept_edges: set[tuple[int, int]] = set()
+
     # Work with squared distances to avoid sqrt
     for i, j in cand_edges:
         dij2 = np.dot(coords[i] - coords[j], coords[i] - coords[j])
+
         # Vectorised test of the lune-emptiness predicate
         di2 = np.sum((coords - coords[i]) ** 2, axis=1) < dij2
         dj2 = np.sum((coords - coords[j]) ** 2, axis=1) < dij2
+
         # Any third point closer to *both* i and j?
         closer_both = np.where(di2 & dj2)[0]
         if len(closer_both) == 0:
@@ -1224,9 +1229,12 @@ def bridge_nodes(
       hospitals → parks: KNN=2, Fixed radious=1
       parks → schools: KNN=3, Fixed radious=1
     """
+    # Validate input parameters
     if len(nodes_dict) < 2:
         msg = "`nodes_dict` needs at least two layers"
         raise ValueError(msg)
+
+    # Raise error if proximity method is not recognized
     if proximity_method.lower() not in {"knn", "fixed_radius"}:
         msg = "proximity_method must be 'knn' or 'fixed_radius'"
         raise ValueError(msg)
@@ -1237,7 +1245,7 @@ def bridge_nodes(
         src_gdf = nodes_dict[src_type]
         dst_gdf = nodes_dict[dst_type]
 
-        if proximity_method.lower() == "knn":
+        if proximity_method.lower() == "knn": # k-nearest neighbors
             k = int(kwargs.get("k", 1))
             _, edges_gdf = knn_graph(
                 src_gdf,
@@ -1528,6 +1536,7 @@ def _directed_graph(
     network_gdf: gpd.GeoDataFrame | None = None,
 ) -> tuple[gpd.GeoDataFrame, gpd.GeoDataFrame] | nx.Graph:
     """Build source → target directed proximity edges."""
+    # Validate CRS
     if src_gdf.crs != dst_gdf.crs:
         msg = "CRS mismatch between source and target GeoDataFrames"
         raise ValueError(msg)

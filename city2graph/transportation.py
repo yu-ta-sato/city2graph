@@ -166,6 +166,7 @@ def _get_service_counts(gtfs_data: dict[str, pd.DataFrame | gpd.GeoDataFrame], s
         merged["start_date"] = pd.to_datetime(merged["start_date"], format="%Y%m%d")
         merged["end_date"] = pd.to_datetime(merged["end_date"], format="%Y%m%d")
 
+        # Filter dates within the service period
         active_days = merged[
             (merged["date"] >= merged["start_date"]) & (merged["date"] <= merged["end_date"])
         ]
@@ -206,13 +207,16 @@ def _point_geometries(df: pd.DataFrame) -> gpd.GeoSeries:
 
 def _linestring_geometries(shapes: pd.DataFrame) -> gpd.GeoSeries:
     """Create LineStrings grouped by *shape_id* ordered by *shape_pt_sequence*."""
+    # Ensure the relevant columns are numeric
     shapes = shapes.copy()
     shapes[["shape_pt_lat", "shape_pt_lon", "shape_pt_sequence"]] = shapes[
         ["shape_pt_lat", "shape_pt_lon", "shape_pt_sequence"]
     ].apply(pd.to_numeric, errors="coerce")
 
+    # Drop rows with NaN coordinates and sort by shape_id and sequence
     shapes = shapes.dropna().sort_values(["shape_id", "shape_pt_sequence"])
 
+    # Create LineString geometries for each shape_id
     geoms: dict[str, LineString] = {}
     for sid, grp in shapes.groupby("shape_id"):
         pts = [Point(lon, lat) for lon, lat in zip(grp["shape_pt_lon"], grp["shape_pt_lat"], strict=False)]
@@ -258,6 +262,7 @@ def load_gtfs(path: str | Path) -> dict[str, pd.DataFrame | gpd.GeoDataFrame]:
     0  Termini (MA)  POINT (12.50118 41.90088)
     1   Colosseo(MB)  POINT (12.49224 41.89021)
     """
+    # Validate input path
     gtfs = _load_gtfs_zip(path)
     if not gtfs:
         logger.warning("No GTFS files found in %s", path)
@@ -272,6 +277,7 @@ def load_gtfs(path: str | Path) -> dict[str, pd.DataFrame | gpd.GeoDataFrame]:
             stops.dropna(subset=["stop_lat", "stop_lon"]), geometry=geo, crs="EPSG:4326",
         )
 
+    # Attach geometries to shapes if available
     if (shapes := gtfs.get("shapes")) is not None:
         geo = _linestring_geometries(shapes)
         if not geo.empty:
@@ -288,10 +294,12 @@ def load_gtfs(path: str | Path) -> dict[str, pd.DataFrame | gpd.GeoDataFrame]:
 
 def _create_basic_od(stop_times: pd.DataFrame) -> pd.DataFrame:
     """Within each trip build *successive* stop pairs (u → v)."""
+    # Ensure stop_times has the necessary columns and types
     st = stop_times.copy()
     st["stop_sequence"] = pd.to_numeric(st["stop_sequence"], errors="coerce")
     st = st.dropna(subset=["stop_sequence"]).sort_values(["trip_id", "stop_sequence"])
 
+    # Shift stop_id and arrival_time to create pairs
     lead = st.groupby("trip_id").shift(1)
     mask = lead["stop_id"].notna()
 
@@ -312,6 +320,7 @@ def _service_day_map(
     calendar: pd.DataFrame, start: datetime, end: datetime,
 ) -> dict[str, list[datetime]]:
     """Return ``{service_id: [date, …]}`` within the given period."""
+    # Prepare the calendar table
     day_idx = {
         0: "monday",
         1: "tuesday",
@@ -323,6 +332,7 @@ def _service_day_map(
     }
     srv_dates: dict[str, list[datetime]] = {}
 
+    # Iterate over each row in the calendar to build service dates
     for _, row in calendar.iterrows():
         sid = row["service_id"]
         s = datetime.strptime(str(row["start_date"]), "%Y%m%d")
@@ -340,6 +350,7 @@ def _apply_calendar_exceptions(
     calendar_dates: pd.DataFrame, srv_dates: dict[str, list[datetime]],
 ) -> None:
     """Mutate *srv_dates* **in-place** with exception rules."""
+    # Ensure calendar_dates has the necessary columns and types
     for _, row in calendar_dates.iterrows():
         sid = row["service_id"]
         date = datetime.strptime(str(row["date"]), "%Y%m%d")
@@ -355,6 +366,7 @@ def _apply_calendar_exceptions(
 def _expand_with_dates(od: pd.DataFrame, srv_dates: dict[str, list[datetime]]) -> pd.DataFrame:
     """Cartesian multiply *od* rows by their active **service dates**."""
     rows: list[dict[str, object]] = []
+
     for _, r in od.iterrows():
         for d in srv_dates.get(r["service_id"], []):
             dep = _timestamp(r["departure_time"], d)
@@ -416,12 +428,12 @@ def get_od_pairs(
         logger.error("GTFS feed incomplete - need %s", ", ".join(required))
         return pd.DataFrame()
 
-    # 1. Create successive stop pairs from stop_times
+    # Create successive stop pairs from stop_times
     od = _create_basic_od(
         gtfs["stop_times"].merge(gtfs["trips"][["trip_id", "service_id"]], on="trip_id"),
     )
 
-    # 2. Expand OD pairs with calendar dates
+    # Expand OD pairs with calendar dates
     cal = gtfs["calendar"]
     start_dt = (
         datetime.strptime(start_date, "%Y%m%d")
@@ -443,7 +455,7 @@ def get_od_pairs(
     if not include_geometry:
         return od_full
 
-    # 3. Append LineString geometries
+    # Append LineString geometries
     stops = gtfs["stops"].set_index("stop_id")
     line_geoms = [
         LineString([stops.loc[o].geometry, stops.loc[d].geometry])
@@ -514,27 +526,27 @@ def travel_summary_graph(
     >>> print(G.number_of_nodes(), G.number_of_edges())
     2564 3178
     """
-    # 1. Validate Required Data
+    # Validate Required Data
     required_keys = {"stop_times", "stops"}
     if not required_keys.issubset(gtfs.keys()):
         missing = required_keys - gtfs.keys()
         msg = f"GTFS must contain at least stop_times and stops. Missing: {', '.join(missing)}"
         raise ValueError(msg)
 
-    # 2. Preprocess Data
+    # Preprocess Data
     stop_times = gtfs["stop_times"].copy()
     trips = gtfs["trips"][["trip_id", "service_id"]].copy()
 
     stop_times["departure_time_sec"] = stop_times["departure_time"].map(_time_to_seconds)
     stop_times["arrival_time_sec"] = stop_times["arrival_time"].map(_time_to_seconds)
 
-    # 3. Filter by Time of Day
+    # Filter by Time of Day
     if start_time is not None:
         stop_times = stop_times[stop_times["departure_time_sec"] >= _time_to_seconds(start_time)]
     if end_time is not None:
         stop_times = stop_times[stop_times["arrival_time_sec"] <= _time_to_seconds(end_time)]
 
-    # 4. Merge Data and Calculate Service Counts
+    # Merge Data and Calculate Service Counts
     stop_times = stop_times.merge(trips, on="trip_id", how="inner")
 
     if calendar_start and calendar_end:
@@ -544,7 +556,7 @@ def travel_summary_graph(
     else:
         stop_times["service_count"] = 1
 
-    # 5. Calculate Travel Time Between Consecutive Stops
+    # Calculate Travel Time Between Consecutive Stops
     stop_times = stop_times.sort_values(["trip_id", "stop_sequence"])
     grouped = stop_times.groupby("trip_id")
 
@@ -558,7 +570,7 @@ def travel_summary_graph(
     )
     valid_pairs = valid_pairs[valid_pairs["travel_time"] > 0]
 
-    # 6. Aggregate Results
+    # Aggregate Results
     agg_calcs = valid_pairs.groupby(["stop_id", "next_stop_id"]).agg(
         weighted_time_sum=("travel_time", lambda x: (x * valid_pairs.loc[x.index, "service_count"]).sum()),
         total_service_count=("service_count", "sum"),
@@ -567,7 +579,7 @@ def travel_summary_graph(
     agg_calcs["mean_travel_time"] = agg_calcs["weighted_time_sum"] / agg_calcs["total_service_count"]
     agg_calcs["frequency"] = agg_calcs["total_service_count"]
 
-    # 7. Create GeoDataFrames for nodes and edges
+    # Create GeoDataFrames for nodes and edges
     nodes_gdf: gpd.GeoDataFrame = gtfs["stops"].set_index("stop_id")
     edges_geom = [
         LineString([nodes_gdf.loc[u].geometry, nodes_gdf.loc[v].geometry])
