@@ -126,7 +126,7 @@ html_theme_options = {
     "show_nav_level": 1,                 # Show 1 level in navigation
     "navbar_start": ["navbar-logo"],     # Left side of navbar
     "navbar_center": ["navbar-nav"],     # Center of navbar  
-    "navbar_end": ["navbar-icon-links"], # Right side of navbar
+    "navbar_end": ["navbar-icon-links", "theme-switcher"], # Right side of navbar
     
     # Logo configuration
     "logo": {
