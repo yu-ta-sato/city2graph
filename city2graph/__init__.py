@@ -5,18 +5,17 @@ This package provides tools for converting geospatial data into graph representa
 suitable for network analysis and graph neural networks. It supports various graph
 types including proximity-based, morphological, and transportation networks.
 
-Main Modules
-------------
-data : Loading and processing geospatial data from sources like Overture Maps
-graph : Converting between GeoDataFrames and PyTorch Geometric objects
-morphology : Creating morphological graphs from urban data
-proximity : Generating proximity-based graph networks
-transportation : Processing GTFS data and creating transportation networks
-utils : Core utilities for graph conversion and validation
+Notes
+-----
+Main modules include:
+- data : Loading and processing geospatial data from sources like Overture Maps
+- graph : Converting between GeoDataFrames and PyTorch Geometric objects
+- morphology : Creating morphological graphs from urban data
+- proximity : Generating proximity-based graph networks
+- transportation : Processing GTFS data and creating transportation networks
+- utils : Core utilities for graph conversion and validation
 
-Author
-------
-Yuta Sato
+Author: Yuta Sato
 """
 
 # Standard library imports

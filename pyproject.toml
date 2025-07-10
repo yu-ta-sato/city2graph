@@ -132,6 +132,7 @@ dev = [
     "pytest",
     "pytest-cov",
     "mypy",
+    "pre-commit",
     "ipython >=8.14.0",
     "jupyter >=1.0.0",
     "notebook >=7.0.0",

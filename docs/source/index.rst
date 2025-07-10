@@ -52,7 +52,7 @@ Examples
    :width: 1000px
    :alt: A morphological graph in Liverpool
    :align: center
-   
+
    A morphological graph of 500m walking distance in Liverpool
 
 >> For details, see :doc:`examples/morphological_networks_from_overturemaps`
@@ -62,7 +62,7 @@ Examples
 .. code-block:: python
 
    sample_gtfs_path = Path("./itm_london_gtfs.zip")
-   gtfs_data = city2graph.load_gtfs(sample_gtfs_path)   
+   gtfs_data = city2graph.load_gtfs(sample_gtfs_path)
 
    travel_summary_nodes, travel_summary_edges = city2graph.travel_summary_graph(
       gtfs_data, calendar_start="20250601", calendar_end="20250601")
@@ -124,8 +124,8 @@ Examples
 
    # Generate proximity edges between layers using KNN method
    proximity_nodes, proximity_edges = city2graph.bridge_nodes(
-      nodes_dict, 
-      proximity_method="knn", 
+      nodes_dict,
+      proximity_method="knn",
       k=5,
       distance_metric="euclidean"
    )

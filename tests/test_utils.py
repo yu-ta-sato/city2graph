@@ -8,6 +8,8 @@ import pandas as pd
 import pytest
 
 from city2graph import utils
+from city2graph.utils import GeoDataProcessor
+from city2graph.utils import GraphConverter
 from city2graph.utils import GraphMetadata
 from city2graph.utils import gdf_to_nx
 from city2graph.utils import nx_to_gdf
@@ -15,6 +17,7 @@ from city2graph.utils import nx_to_gdf
 # ============================================================================
 # BASE TEST CLASSES WITH SHARED FUNCTIONALITY
 # ============================================================================
+
 
 class BaseGraphTest:
     """Base class for graph-related tests with common utilities."""
@@ -49,7 +52,12 @@ class BaseConversionTest(BaseGraphTest):
         converted_edges: gpd.GeoDataFrame,
     ) -> None:
         """Assert roundtrip conversion maintains data integrity."""
-        self.assert_crs_consistency(original_nodes, converted_nodes, original_edges, converted_edges)
+        self.assert_crs_consistency(
+            original_nodes,
+            converted_nodes,
+            original_edges,
+            converted_edges,
+        )
         assert len(original_nodes) == len(converted_nodes)
         assert len(original_edges) == len(converted_edges)
         pd.testing.assert_index_equal(original_nodes.index, converted_nodes.index)
@@ -59,6 +67,7 @@ class BaseConversionTest(BaseGraphTest):
 # ============================================================================
 # TESSELLATION TESTS
 # ============================================================================
+
 
 class TestTessellation(BaseGraphTest):
     """Test tessellation creation functionality."""
@@ -72,7 +81,11 @@ class TestTessellation(BaseGraphTest):
         ],
     )
     def test_tessellation_creation(
-        self, geometry_fixture: str, barriers_fixture: str | None, expect_empty: bool, request: pytest.FixtureRequest,
+        self,
+        geometry_fixture: str,
+        barriers_fixture: str | None,
+        expect_empty: bool,
+        request: pytest.FixtureRequest,
     ) -> None:
         """Test tessellation creation with various input combinations."""
         geometry = request.getfixturevalue(geometry_fixture)
@@ -93,11 +106,19 @@ class TestTessellation(BaseGraphTest):
 # GRAPH STRUCTURE TESTS
 # ============================================================================
 
+
 class TestGraphStructures(BaseGraphTest):
     """Test graph structure operations like dual graph and segments conversion."""
 
     @pytest.mark.parametrize(
-        ("nodes_fixture", "edges_fixture", "keep_geom", "edge_id_col", "should_error", "error_match"),
+        (
+            "nodes_fixture",
+            "edges_fixture",
+            "keep_geom",
+            "edge_id_col",
+            "should_error",
+            "error_match",
+        ),
         [
             # Success cases
             ("sample_nodes_gdf", "sample_edges_gdf", False, None, False, None),
@@ -105,12 +126,25 @@ class TestGraphStructures(BaseGraphTest):
             ("empty_gdf", "empty_gdf", False, None, False, None),
             # Error cases
             ("sample_segments_gdf", None, False, None, True, r"Input `graph` must be a tuple"),
-            ("sample_nodes_gdf", "segments_gdf_no_crs", False, None, True, "All GeoDataFrames must have the same CRS"),
+            (
+                "sample_nodes_gdf",
+                "segments_gdf_no_crs",
+                False,
+                None,
+                True,
+                "All GeoDataFrames must have the same CRS",
+            ),
         ],
     )
     def test_dual_graph_conversion(
-        self, nodes_fixture: str, edges_fixture: str | None, keep_geom: bool, edge_id_col: str | None,
-        should_error: bool, error_match: str | None, request: pytest.FixtureRequest,
+        self,
+        nodes_fixture: str,
+        edges_fixture: str | None,
+        keep_geom: bool,
+        edge_id_col: str | None,
+        should_error: bool,
+        error_match: str | None,
+        request: pytest.FixtureRequest,
     ) -> None:
         """Test dual graph conversion with comprehensive parameter combinations."""
         if edges_fixture is None:
@@ -124,7 +158,11 @@ class TestGraphStructures(BaseGraphTest):
             with pytest.raises((TypeError, ValueError, AttributeError), match=error_match):
                 utils.dual_graph(graph_input, edge_id_col=edge_id_col, keep_original_geom=keep_geom)
         else:
-            dual_nodes, dual_edges = utils.dual_graph(graph_input, edge_id_col=edge_id_col, keep_original_geom=keep_geom)
+            dual_nodes, dual_edges = utils.dual_graph(
+                graph_input,
+                edge_id_col=edge_id_col,
+                keep_original_geom=keep_geom,
+            )
 
             # Handle empty case
             if isinstance(graph_input, tuple) and graph_input[1].empty:
@@ -139,7 +177,6 @@ class TestGraphStructures(BaseGraphTest):
             if keep_geom:
                 assert "original_geometry" in dual_nodes.columns
 
-
     @pytest.mark.parametrize(
         ("segments_fixture", "expect_empty", "multigraph"),
         [
@@ -150,7 +187,11 @@ class TestGraphStructures(BaseGraphTest):
         ],
     )
     def test_segments_to_graph_conversion(
-        self, segments_fixture: str, expect_empty: bool, multigraph: bool, request: pytest.FixtureRequest,
+        self,
+        segments_fixture: str,
+        expect_empty: bool,
+        multigraph: bool,
+        request: pytest.FixtureRequest,
     ) -> None:
         """Test conversion of line segments to graph structure."""
         segments_gdf = request.getfixturevalue(segments_fixture)
@@ -165,10 +206,17 @@ class TestGraphStructures(BaseGraphTest):
             assert nodes_gdf.geometry.geom_type.isin(["Point"]).all()
             assert isinstance(edges_gdf.index, pd.MultiIndex)
 
-            expected_index_names = ["from_node_id", "to_node_id", "edge_key"] if multigraph else ["from_node_id", "to_node_id"]
+            expected_index_names = (
+                ["from_node_id", "to_node_id", "edge_key"]
+                if multigraph
+                else ["from_node_id", "to_node_id"]
+            )
             assert edges_gdf.index.names == expected_index_names
 
-    def test_segments_multigraph_duplicate_handling(self, duplicate_segments_gdf: gpd.GeoDataFrame) -> None:
+    def test_segments_multigraph_duplicate_handling(
+        self,
+        duplicate_segments_gdf: gpd.GeoDataFrame,
+    ) -> None:
         """Test multigraph handling of duplicate edge connections."""
         nodes_gdf, edges_gdf = utils.segments_to_graph(duplicate_segments_gdf, multigraph=True)
 
@@ -181,10 +229,10 @@ class TestGraphStructures(BaseGraphTest):
         assert list(edge_keys) == [0, 1]
 
 
-
 # ============================================================================
 # GRAPH ANALYSIS TESTS
 # ============================================================================
+
 
 class TestGraphAnalysis(BaseGraphTest):
     """Test graph analysis operations like filtering and isochrone generation."""
@@ -199,8 +247,13 @@ class TestGraphAnalysis(BaseGraphTest):
         ],
     )
     def test_graph_distance_filtering(
-        self, graph_fixture: str, as_nx: bool, center_fixture: str, distance: float,
-        expect_empty: bool, request: pytest.FixtureRequest,
+        self,
+        graph_fixture: str,
+        as_nx: bool,
+        center_fixture: str,
+        distance: float,
+        expect_empty: bool,
+        request: pytest.FixtureRequest,
     ) -> None:
         """Test filtering graphs by distance from center points."""
         graph = request.getfixturevalue(graph_fixture)
@@ -224,13 +277,19 @@ class TestGraphAnalysis(BaseGraphTest):
         ],
     )
     def test_isochrone_generation(
-        self, graph_fixture: str, center_fixture: str, distance: float,
-        expect_empty: bool, request: pytest.FixtureRequest,
+        self,
+        graph_fixture: str,
+        center_fixture: str,
+        distance: float,
+        expect_empty: bool,
+        request: pytest.FixtureRequest,
     ) -> None:
         """Test isochrone polygon generation from graphs."""
         graph = request.getfixturevalue(graph_fixture)
         center_source = request.getfixturevalue(center_fixture)
-        center_point = center_source.geometry.iloc[0] if isinstance(graph, nx.Graph) else center_source
+        center_point = (
+            center_source.geometry.iloc[0] if isinstance(graph, nx.Graph) else center_source
+        )
 
         isochrone = utils.create_isochrone(graph, center_point, distance=distance)
 
@@ -244,24 +303,37 @@ class TestGraphAnalysis(BaseGraphTest):
 # CONVERSION TESTS
 # ============================================================================
 
+
 class TestGraphConversions(BaseConversionTest):
     """Test conversions between GeoDataFrame and NetworkX formats."""
 
     def test_homogeneous_roundtrip_conversion(
-        self, sample_nodes_gdf: gpd.GeoDataFrame, sample_edges_gdf: gpd.GeoDataFrame,
+        self,
+        sample_nodes_gdf: gpd.GeoDataFrame,
+        sample_edges_gdf: gpd.GeoDataFrame,
     ) -> None:
         """Test roundtrip conversion preserves data integrity for homogeneous graphs."""
         graph = gdf_to_nx(sample_nodes_gdf, sample_edges_gdf)
         nodes_converted, edges_converted = nx_to_gdf(graph)
 
-        self.assert_roundtrip_consistency(sample_nodes_gdf, sample_edges_gdf, nodes_converted, edges_converted)
+        self.assert_roundtrip_consistency(
+            sample_nodes_gdf,
+            sample_edges_gdf,
+            nodes_converted,
+            edges_converted,
+        )
 
     def test_heterogeneous_roundtrip_conversion(
-        self, sample_hetero_nodes_dict: dict[str, gpd.GeoDataFrame],
+        self,
+        sample_hetero_nodes_dict: dict[str, gpd.GeoDataFrame],
         sample_hetero_edges_dict: dict[tuple[str, str, str], gpd.GeoDataFrame],
     ) -> None:
         """Test roundtrip conversion for heterogeneous graphs."""
-        graph = gdf_to_nx(nodes=sample_hetero_nodes_dict, edges=sample_hetero_edges_dict, multigraph=True)
+        graph = gdf_to_nx(
+            nodes=sample_hetero_nodes_dict,
+            edges=sample_hetero_edges_dict,
+            multigraph=True,
+        )
         nodes_dict_converted, edges_dict_converted = nx_to_gdf(graph)
 
         assert isinstance(nodes_dict_converted, dict)
@@ -277,13 +349,23 @@ class TestGraphConversions(BaseConversionTest):
             original_edges = sample_hetero_edges_dict[first_edge_type]
             assert isinstance(edges_dict_converted[first_edge_type], gpd.GeoDataFrame)
             converted_edges = edges_dict_converted[first_edge_type]
-            self.assert_roundtrip_consistency(original_nodes, original_edges, converted_nodes, converted_edges)
+            self.assert_roundtrip_consistency(
+                original_nodes,
+                original_edges,
+                converted_nodes,
+                converted_edges,
+            )
 
     @pytest.mark.parametrize(
         ("input_type", "gdf_fixture"),
         [("edges_only", "sample_edges_gdf"), ("hetero_edges_only", "sample_hetero_edges_dict")],
     )
-    def test_edges_only_conversion(self, input_type: str, gdf_fixture: str, request: pytest.FixtureRequest) -> None:
+    def test_edges_only_conversion(
+        self,
+        input_type: str,
+        gdf_fixture: str,
+        request: pytest.FixtureRequest,
+    ) -> None:
         """Test conversion with only edge data provided."""
         gdf = request.getfixturevalue(gdf_fixture)
 
@@ -303,13 +385,27 @@ class TestGraphConversions(BaseConversionTest):
         [
             (None, None, ValueError, "Either nodes or edges must be provided"),
             ("not_a_gdf", "sample_edges_gdf", TypeError, "Input must be a GeoDataFrame"),
-            ("sample_hetero_nodes_dict", "sample_edges_gdf", TypeError, "If nodes is a dict, edges must also be a dict"),
-            ("sample_nodes_gdf_alt_crs", "sample_edges_gdf", ValueError, "All GeoDataFrames must have the same CRS"),
+            (
+                "sample_hetero_nodes_dict",
+                "sample_edges_gdf",
+                TypeError,
+                "If nodes is a dict, edges must also be a dict",
+            ),
+            (
+                "sample_nodes_gdf_alt_crs",
+                "sample_edges_gdf",
+                ValueError,
+                "All GeoDataFrames must have the same CRS",
+            ),
         ],
     )
     def test_conversion_error_handling(
-        self, nodes_arg: str | None, edges_arg: str | None, error_type: type[Exception],
-        error_match: str, request: pytest.FixtureRequest,
+        self,
+        nodes_arg: str | None,
+        edges_arg: str | None,
+        error_type: type[Exception],
+        error_match: str,
+        request: pytest.FixtureRequest,
     ) -> None:
         """Test proper error handling for invalid conversion inputs."""
         nodes = request.getfixturevalue(nodes_arg) if nodes_arg else None
@@ -327,7 +423,11 @@ class TestGraphConversions(BaseConversionTest):
         ],
     )
     def test_nx_to_gdf_variants(
-        self, graph_fixture: str, expect_crs: bool, expect_geom: bool, request: pytest.FixtureRequest,
+        self,
+        graph_fixture: str,
+        expect_crs: bool,
+        expect_geom: bool,
+        request: pytest.FixtureRequest,
     ) -> None:
         """Test NetworkX to GDF conversion with different graph properties."""
         graph = request.getfixturevalue(graph_fixture)
@@ -353,6 +453,7 @@ class TestGraphConversions(BaseConversionTest):
 # VALIDATION TESTS
 # ============================================================================
 
+
 class TestValidation:
     """Test validation functions for GeoDataFrames and NetworkX graphs."""
 
@@ -366,12 +467,21 @@ class TestValidation:
             ("empty_gdf", "sample_edges_gdf", False, None),
             # Error cases
             ("not_a_gdf", "sample_edges_gdf", True, "Input must be a GeoDataFrame"),
-            ("sample_nodes_gdf_alt_crs", "sample_edges_gdf", True, "All GeoDataFrames must have the same CRS"),
+            (
+                "sample_nodes_gdf_alt_crs",
+                "sample_edges_gdf",
+                True,
+                "All GeoDataFrames must have the same CRS",
+            ),
         ],
     )
     def test_gdf_validation(
-        self, nodes_fixture: str | None, edges_fixture: str | None, should_error: bool,
-        error_match: str | None, request: pytest.FixtureRequest,
+        self,
+        nodes_fixture: str | None,
+        edges_fixture: str | None,
+        should_error: bool,
+        error_match: str | None,
+        request: pytest.FixtureRequest,
     ) -> None:
         """Test GeoDataFrame validation with various input combinations."""
         nodes = request.getfixturevalue(nodes_fixture) if nodes_fixture else None
@@ -392,7 +502,11 @@ class TestValidation:
         ],
     )
     def test_nx_validation(
-        self, graph_fixture: str, should_error: bool, error_match: str | None, request: pytest.FixtureRequest,
+        self,
+        graph_fixture: str,
+        should_error: bool,
+        error_match: str | None,
+        request: pytest.FixtureRequest,
     ) -> None:
         """Test NetworkX graph validation."""
         graph = request.getfixturevalue(graph_fixture)
@@ -404,7 +518,9 @@ class TestValidation:
             utils.validate_nx(graph)  # Should not raise
 
     def test_validation_edge_cases(
-        self, sample_nodes_gdf: gpd.GeoDataFrame, empty_gdf: gpd.GeoDataFrame,
+        self,
+        sample_nodes_gdf: gpd.GeoDataFrame,
+        empty_gdf: gpd.GeoDataFrame,
         segments_invalid_geom_gdf: gpd.GeoDataFrame,
     ) -> None:
         """Test validation handles edge cases properly."""
@@ -418,6 +534,7 @@ class TestValidation:
 # ============================================================================
 # METADATA TESTS
 # ============================================================================
+
 
 class TestGraphMetadata:
     """Test GraphMetadata class functionality."""
@@ -448,7 +565,10 @@ class TestGraphMetadata:
         ],
     )
     def test_metadata_validation_errors(
-        self, invalid_data: dict[str, object], error_type: type[Exception], error_match: str,
+        self,
+        invalid_data: dict[str, object],
+        error_type: type[Exception],
+        error_match: str,
     ) -> None:
         """Test GraphMetadata validation catches invalid inputs."""
         with pytest.raises(error_type, match=error_match):
@@ -467,19 +587,25 @@ class TestGraphMetadata:
 # COMPREHENSIVE EDGE CASE TESTS
 # ============================================================================
 
+
 class TestEdgeCases:
     """Test edge cases and error conditions for comprehensive coverage."""
 
     def test_processor_edge_cases(
-        self, sample_buildings_gdf: gpd.GeoDataFrame, empty_gdf: gpd.GeoDataFrame,
-        invalid_geom_gdf: gpd.GeoDataFrame, all_invalid_geom_gdf: gpd.GeoDataFrame,
+        self,
+        sample_buildings_gdf: gpd.GeoDataFrame,
+        empty_gdf: gpd.GeoDataFrame,
+        invalid_geom_gdf: gpd.GeoDataFrame,
+        all_invalid_geom_gdf: gpd.GeoDataFrame,
     ) -> None:
         """Test GeoDataProcessor edge cases."""
-        from city2graph.utils import GeoDataProcessor
         processor = GeoDataProcessor()
 
         # Test geometry type filtering
-        result = processor.validate_gdf(sample_buildings_gdf, expected_geom_types=["Polygon", "MultiPolygon"])
+        result = processor.validate_gdf(
+            sample_buildings_gdf,
+            expected_geom_types=["Polygon", "MultiPolygon"],
+        )
         assert isinstance(result, gpd.GeoDataFrame)
 
         # Test allow_empty parameter
@@ -501,7 +627,6 @@ class TestEdgeCases:
 
     def test_nx_validation_edge_cases(self) -> None:
         """Test NetworkX validation edge cases."""
-        from city2graph.utils import GeoDataProcessor
         processor = GeoDataProcessor()
 
         # Empty graph
@@ -525,12 +650,15 @@ class TestEdgeCases:
             processor.validate_nx(incomplete_graph)
 
     def test_comprehensive_nx_validation_errors(
-        self, graph_missing_crs: nx.Graph, hetero_graph_no_node_types: nx.Graph,
-        hetero_graph_no_edge_types: nx.Graph, graph_no_pos_geom: nx.Graph,
-        hetero_graph_no_node_type: nx.Graph, hetero_graph_no_edge_type: nx.Graph,
+        self,
+        graph_missing_crs: nx.Graph,
+        hetero_graph_no_node_types: nx.Graph,
+        hetero_graph_no_edge_types: nx.Graph,
+        graph_no_pos_geom: nx.Graph,
+        hetero_graph_no_node_type: nx.Graph,
+        hetero_graph_no_edge_type: nx.Graph,
     ) -> None:
         """Test comprehensive NetworkX validation error conditions."""
-        from city2graph.utils import GeoDataProcessor
         processor = GeoDataProcessor()
 
         # Test missing required metadata keys (lines 155-156)
@@ -538,11 +666,17 @@ class TestEdgeCases:
             processor.validate_nx(graph_missing_crs)
 
         # Test heterogeneous graph missing node_types (lines 162-163)
-        with pytest.raises(ValueError, match="Heterogeneous graph metadata is missing 'node_types'"):
+        with pytest.raises(
+            ValueError,
+            match="Heterogeneous graph metadata is missing 'node_types'",
+        ):
             processor.validate_nx(hetero_graph_no_node_types)
 
         # Test heterogeneous graph missing edge_types (lines 165-166)
-        with pytest.raises(ValueError, match="Heterogeneous graph metadata is missing 'edge_types'"):
+        with pytest.raises(
+            ValueError,
+            match="Heterogeneous graph metadata is missing 'edge_types'",
+        ):
             processor.validate_nx(hetero_graph_no_edge_types)
 
         # Test node missing pos/geometry (lines 173-174)
@@ -550,11 +684,17 @@ class TestEdgeCases:
             processor.validate_nx(graph_no_pos_geom)
 
         # Test heterogeneous node missing node_type (lines 178-179)
-        with pytest.raises(ValueError, match="All nodes in a heterogeneous graph must have a 'node_type' attribute"):
+        with pytest.raises(
+            ValueError,
+            match="All nodes in a heterogeneous graph must have a 'node_type' attribute",
+        ):
             processor.validate_nx(hetero_graph_no_node_type)
 
         # Test heterogeneous edge missing edge_type (lines 184-185)
-        with pytest.raises(ValueError, match="All edges in a heterogeneous graph must have an 'edge_type' attribute"):
+        with pytest.raises(
+            ValueError,
+            match="All edges in a heterogeneous graph must have an 'edge_type' attribute",
+        ):
             processor.validate_nx(hetero_graph_no_edge_type)
 
     def test_heterogeneous_validation_errors(
@@ -588,7 +728,11 @@ class TestEdgeCases:
         assert not nodes_gdf.empty
         assert edges_gdf.empty
 
-    def test_tessellation_edge_cases(self, empty_gdf: gpd.GeoDataFrame, single_point_geom_gdf: gpd.GeoDataFrame) -> None:
+    def test_tessellation_edge_cases(
+        self,
+        empty_gdf: gpd.GeoDataFrame,
+        single_point_geom_gdf: gpd.GeoDataFrame,
+    ) -> None:
         """Test tessellation edge cases."""
         # Empty geometry
         result = utils.create_tessellation(empty_gdf)
@@ -599,10 +743,11 @@ class TestEdgeCases:
         result = utils.create_tessellation(single_point_geom_gdf)
         assert isinstance(result, gpd.GeoDataFrame)
 
-    def test_graph_converter_edge_cases(self, directed_multigraph_edges_gdf: gpd.GeoDataFrame) -> None:
+    def test_graph_converter_edge_cases(
+        self,
+        directed_multigraph_edges_gdf: gpd.GeoDataFrame,
+    ) -> None:
         """Test GraphConverter edge cases for missing coverage."""
-        from city2graph.utils import GraphConverter
-
         # Test directed graph creation (line 284)
         converter = GraphConverter(directed=True, multigraph=True)
         graph = converter.gdf_to_nx(nodes=None, edges=directed_multigraph_edges_gdf)
@@ -621,7 +766,9 @@ class TestEdgeCases:
         assert isinstance(edges_gdf, gpd.GeoDataFrame)
 
     def test_index_handling_edge_cases(
-        self, single_name_index_nodes_gdf: gpd.GeoDataFrame, simple_edges_gdf: gpd.GeoDataFrame,
+        self,
+        single_name_index_nodes_gdf: gpd.GeoDataFrame,
+        simple_edges_gdf: gpd.GeoDataFrame,
     ) -> None:
         """Test index handling edge cases."""
         # Test single-level index name handling (line 629)
@@ -637,7 +784,9 @@ class TestEdgeCases:
         assert nodes_back.index.name is None
 
     def test_heterogeneous_edge_processing(
-        self, regular_hetero_graph: nx.Graph, empty_hetero_graph: nx.Graph,
+        self,
+        regular_hetero_graph: nx.Graph,
+        empty_hetero_graph: nx.Graph,
     ) -> None:
         """Test heterogeneous edge processing paths."""
         # Test regular graph edge processing (lines 771-775)
@@ -659,12 +808,18 @@ class TestEdgeCases:
         assert isinstance(dual_edges, gpd.GeoDataFrame)
 
     def test_validation_type_errors(
-        self, nodes_non_dict_for_hetero: gpd.GeoDataFrame, edges_dict_for_hetero: dict[tuple[str, str, str], gpd.GeoDataFrame],
-        edges_dict_bad_elements: dict[tuple[int, str, str], gpd.GeoDataFrame], simple_nodes_dict_type1: dict[str, gpd.GeoDataFrame],
+        self,
+        nodes_non_dict_for_hetero: gpd.GeoDataFrame,
+        edges_dict_for_hetero: dict[tuple[str, str, str], gpd.GeoDataFrame],
+        edges_dict_bad_elements: dict[tuple[int, str, str], gpd.GeoDataFrame],
+        simple_nodes_dict_type1: dict[str, gpd.GeoDataFrame],
     ) -> None:
         """Test validation type errors (lines 1761-1762, 1786-1787)."""
         # Test edges dict with nodes non-dict (line 1761-1762)
-        with pytest.raises(TypeError, match="If edges is a dict, nodes must also be a dict or None"):
+        with pytest.raises(
+            TypeError,
+            match="If edges is a dict, nodes must also be a dict or None",
+        ):
             utils.gdf_to_nx(nodes=nodes_non_dict_for_hetero, edges=edges_dict_for_hetero)
 
         # Test invalid edge type tuple elements (line 1786-1787)
@@ -672,7 +827,9 @@ class TestEdgeCases:
             utils.gdf_to_nx(nodes=simple_nodes_dict_type1, edges=edges_dict_bad_elements)
 
     def test_multiindex_nodes_conversion(
-        self, multiindex_nodes_gdf: gpd.GeoDataFrame, simple_edges_gdf: gpd.GeoDataFrame,
+        self,
+        multiindex_nodes_gdf: gpd.GeoDataFrame,
+        simple_edges_gdf: gpd.GeoDataFrame,
     ) -> None:
         """Test conversion with MultiIndex nodes (line 294)."""
         # This should trigger the MultiIndex path (line 294)
@@ -680,11 +837,11 @@ class TestEdgeCases:
         assert graph.graph["node_index_names"] == ["node_type", "node_id"]
 
     def test_edge_index_names_handling(
-        self, sample_crs: str, simple_edges_dict_type1_type2: dict[tuple[str, str, str], gpd.GeoDataFrame],
+        self,
+        sample_crs: str,
+        simple_edges_dict_type1_type2: dict[tuple[str, str, str], gpd.GeoDataFrame],
     ) -> None:
         """Test edge index names handling (lines 629, 633, 660, 697-698, 713)."""
-        from city2graph.utils import GraphConverter
-
         # Test line 465 - edge_index_names not dict handling
         converter = GraphConverter()
         metadata = utils.GraphMetadata(crs=sample_crs, is_hetero=True)
@@ -699,7 +856,9 @@ class TestEdgeCases:
         assert isinstance(metadata.edge_index_names, dict)
 
     def test_tessellation_error_handling(
-        self, single_point_geom_gdf: gpd.GeoDataFrame, tessellation_barriers_gdf: gpd.GeoDataFrame,
+        self,
+        single_point_geom_gdf: gpd.GeoDataFrame,
+        tessellation_barriers_gdf: gpd.GeoDataFrame,
     ) -> None:
         """Test tessellation error handling paths (lines 1653-1662, 1669)."""
         # Test with geometry that might trigger momepy concatenation error
@@ -707,5 +866,8 @@ class TestEdgeCases:
         assert isinstance(result, gpd.GeoDataFrame)
 
         # Test with barriers that might cause issues (line 1669)
-        result = utils.create_tessellation(single_point_geom_gdf, primary_barriers=tessellation_barriers_gdf)
+        result = utils.create_tessellation(
+            single_point_geom_gdf,
+            primary_barriers=tessellation_barriers_gdf,
+        )
         assert isinstance(result, gpd.GeoDataFrame)

@@ -56,7 +56,7 @@ exclude_patterns = ["_build", "**.ipynb_checkpoints"]
 
 # Title for the HTML documentation
 html_title = "city2graph - Urban Data to Graph Conversion"
-# Base URL for sitemap and canonical URLs  
+# Base URL for sitemap and canonical URLs
 html_baseurl = "https://city2graph.net/"
 # Include robots.txt in the output
 html_extra_path = ["robots.txt"]
@@ -119,33 +119,33 @@ html_theme_options = {
     # GitHub integration
     "github_url": "https://github.com/c2g-dev/city2graph",
     "use_edit_page_button": False,
-    
+
     # Navigation and layout
     "show_toc_level": 2,                 # Show 2 levels in table of contents
     "navigation_with_keys": True,        # Enable keyboard navigation
     "show_nav_level": 1,                 # Show 1 level in navigation
     "navbar_start": ["navbar-logo"],     # Left side of navbar
-    "navbar_center": ["navbar-nav"],     # Center of navbar  
+    "navbar_center": ["navbar-nav"],     # Center of navbar
     "navbar_end": ["navbar-icon-links", "theme-switcher"], # Right side of navbar
-    
+
     # Logo configuration
     "logo": {
         "image_light": "_static/city2graph_logo_wide.png",
         "image_dark": "_static/city2graph_logo_wide_dark.png",
         "alt_text": "city2graph - Urban Data to Graph Conversion",
     },
-    
+
     # Footer configuration
     "footer_start": ["copyright"],
     "footer_end": ["sphinx-version", "theme-version"],
-    
+
     # Search configuration
     "search_bar_text": "Search city2graph documentation...",
-    
+
     # Social media and SEO
     "open_graph_image": "_static/city2graph_logo_wide.png",
     "open_graph_description": "A Python package for transforming urban data into graphs for spatial analysis and Graph Neural Networks.",
-    
+
     # Page layout options
     "collapse_navigation": False,        # Keep navigation expanded
     "sticky_navigation": True,           # Make navigation sticky
@@ -157,7 +157,7 @@ html_theme_options = {
 # Additional HTML context variables
 html_context = {
     "github_user": "c2g-dev",
-    "github_repo": "city2graph", 
+    "github_repo": "city2graph",
     "github_version": "main",
     "doc_path": "docs/source",
 }
@@ -180,26 +180,26 @@ html_sidebars = {
 intersphinx_mapping = {
     # Python standard library
     "python": ("https://docs.python.org/3", None),
-    
+
     # Scientific computing stack
     "numpy": ("https://numpy.org/doc/stable/", None),
     "pandas": ("https://pandas.pydata.org/pandas-docs/stable/", None),
     "scipy": ("https://docs.scipy.org/doc/scipy/", None),
     "matplotlib": ("https://matplotlib.org/stable/", None),
-    
+
     # Geospatial libraries
     "geopandas": ("https://geopandas.org/en/stable/", None),
     "shapely": ("https://shapely.readthedocs.io/en/stable/", None),
     "fiona": ("https://fiona.readthedocs.io/en/latest/", None),
     "pyproj": ("https://pyproj4.github.io/pyproj/stable/", None),
-    
+
     # Graph libraries
     "networkx": ("https://networkx.org/documentation/stable/", None),
-    
+
     # Deep learning and PyTorch ecosystem
     "torch": ("https://pytorch.org/docs/stable/", None),
     "torch_geometric": ("https://pytorch-geometric.readthedocs.io/en/latest/", None),
-    
+
     # Urban analysis libraries
     "momepy": ("http://docs.momepy.org/en/stable/", None),
     "osmnx": ("https://osmnx.readthedocs.io/en/stable/", None),

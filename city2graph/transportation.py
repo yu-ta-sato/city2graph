@@ -12,6 +12,7 @@ minimal public API surface. All functions return ready-to-use pandas/GeoPandas
 objects or NetworkX graphs that can be seamlessly integrated into analysis
 pipelines, notebooks, or model training workflows.
 """
+
 # Future annotations for type hints
 from __future__ import annotations
 
@@ -137,7 +138,12 @@ def _coerce_types(gtfs: dict[str, pd.DataFrame]) -> None:
             if d in cal.columns:
                 cal[d] = cal[d].astype(float).fillna(0).astype(bool)
 
-def _get_service_counts(gtfs_data: dict[str, pd.DataFrame | gpd.GeoDataFrame], start_date_str: str, end_date_str: str) -> pd.Series:
+
+def _get_service_counts(
+    gtfs_data: dict[str, pd.DataFrame | gpd.GeoDataFrame],
+    start_date_str: str,
+    end_date_str: str,
+) -> pd.Series:
     """Calculate the number of active days for each service_id within a date range."""
     calendar = gtfs_data.get("calendar")
     calendar_dates = gtfs_data.get("calendar_dates")
@@ -155,7 +161,15 @@ def _get_service_counts(gtfs_data: dict[str, pd.DataFrame | gpd.GeoDataFrame], s
     if calendar is not None:
         cal_df = calendar.melt(
             id_vars=["service_id", "start_date", "end_date"],
-            value_vars=["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"],
+            value_vars=[
+                "monday",
+                "tuesday",
+                "wednesday",
+                "thursday",
+                "friday",
+                "saturday",
+                "sunday",
+            ],
             var_name="day_name",
             value_name="is_active",
         )
@@ -176,20 +190,26 @@ def _get_service_counts(gtfs_data: dict[str, pd.DataFrame | gpd.GeoDataFrame], s
     if calendar_dates is not None:
         # Filter calendar_dates to our date range
         calendar_dates_filtered = calendar_dates.copy()
-        calendar_dates_filtered["date"] = pd.to_datetime(calendar_dates_filtered["date"], format="%Y%m%d")
+        calendar_dates_filtered["date"] = pd.to_datetime(
+            calendar_dates_filtered["date"],
+            format="%Y%m%d",
+        )
         calendar_dates_filtered = calendar_dates_filtered[
-            (calendar_dates_filtered["date"] >= start_date) &
-            (calendar_dates_filtered["date"] <= end_date)
+            (calendar_dates_filtered["date"] >= start_date)
+            & (calendar_dates_filtered["date"] <= end_date)
         ]
 
         # Process both added (1) and removed (2) service exceptions
         for exception_type, operation in [(1, service_days.add), (2, service_days.subtract)]:
-            exception_services = calendar_dates_filtered[calendar_dates_filtered["exception_type"] == exception_type]
+            exception_services = calendar_dates_filtered[
+                calendar_dates_filtered["exception_type"] == exception_type
+            ]
             if not exception_services.empty:
                 exception_counts = exception_services.groupby("service_id").size()
                 service_days = operation(exception_counts, fill_value=0)
 
     return service_days.astype(int).clip(lower=0)
+
 
 # ---------------------------------------------------------------------------
 # Geometry builders
@@ -219,9 +239,12 @@ def _linestring_geometries(shapes: pd.DataFrame) -> gpd.GeoSeries:
     # Create LineString geometries for each shape_id
     geoms: dict[str, LineString] = {}
     for sid, grp in shapes.groupby("shape_id"):
-        pts = [Point(lon, lat) for lon, lat in zip(grp["shape_pt_lon"], grp["shape_pt_lat"], strict=False)]
+        pts = [
+            Point(lon, lat)
+            for lon, lat in zip(grp["shape_pt_lon"], grp["shape_pt_lat"], strict=False)
+        ]
         if len(pts) >= 2:
-            geoms[sid] = LineString(pts)
+            geoms[str(sid)] = LineString(pts)
     return gpd.GeoSeries(geoms, crs="EPSG:4326")
 
 
@@ -274,7 +297,9 @@ def load_gtfs(path: str | Path) -> dict[str, pd.DataFrame | gpd.GeoDataFrame]:
     if (stops := gtfs.get("stops")) is not None and {"stop_lat", "stop_lon"} <= set(stops):
         geo = _point_geometries(stops)
         gtfs["stops"] = gpd.GeoDataFrame(
-            stops.dropna(subset=["stop_lat", "stop_lon"]), geometry=geo, crs="EPSG:4326",
+            stops.dropna(subset=["stop_lat", "stop_lon"]),
+            geometry=geo,
+            crs="EPSG:4326",
         )
 
     # Attach geometries to shapes if available
@@ -317,7 +342,9 @@ def _create_basic_od(stop_times: pd.DataFrame) -> pd.DataFrame:
 
 
 def _service_day_map(
-    calendar: pd.DataFrame, start: datetime, end: datetime,
+    calendar: pd.DataFrame,
+    start: datetime,
+    end: datetime,
 ) -> dict[str, list[datetime]]:
     """Return ``{service_id: [date, …]}`` within the given period."""
     # Prepare the calendar table
@@ -347,7 +374,8 @@ def _service_day_map(
 
 
 def _apply_calendar_exceptions(
-    calendar_dates: pd.DataFrame, srv_dates: dict[str, list[datetime]],
+    calendar_dates: pd.DataFrame,
+    srv_dates: dict[str, list[datetime]],
 ) -> None:
     """Mutate *srv_dates* **in-place** with exception rules."""
     # Ensure calendar_dates has the necessary columns and types
@@ -575,12 +603,21 @@ def travel_summary_graph(
     valid_pairs = valid_pairs[valid_pairs["travel_time"] > 0]
 
     # Aggregate Results
-    agg_calcs = valid_pairs.groupby(["stop_id", "next_stop_id"]).agg(
-        weighted_time_sum=("travel_time", lambda x: (x * valid_pairs.loc[x.index, "service_count"]).sum()),
-        total_service_count=("service_count", "sum"),
-    ).reset_index()
+    agg_calcs = (
+        valid_pairs.groupby(["stop_id", "next_stop_id"])
+        .agg(
+            weighted_time_sum=(
+                "travel_time",
+                lambda x: (x * valid_pairs.loc[x.index, "service_count"]).sum(),
+            ),
+            total_service_count=("service_count", "sum"),
+        )
+        .reset_index()
+    )
 
-    agg_calcs["mean_travel_time"] = agg_calcs["weighted_time_sum"] / agg_calcs["total_service_count"]
+    agg_calcs["mean_travel_time"] = (
+        agg_calcs["weighted_time_sum"] / agg_calcs["total_service_count"]
+    )
     agg_calcs["frequency"] = agg_calcs["total_service_count"]
 
     # Create GeoDataFrames for nodes and edges
@@ -601,6 +638,7 @@ def travel_summary_graph(
     ).set_index(["from_stop_id", "to_stop_id"])
 
     return (nodes_gdf, edges_gdf) if not as_nx else gdf_to_nx(nodes_gdf, edges_gdf)
+
 
 def _validate_calendar_dates(
     gtfs: dict[str, pd.DataFrame | gpd.GeoDataFrame],
@@ -659,6 +697,10 @@ def _validate_calendar_dates(
             raise ValueError(msg)
 
     # Validate that calendar_start <= calendar_end if both are provided
-    if calendar_start_dt is not None and calendar_end_dt is not None and calendar_start_dt > calendar_end_dt:
+    if (
+        calendar_start_dt is not None
+        and calendar_end_dt is not None
+        and calendar_start_dt > calendar_end_dt
+    ):
         msg = f"calendar_start ({calendar_start}) must be <= calendar_end ({calendar_end})"
         raise ValueError(msg)

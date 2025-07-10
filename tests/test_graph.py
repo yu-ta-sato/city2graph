@@ -23,6 +23,7 @@ import pandas as pd
 import pytest
 from shapely.geometry import Point
 
+import city2graph.graph as graph_module
 from city2graph.utils import GraphMetadata
 
 # Import torch-related modules conditionally
@@ -30,6 +31,7 @@ try:
     import torch
     from torch_geometric.data import Data
     from torch_geometric.data import HeteroData
+
     TORCH_AVAILABLE = True
 except ImportError:
     TORCH_AVAILABLE = False
@@ -54,9 +56,11 @@ class TestTorchAvailability:
         """Test that is_torch_available returns True when torch is available."""
         assert is_torch_available() is True
 
-    def test_functions_raise_import_error_without_torch(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_functions_raise_import_error_without_torch(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
         """Test that functions raise ImportError when torch is not available."""
-        import city2graph.graph as graph_module
         monkeypatch.setattr(graph_module, "TORCH_AVAILABLE", False)
 
         functions_to_test: list[tuple[Any, tuple[Any, ...]]] = [
@@ -199,7 +203,11 @@ class TestConversions:
     def test_nx_default_feature_and_label_naming(self, sample_nodes_gdf: gpd.GeoDataFrame) -> None:
         """Test NetworkX conversion with both default feature and label naming."""
         # Create data with both features and labels
-        data = gdf_to_pyg(sample_nodes_gdf, node_feature_cols=["feature1"], node_label_cols=["label1"])
+        data = gdf_to_pyg(
+            sample_nodes_gdf,
+            node_feature_cols=["feature1"],
+            node_label_cols=["label1"],
+        )
 
         # Clear both feature and label column names to trigger default naming
         data.graph_metadata.node_feature_cols = None
@@ -252,10 +260,13 @@ class TestValidation:
         with pytest.raises(TypeError, match="PyG object has 'graph_metadata' of incorrect type"):
             validate_pyg(data)
 
-    @pytest.mark.parametrize(("graph_type", "inconsistency"), [
-        ("homo_marked_as_hetero", "is Data but metadata.is_hetero is True"),
-        ("hetero_marked_as_homo", "HeteroData but metadata.is_hetero is False"),
-    ])
+    @pytest.mark.parametrize(
+        ("graph_type", "inconsistency"),
+        [
+            ("homo_marked_as_hetero", "is Data but metadata.is_hetero is True"),
+            ("hetero_marked_as_homo", "HeteroData but metadata.is_hetero is False"),
+        ],
+    )
     def test_inconsistent_metadata(
         self,
         graph_type: str,
@@ -347,14 +358,17 @@ class TestEdgeCases:
         with pytest.raises(ValueError, match="Graph has no nodes"):
             nx_to_pyg(empty_graph)
 
-    @pytest.mark.parametrize(("feature_type", "graph_type"), [
-        ("node_feature_cols", "homogeneous"),
-        ("node_label_cols", "homogeneous"),
-        ("edge_feature_cols", "homogeneous"),
-        ("node_feature_cols", "heterogeneous"),
-        ("node_label_cols", "heterogeneous"),
-        ("edge_feature_cols", "heterogeneous"),
-    ])
+    @pytest.mark.parametrize(
+        ("feature_type", "graph_type"),
+        [
+            ("node_feature_cols", "homogeneous"),
+            ("node_label_cols", "homogeneous"),
+            ("edge_feature_cols", "homogeneous"),
+            ("node_feature_cols", "heterogeneous"),
+            ("node_label_cols", "heterogeneous"),
+            ("edge_feature_cols", "heterogeneous"),
+        ],
+    )
     def test_invalid_feature_types(
         self,
         feature_type: str,
@@ -414,7 +428,10 @@ class TestSpecialCases:
         with pytest.raises(ValueError, match="label tensor size.*doesn't match"):
             validate_pyg(data)
 
-    def test_hetero_label_tensor_mismatch(self, sample_hetero_nodes_dict: dict[str, gpd.GeoDataFrame]) -> None:
+    def test_hetero_label_tensor_mismatch(
+        self,
+        sample_hetero_nodes_dict: dict[str, gpd.GeoDataFrame],
+    ) -> None:
         """Test heterogeneous label tensor size mismatch."""
         data = gdf_to_pyg(
             sample_hetero_nodes_dict,
@@ -425,7 +442,10 @@ class TestSpecialCases:
         # Corrupt the label tensor size for building node type
         data["building"].y = torch.randn(1, 1)  # Wrong size
 
-        with pytest.raises(ValueError, match="Node type 'building': label tensor size.*doesn't match"):
+        with pytest.raises(
+            ValueError,
+            match="Node type 'building': label tensor size.*doesn't match",
+        ):
             validate_pyg(data)
 
     def test_homo_validation_edge_cases(self, sample_nodes_gdf: gpd.GeoDataFrame) -> None:
@@ -463,7 +483,10 @@ class TestSpecialCases:
         # Edge attribute tensor mismatch
         data = gdf_to_pyg(sample_nodes_gdf, sample_edges_gdf, edge_feature_cols=["edge_feature1"])
         data.edge_attr = torch.randn(2, 1)  # Wrong size
-        with pytest.raises(ValueError, match="Edge attribute tensor size.*doesn't match number of edges"):
+        with pytest.raises(
+            ValueError,
+            match="Edge attribute tensor size.*doesn't match number of edges",
+        ):
             validate_pyg(data)
 
     def test_nx_default_feature_naming(self, sample_nodes_gdf: gpd.GeoDataFrame) -> None:
@@ -481,7 +504,10 @@ class TestSpecialCases:
             assert len(node_data) > 0  # Should have some attributes
             break
 
-    def test_homogeneous_feature_extraction_branches(self, sample_nodes_gdf: gpd.GeoDataFrame) -> None:
+    def test_homogeneous_feature_extraction_branches(
+        self,
+        sample_nodes_gdf: gpd.GeoDataFrame,
+    ) -> None:
         """Test homogeneous feature extraction branches - covers lines 1512-1513, 1523-1524."""
         # Create data with features and labels
         data = gdf_to_pyg(
@@ -499,7 +525,10 @@ class TestSpecialCases:
         assert "feature1" in nodes_restored.columns
         assert "label1" in nodes_restored.columns
 
-    def test_hetero_nx_default_naming(self, sample_hetero_nodes_dict: dict[str, gpd.GeoDataFrame]) -> None:
+    def test_hetero_nx_default_naming(
+        self,
+        sample_hetero_nodes_dict: dict[str, gpd.GeoDataFrame],
+    ) -> None:
         """Test heterogeneous NetworkX conversion with default naming - covers lines 1841, 1855."""
         # Create heterogeneous data with features and labels
         data = gdf_to_pyg(
@@ -516,7 +545,9 @@ class TestSpecialCases:
         nx_graph = pyg_to_nx(data)
 
         # Check that nodes have attributes with default names
-        building_nodes = [n for n, d in nx_graph.nodes(data=True) if d.get("node_type") == "building"]
+        building_nodes = [
+            n for n, d in nx_graph.nodes(data=True) if d.get("node_type") == "building"
+        ]
         if building_nodes:
             node_data = nx_graph.nodes[building_nodes[0]]
             # Should have default feature names like feat_0, label_0
@@ -524,12 +555,14 @@ class TestSpecialCases:
             has_default_label = any(key.startswith("label_") for key in node_data)
             # At least one should be true if we have features/labels
             non_meta_keys = [
-                k for k in node_data
-                if not k.startswith("_") and k not in {"node_type", "pos"}
+                k for k in node_data if not k.startswith("_") and k not in {"node_type", "pos"}
             ]
             assert has_default_feat or has_default_label or len(non_meta_keys) == 0
 
-    def test_heterogeneous_empty_edges(self, sample_hetero_nodes_dict: dict[str, gpd.GeoDataFrame]) -> None:
+    def test_heterogeneous_empty_edges(
+        self,
+        sample_hetero_nodes_dict: dict[str, gpd.GeoDataFrame],
+    ) -> None:
         """Test heterogeneous conversion with empty edges."""
         empty_edges_dict = {
             ("building", "connects_to", "road"): gpd.GeoDataFrame(
@@ -551,9 +584,12 @@ class TestSpecialCases:
 
     def test_feature_extraction_minimal_data(self) -> None:
         """Test feature extraction with minimal node data."""
-        minimal_nodes = gpd.GeoDataFrame({
-            "geometry": [Point(0, 0), Point(1, 1)],
-        }, index=[100, 200])
+        minimal_nodes = gpd.GeoDataFrame(
+            {
+                "geometry": [Point(0, 0), Point(1, 1)],
+            },
+            index=[100, 200],
+        )
         data = gdf_to_pyg(minimal_nodes)
         nodes_back, _ = pyg_to_gdf(data)
         assert isinstance(nodes_back, gpd.GeoDataFrame)
@@ -575,7 +611,10 @@ class TestSpecialCases:
             if hasattr(data, "x") and data.x is not None and data.x.numel() > 0:
                 assert any(key.startswith("feat_") for key in node_data)
 
-    def test_hetero_feature_extraction(self, sample_hetero_nodes_dict: dict[str, gpd.GeoDataFrame]) -> None:
+    def test_hetero_feature_extraction(
+        self,
+        sample_hetero_nodes_dict: dict[str, gpd.GeoDataFrame],
+    ) -> None:
         """Test heterogeneous feature extraction."""
         data = gdf_to_pyg(
             sample_hetero_nodes_dict,

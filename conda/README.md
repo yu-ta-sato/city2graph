@@ -6,7 +6,7 @@ This package is configured to build as a noarch package (architecture independen
 
 ## Noarch Build
 
-When building with noarch, the package does not include any architecture-specific binaries.  
+When building with noarch, the package does not include any architecture-specific binaries.
 Make sure your dependencies are compatible with a noarch build.
 
 ## Usage

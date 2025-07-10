@@ -1,4 +1,5 @@
 """Core fixtures for graph module testing - refactored for maintainability."""
+
 import pathlib
 import tempfile
 import typing
@@ -15,6 +16,17 @@ from shapely.geometry import LineString
 from shapely.geometry import Point
 from shapely.geometry import Polygon
 
+# Import city2graph modules at the top level to avoid PLC0415
+try:
+    from city2graph.graph import gdf_to_pyg
+    from city2graph.utils import gdf_to_nx
+    from city2graph.utils import nx_to_gdf
+except ImportError:
+    # These imports may fail if torch is not available
+    gdf_to_pyg = None
+    gdf_to_nx = None
+    nx_to_gdf = None
+
 if TYPE_CHECKING:
     from torch_geometric.data import Data
     from torch_geometric.data import HeteroData
@@ -24,6 +36,7 @@ try:
     import torch
     from torch_geometric.data import Data
     from torch_geometric.data import HeteroData
+
     TORCH_AVAILABLE = True
 except ImportError:
     TORCH_AVAILABLE = False
@@ -33,7 +46,8 @@ except ImportError:
 
 # Pytest skipif marker for tests requiring torch
 requires_torch = pytest.mark.skipif(
-    not TORCH_AVAILABLE, reason="PyTorch is not available",
+    not TORCH_AVAILABLE,
+    reason="PyTorch is not available",
 )
 
 # Import WGS84_CRS directly to avoid torch import issues
@@ -42,13 +56,15 @@ WGS84_CRS = "EPSG:4326"
 # Try to import torch, skip tests if not available
 try:
     import importlib.util
+
     TORCH_AVAILABLE = importlib.util.find_spec("torch") is not None
 except ImportError:
     TORCH_AVAILABLE = False
 
 # Pytest skipif marker for tests requiring torch
 requires_torch = pytest.mark.skipif(
-    not TORCH_AVAILABLE, reason="PyTorch or PyTorch Geometric is not available.",
+    not TORCH_AVAILABLE,
+    reason="PyTorch or PyTorch Geometric is not available.",
 )
 
 
@@ -87,7 +103,8 @@ def sample_edges_gdf() -> gpd.GeoDataFrame:
     }
     # Create a MultiIndex for source and target IDs
     multi_index = pd.MultiIndex.from_arrays(
-        [data["source_id"], data["target_id"]], names=("source_id", "target_id"),
+        [data["source_id"], data["target_id"]],
+        names=("source_id", "target_id"),
     )
     return gpd.GeoDataFrame(data, index=multi_index, crs="EPSG:27700")
 
@@ -136,7 +153,9 @@ def sample_hetero_edges_dict(sample_crs: str) -> dict[tuple[str, str, str], gpd.
         names=("building_id", "road_id"),
     )
     connections_gdf = gpd.GeoDataFrame(
-        connections_data, index=connections_multi_index, crs=sample_crs,
+        connections_data,
+        index=connections_multi_index,
+        crs=sample_crs,
     )
 
     # Roads connect to other roads (example of same-type connection)
@@ -151,7 +170,9 @@ def sample_hetero_edges_dict(sample_crs: str) -> dict[tuple[str, str, str], gpd.
         names=("source_road_id", "target_road_id"),
     )
     road_links_gdf = gpd.GeoDataFrame(
-        road_links_data, index=road_links_multi_index, crs=sample_crs,
+        road_links_data,
+        index=road_links_multi_index,
+        crs=sample_crs,
     )
 
     return {
@@ -177,7 +198,6 @@ def sample_nx_graph() -> nx.Graph:
 @pytest.fixture
 def sample_pyg_data(sample_nodes_gdf: gpd.GeoDataFrame) -> object:
     """Fixture for a sample PyG Data object."""
-    from city2graph.graph import gdf_to_pyg
     return gdf_to_pyg(sample_nodes_gdf)
 
 
@@ -187,13 +207,11 @@ def sample_pyg_hetero_data(
     sample_hetero_edges_dict: dict[tuple[str, str, str], gpd.GeoDataFrame],
 ) -> object:
     """Fixture for a sample PyG HeteroData object."""
-    from city2graph.graph import gdf_to_pyg
     # Ensure some edges exist for testing edge feature naming
     if not sample_hetero_edges_dict:
         # Create a dummy edge if the fixture is empty
-        from shapely.geometry import LineString
         dummy_edge_gdf = gpd.GeoDataFrame(
-            {"source_id": ["b1"], "target_id": ["r1"], "geometry": [LineString([(0,0),(1,1)])]},
+            {"source_id": ["b1"], "target_id": ["r1"], "geometry": [LineString([(0, 0), (1, 1)])]},
             index=pd.MultiIndex.from_arrays([["b1"], ["r1"]], names=["source_id", "target_id"]),
             crs=sample_hetero_nodes_dict["building"].crs,
         )
@@ -249,6 +267,7 @@ def custom_center_point() -> Point:
 # ============================================================================
 # Helper Functions for Creating and Modifying Test Data
 # ============================================================================
+
 
 def _create_gdf(
     geometries: list[Any],
@@ -353,16 +372,28 @@ def create_empty_gtfs_component(component_type: str) -> gpd.GeoDataFrame | pd.Da
             crs="EPSG:4326",
         )
     if component_type == "routes":
-        return pd.DataFrame(columns=["route_id", "agency_id", "route_short_name", "route_long_name", "route_type"])
+        return pd.DataFrame(
+            columns=["route_id", "agency_id", "route_short_name", "route_long_name", "route_type"],
+        )
     if component_type == "trips":
         return pd.DataFrame(columns=["route_id", "service_id", "trip_id"])
     if component_type == "stop_times":
-        return pd.DataFrame(columns=["trip_id", "arrival_time", "departure_time", "stop_id", "stop_sequence"])
+        return pd.DataFrame(
+            columns=["trip_id", "arrival_time", "departure_time", "stop_id", "stop_sequence"],
+        )
     if component_type == "calendar":
         return pd.DataFrame(
             columns=[
-                "service_id", "monday", "tuesday", "wednesday", "thursday",
-                "friday", "saturday", "sunday", "start_date", "end_date",
+                "service_id",
+                "monday",
+                "tuesday",
+                "wednesday",
+                "thursday",
+                "friday",
+                "saturday",
+                "sunday",
+                "start_date",
+                "end_date",
             ],
         )
     return pd.DataFrame()
@@ -438,7 +469,10 @@ def sample_segments_gdf(geojson_data_path: pathlib.Path, sample_crs: str) -> gpd
 
 
 @pytest.fixture
-def sample_tessellation_gdf(sample_buildings_gdf: gpd.GeoDataFrame, sample_crs: str) -> gpd.GeoDataFrame:
+def sample_tessellation_gdf(
+    sample_buildings_gdf: gpd.GeoDataFrame,
+    sample_crs: str,
+) -> gpd.GeoDataFrame:
     """Return a simple tessellation-like GDF from sample_buildings_gdf for testing p2p and p2pub.
 
     This is a placeholder for actual tessellation output.
@@ -446,7 +480,9 @@ def sample_tessellation_gdf(sample_buildings_gdf: gpd.GeoDataFrame, sample_crs: 
     """
     if sample_buildings_gdf.empty:
         return _create_gdf(
-            [], [{"private_id": None, "enclosure_index": None}], crs=sample_crs,
+            [],
+            [{"private_id": None, "enclosure_index": None}],
+            crs=sample_crs,
         )
 
     # For simplicity, let's assume each building corresponds to one tessellation cell
@@ -464,10 +500,12 @@ def mg_center_point(sample_segments_gdf: gpd.GeoDataFrame, sample_crs: str) -> g
     """Return a center point for filtering, e.g., centroid of the first segment."""
     if not sample_segments_gdf.empty:
         return gpd.GeoSeries(
-            [sample_segments_gdf.geometry.iloc[0].centroid], crs=sample_crs,
+            [sample_segments_gdf.geometry.iloc[0].centroid],
+            crs=sample_crs,
         )
     return gpd.GeoSeries(
-        [Point(0, 0)], crs=sample_crs,
+        [Point(0, 0)],
+        crs=sample_crs,
     )  # Default if segments are empty
 
 
@@ -507,7 +545,9 @@ def private_gdf_no_private_id(
 def segments_no_public_id_gdf(sample_crs: str) -> gpd.GeoDataFrame:
     """Synthetic segments GDF lacking 'public_id'."""
     return _create_gdf(
-        [LineString([(0, 0), (1, 1)])], [{"other_id": 10}], crs=sample_crs,
+        [LineString([(0, 0), (1, 1)])],
+        [{"other_id": 10}],
+        crs=sample_crs,
     )
 
 
@@ -562,7 +602,9 @@ def segments_gdf_with_custom_barrier(sample_segments_gdf: gpd.GeoDataFrame) -> g
         # Handle empty input: create the column with correct dtype and CRS
         segments_gdf_copy = sample_segments_gdf.copy()
         segments_gdf_copy["custom_barrier"] = gpd.GeoSeries(
-            [], dtype="geometry", crs=segments_gdf_copy.crs,
+            [],
+            dtype="geometry",
+            crs=segments_gdf_copy.crs,
         )
         return segments_gdf_copy
 
@@ -580,7 +622,8 @@ def segments_gdf_with_custom_barrier(sample_segments_gdf: gpd.GeoDataFrame) -> g
         ],
     )
     segments_gdf["custom_barrier"] = gpd.GeoSeries(
-        [barrier_poly], crs=segments_gdf.crs,
+        [barrier_poly],
+        crs=segments_gdf.crs,
     )
     return segments_gdf
 
@@ -607,8 +650,8 @@ def not_a_gdf() -> pd.DataFrame:
     return pd.DataFrame({"col1": [1, 2], "col2": [3, 4]})
 
 
-
 # --- Fixtures for validate_nx testing ---
+
 
 @pytest.fixture
 def sample_nx_multigraph() -> nx.MultiGraph:
@@ -879,7 +922,10 @@ def segments_gdf_with_multiindex_public_id(sample_crs: str) -> gpd.GeoDataFrame:
     }
     gdf = gpd.GeoDataFrame(data, crs=sample_crs)
     # Create a dummy MultiIndex for public_id
-    gdf["public_id"] = pd.MultiIndex.from_tuples([("A", 1), ("B", 2), ("C", 3)], names=["type", "idx"])
+    gdf["public_id"] = pd.MultiIndex.from_tuples(
+        [("A", 1), ("B", 2), ("C", 3)],
+        names=["type", "idx"],
+    )
     return gdf
 
 
@@ -893,6 +939,7 @@ def empty_hetero_nodes_dict() -> dict[str, gpd.GeoDataFrame]:
 def empty_hetero_edges_dict() -> dict[tuple[str, str, str], gpd.GeoDataFrame]:
     """Fixture for an empty dictionary of heterogeneous edges GeoDataFrames."""
     return {}
+
 
 @pytest.fixture
 def empty_nodes_gdf(sample_crs: str) -> gpd.GeoDataFrame:
@@ -931,9 +978,6 @@ def coincident_nodes_gdf(sample_crs: str) -> gpd.GeoDataFrame:
 @pytest.fixture
 def network_gdf_with_pos(sample_crs: str) -> gpd.GeoDataFrame:
     """Return a network GeoDataFrame with proper pos attributes for testing."""
-    from city2graph.utils import gdf_to_nx
-    from city2graph.utils import nx_to_gdf
-
     # Create a simple network
     data = {
         "edge_id": ["e1", "e2"],
@@ -945,7 +989,8 @@ def network_gdf_with_pos(sample_crs: str) -> gpd.GeoDataFrame:
         ],
     }
     multi_index = pd.MultiIndex.from_arrays(
-        [data["source_id"], data["target_id"]], names=("source_id", "target_id"),
+        [data["source_id"], data["target_id"]],
+        names=("source_id", "target_id"),
     )
     edges_gdf = gpd.GeoDataFrame(data, index=multi_index, crs=sample_crs)
 
@@ -966,7 +1011,8 @@ def network_gdf_no_pos(sample_crs: str) -> gpd.GeoDataFrame:
         "geometry": [LineString([(0, 0), (1, 1)])],
     }
     multi_index = pd.MultiIndex.from_arrays(
-        [data["source_id"], data["target_id"]], names=("source_id", "target_id"),
+        [data["source_id"], data["target_id"]],
+        names=("source_id", "target_id"),
     )
     return gpd.GeoDataFrame(data, index=multi_index, crs=sample_crs)
 
@@ -1020,37 +1066,43 @@ def data_sample_connectors_gdf() -> gpd.GeoDataFrame:
 @pytest.fixture
 def realistic_segments_gdf() -> gpd.GeoDataFrame:
     """Create a realistic segments GeoDataFrame."""
-    return gpd.GeoDataFrame({
-        "id": ["seg1", "seg2", "seg3"],
-        "connectors": [
-            '[{"connector_id": "conn1", "at": 0.0}, {"connector_id": "conn2", "at": 1.0}]',
-            '[{"connector_id": "conn2", "at": 0.0}, {"connector_id": "conn3", "at": 0.5}]',
-            "[]",
-        ],
-        "level_rules": [
-            '[{"value": 1, "between": [0.2, 0.8]}]',
-            "",
-            '[{"value": 0}]',
-        ],
-        "geometry": [
-            LineString([(-74.01, 40.70), (-74.005, 40.705)]),
-            LineString([(-74.005, 40.705), (-73.99, 40.72)]),
-            LineString([(-73.99, 40.72), (-73.985, 40.715)]),
-        ],
-    }, crs=WGS84_CRS)
+    return gpd.GeoDataFrame(
+        {
+            "id": ["seg1", "seg2", "seg3"],
+            "connectors": [
+                '[{"connector_id": "conn1", "at": 0.0}, {"connector_id": "conn2", "at": 1.0}]',
+                '[{"connector_id": "conn2", "at": 0.0}, {"connector_id": "conn3", "at": 0.5}]',
+                "[]",
+            ],
+            "level_rules": [
+                '[{"value": 1, "between": [0.2, 0.8]}]',
+                "",
+                '[{"value": 0}]',
+            ],
+            "geometry": [
+                LineString([(-74.01, 40.70), (-74.005, 40.705)]),
+                LineString([(-74.005, 40.705), (-73.99, 40.72)]),
+                LineString([(-73.99, 40.72), (-73.985, 40.715)]),
+            ],
+        },
+        crs=WGS84_CRS,
+    )
 
 
 @pytest.fixture
 def realistic_connectors_gdf() -> gpd.GeoDataFrame:
     """Create a realistic connectors GeoDataFrame."""
-    return gpd.GeoDataFrame({
-        "id": ["conn1", "conn2", "conn3"],
-        "geometry": [
-            Point(-74.01, 40.70),
-            Point(-74.005, 40.705),
-            Point(-73.99, 40.72),
-        ],
-    }, crs=WGS84_CRS)
+    return gpd.GeoDataFrame(
+        {
+            "id": ["conn1", "conn2", "conn3"],
+            "geometry": [
+                Point(-74.01, 40.70),
+                Point(-74.005, 40.705),
+                Point(-73.99, 40.72),
+            ],
+        },
+        crs=WGS84_CRS,
+    )
 
 
 @pytest.fixture
@@ -1096,7 +1148,9 @@ def sample_gtfs_zip() -> typing.Generator[str, None, None]:
             zf.writestr("routes.txt", routes_data)
 
             # trips.txt
-            trips_data = """route_id,service_id,trip_id\nroute1,service1,trip1\nroute1,service1,trip2\n"""
+            trips_data = (
+                """route_id,service_id,trip_id\nroute1,service1,trip1\nroute1,service1,trip2\n"""
+            )
             zf.writestr("trips.txt", trips_data)
 
             # stop_times.txt
@@ -1229,40 +1283,62 @@ def sample_gtfs_dict() -> dict[str, pd.DataFrame]:
     stops_gdf = gpd.GeoDataFrame(stops_data, crs="EPSG:4326")
 
     # Create other DataFrames
-    routes_df = pd.DataFrame({
-        "route_id": ["route1"],
-        "agency_id": ["1"],
-        "route_short_name": ["1"],
-        "route_long_name": ["Test Route 1"],
-        "route_type": [3],
-    })
+    routes_df = pd.DataFrame(
+        {
+            "route_id": ["route1"],
+            "agency_id": ["1"],
+            "route_short_name": ["1"],
+            "route_long_name": ["Test Route 1"],
+            "route_type": [3],
+        },
+    )
 
-    trips_df = pd.DataFrame({
-        "route_id": ["route1", "route1"],
-        "service_id": ["service1", "service1"],
-        "trip_id": ["trip1", "trip2"],
-    })
+    trips_df = pd.DataFrame(
+        {
+            "route_id": ["route1", "route1"],
+            "service_id": ["service1", "service1"],
+            "trip_id": ["trip1", "trip2"],
+        },
+    )
 
-    stop_times_df = pd.DataFrame({
-        "trip_id": ["trip1", "trip1", "trip1", "trip2", "trip2", "trip2"],
-        "arrival_time": ["08:00:00", "08:05:00", "08:10:00", "09:00:00", "09:05:00", "09:10:00"],
-        "departure_time": ["08:00:00", "08:05:00", "08:10:00", "09:00:00", "09:05:00", "09:10:00"],
-        "stop_id": ["stop1", "stop2", "stop3", "stop1", "stop2", "stop3"],
-        "stop_sequence": [1, 2, 3, 1, 2, 3],
-    })
+    stop_times_df = pd.DataFrame(
+        {
+            "trip_id": ["trip1", "trip1", "trip1", "trip2", "trip2", "trip2"],
+            "arrival_time": [
+                "08:00:00",
+                "08:05:00",
+                "08:10:00",
+                "09:00:00",
+                "09:05:00",
+                "09:10:00",
+            ],
+            "departure_time": [
+                "08:00:00",
+                "08:05:00",
+                "08:10:00",
+                "09:00:00",
+                "09:05:00",
+                "09:10:00",
+            ],
+            "stop_id": ["stop1", "stop2", "stop3", "stop1", "stop2", "stop3"],
+            "stop_sequence": [1, 2, 3, 1, 2, 3],
+        },
+    )
 
-    calendar_df = pd.DataFrame({
-        "service_id": ["service1"],
-        "monday": [True],
-        "tuesday": [True],
-        "wednesday": [True],
-        "thursday": [True],
-        "friday": [True],
-        "saturday": [False],
-        "sunday": [False],
-        "start_date": ["20240101"],
-        "end_date": ["20241231"],
-    })
+    calendar_df = pd.DataFrame(
+        {
+            "service_id": ["service1"],
+            "monday": [True],
+            "tuesday": [True],
+            "wednesday": [True],
+            "thursday": [True],
+            "friday": [True],
+            "saturday": [False],
+            "sunday": [False],
+            "start_date": ["20240101"],
+            "end_date": ["20241231"],
+        },
+    )
 
     return {
         "stops": stops_gdf,
@@ -1274,19 +1350,24 @@ def sample_gtfs_dict() -> dict[str, pd.DataFrame]:
 
 
 @pytest.fixture
-def sample_gtfs_dict_with_exceptions(sample_gtfs_dict: dict[str, pd.DataFrame]) -> dict[str, pd.DataFrame]:
+def sample_gtfs_dict_with_exceptions(
+    sample_gtfs_dict: dict[str, pd.DataFrame],
+) -> dict[str, pd.DataFrame]:
     """Create a sample GTFS dictionary with calendar exceptions."""
     gtfs_dict = sample_gtfs_dict.copy()
 
     # Add calendar_dates for exceptions
-    calendar_dates_df = pd.DataFrame({
-        "service_id": ["service1", "service1"],
-        "date": ["20240101", "20240102"],
-        "exception_type": [2, 1],  # 2 = remove service, 1 = add service
-    })
+    calendar_dates_df = pd.DataFrame(
+        {
+            "service_id": ["service1", "service1"],
+            "date": ["20240101", "20240102"],
+            "exception_type": [2, 1],  # 2 = remove service, 1 = add service
+        },
+    )
 
     gtfs_dict["calendar_dates"] = calendar_dates_df
     return gtfs_dict
+
 
 @pytest.fixture
 def not_a_pyg_object() -> str:
@@ -1298,60 +1379,87 @@ def not_a_pyg_object() -> str:
 @pytest.fixture
 def all_invalid_geom_gdf(sample_crs: str) -> gpd.GeoDataFrame:
     """Fixture for GeoDataFrame with all invalid geometries."""
-    return gpd.GeoDataFrame({
-        "id": [1, 2],
-        "geometry": [None, Point(0, 0).buffer(0).buffer(-1)],  # All invalid
-    }, crs=sample_crs)
+    return gpd.GeoDataFrame(
+        {
+            "id": [1, 2],
+            "geometry": [None, Point(0, 0).buffer(0).buffer(-1)],  # All invalid
+        },
+        crs=sample_crs,
+    )
 
 
 @pytest.fixture
 def invalid_geom_gdf(sample_crs: str) -> gpd.GeoDataFrame:
     """Fixture for GeoDataFrame with mixed valid/invalid geometries."""
-    return gpd.GeoDataFrame({
-        "id": [1, 2, 3, 4],
-        "geometry": [Point(0, 0), None, Point(0, 0).buffer(0).buffer(-1), Point(1, 1)],  # Mixed
-    }, crs=sample_crs)
+    return gpd.GeoDataFrame(
+        {
+            "id": [1, 2, 3, 4],
+            "geometry": [Point(0, 0), None, Point(0, 0).buffer(0).buffer(-1), Point(1, 1)],  # Mixed
+        },
+        crs=sample_crs,
+    )
 
 
 @pytest.fixture
 def multiindex_nodes_gdf(sample_crs: str) -> gpd.GeoDataFrame:
     """Fixture for nodes GeoDataFrame with MultiIndex."""
-    return gpd.GeoDataFrame({
-        "geometry": [Point(0, 0), Point(1, 1)],
-    }, index=pd.MultiIndex.from_tuples([("type1", 0), ("type1", 1)], names=["node_type", "node_id"]), crs=sample_crs)
+    return gpd.GeoDataFrame(
+        {
+            "geometry": [Point(0, 0), Point(1, 1)],
+        },
+        index=pd.MultiIndex.from_tuples(
+            [("type1", 0), ("type1", 1)],
+            names=["node_type", "node_id"],
+        ),
+        crs=sample_crs,
+    )
 
 
 @pytest.fixture
 def single_name_index_nodes_gdf(sample_crs: str) -> gpd.GeoDataFrame:
     """Fixture for nodes GeoDataFrame with single-level named index."""
-    return gpd.GeoDataFrame({
-        "geometry": [Point(0, 0), Point(1, 1)],
-    }, index=pd.Index([0, 1], name="single_name"), crs=sample_crs)
+    return gpd.GeoDataFrame(
+        {
+            "geometry": [Point(0, 0), Point(1, 1)],
+        },
+        index=pd.Index([0, 1], name="single_name"),
+        crs=sample_crs,
+    )
 
 
 @pytest.fixture
 def simple_edges_gdf(sample_crs: str) -> gpd.GeoDataFrame:
     """Fixture for simple edges GeoDataFrame."""
-    return gpd.GeoDataFrame({
-        "geometry": [LineString([(0, 0), (1, 1)])],
-    }, crs=sample_crs)
+    return gpd.GeoDataFrame(
+        {
+            "geometry": [LineString([(0, 0), (1, 1)])],
+        },
+        crs=sample_crs,
+    )
 
 
 @pytest.fixture
 def directed_multigraph_edges_gdf(sample_crs: str) -> gpd.GeoDataFrame:
     """Fixture for edges suitable for directed multigraph testing."""
-    return gpd.GeoDataFrame({
-        "geometry": [LineString([(0, 0), (1, 1)])],
-    }, crs=sample_crs)
+    return gpd.GeoDataFrame(
+        {
+            "geometry": [LineString([(0, 0), (1, 1)])],
+        },
+        crs=sample_crs,
+    )
 
 
 @pytest.fixture
 def hetero_edges_with_multiindex(sample_crs: str) -> dict[tuple[str, str, str], gpd.GeoDataFrame]:
     """Fixture for heterogeneous edges with MultiIndex."""
     return {
-        ("type1", "connects", "type2"): gpd.GeoDataFrame({
-            "geometry": [LineString([(0, 0), (1, 1)])],
-        }, index=pd.MultiIndex.from_tuples([("a", "b")], names=["from", "to"]), crs=sample_crs),
+        ("type1", "connects", "type2"): gpd.GeoDataFrame(
+            {
+                "geometry": [LineString([(0, 0), (1, 1)])],
+            },
+            index=pd.MultiIndex.from_tuples([("a", "b")], names=["from", "to"]),
+            crs=sample_crs,
+        ),
     }
 
 
@@ -1402,8 +1510,10 @@ def hetero_graph_no_node_type(sample_crs: str) -> nx.Graph:
     graph.add_node(1, pos=(0, 0))  # No node_type
     graph.add_edge(1, 2)
     graph.graph = {
-        "crs": sample_crs, "is_hetero": True,
-        "node_types": ["type1"], "edge_types": [("type1", "connects", "type1")],
+        "crs": sample_crs,
+        "is_hetero": True,
+        "node_types": ["type1"],
+        "edge_types": [("type1", "connects", "type1")],
     }
     return graph
 
@@ -1416,8 +1526,10 @@ def hetero_graph_no_edge_type(sample_crs: str) -> nx.Graph:
     graph.add_node(2, pos=(1, 1), node_type="type1")
     graph.add_edge(1, 2)  # No edge_type
     graph.graph = {
-        "crs": sample_crs, "is_hetero": True,
-        "node_types": ["type1"], "edge_types": [("type1", "connects", "type1")],
+        "crs": sample_crs,
+        "is_hetero": True,
+        "node_types": ["type1"],
+        "edge_types": [("type1", "connects", "type1")],
     }
     return graph
 
@@ -1430,7 +1542,8 @@ def regular_hetero_graph(sample_crs: str) -> nx.Graph:
     graph.add_node(2, pos=(1, 1), node_type="road")
     graph.add_edge(1, 2, edge_type=("building", "connects", "road"))
     graph.graph = {
-        "crs": sample_crs, "is_hetero": True,
+        "crs": sample_crs,
+        "is_hetero": True,
         "node_types": ["building", "road"],
         "edge_types": [("building", "connects", "road")],
     }
@@ -1443,7 +1556,8 @@ def empty_hetero_graph(sample_crs: str) -> nx.Graph:
     graph = nx.Graph()
     graph.add_node(1, pos=(0, 0), node_type="building")
     graph.graph = {
-        "crs": sample_crs, "is_hetero": True,
+        "crs": sample_crs,
+        "is_hetero": True,
         "node_types": ["building"],
         "edge_types": [("building", "connects", "road")],
     }
@@ -1520,10 +1634,16 @@ def hetero_multigraph_with_original_indices(sample_crs: str) -> nx.MultiGraph:
     graph.add_node(1, pos=(0, 0), node_type="building")
     graph.add_node(2, pos=(1, 1), node_type="road")
     # Add edge with _original_edge_index attribute to trigger line 695-696
-    graph.add_edge(1, 2, key=0, edge_type=("building", "connects", "road"),
-                   _original_edge_index=("custom", "index", "key"))
+    graph.add_edge(
+        1,
+        2,
+        key=0,
+        edge_type=("building", "connects", "road"),
+        _original_edge_index=("custom", "index", "key"),
+    )
     graph.graph = {
-        "crs": sample_crs, "is_hetero": True,
+        "crs": sample_crs,
+        "is_hetero": True,
         "node_types": ["building", "road"],
         "edge_types": [("building", "connects", "road")],
     }
@@ -1537,10 +1657,15 @@ def hetero_graph_with_original_indices(sample_crs: str) -> nx.Graph:
     graph.add_node(1, pos=(0, 0), node_type="building")
     graph.add_node(2, pos=(1, 1), node_type="road")
     # Add edge with _original_edge_index attribute to trigger line 711
-    graph.add_edge(1, 2, edge_type=("building", "connects", "road"),
-                   _original_edge_index=("custom", "index"))
+    graph.add_edge(
+        1,
+        2,
+        edge_type=("building", "connects", "road"),
+        _original_edge_index=("custom", "index"),
+    )
     graph.graph = {
-        "crs": sample_crs, "is_hetero": True,
+        "crs": sample_crs,
+        "is_hetero": True,
         "node_types": ["building", "road"],
         "edge_types": [("building", "connects", "road")],
     }
@@ -1553,7 +1678,8 @@ def empty_hetero_multigraph(sample_crs: str) -> nx.MultiGraph:
     graph = nx.MultiGraph()
     graph.add_node(1, pos=(0, 0), node_type="building")
     graph.graph = {
-        "crs": sample_crs, "is_hetero": True,
+        "crs": sample_crs,
+        "is_hetero": True,
         "node_types": ["building"],
         "edge_types": [("building", "connects", "road")],  # Edge type exists but no actual edges
     }
@@ -1563,10 +1689,13 @@ def empty_hetero_multigraph(sample_crs: str) -> nx.MultiGraph:
 @pytest.fixture
 def duplicate_segments_gdf(sample_crs: str) -> gpd.GeoDataFrame:
     """Fixture for duplicate segments test data."""
-    return gpd.GeoDataFrame({
-        "geometry": [LineString([(0, 0), (1, 1)]), LineString([(0, 0), (1, 1)])],  # Duplicates
-        "road_type": ["primary", "secondary"],
-    }, crs=sample_crs)
+    return gpd.GeoDataFrame(
+        {
+            "geometry": [LineString([(0, 0), (1, 1)]), LineString([(0, 0), (1, 1)])],  # Duplicates
+            "road_type": ["primary", "secondary"],
+        },
+        crs=sample_crs,
+    )
 
 
 @pytest.fixture
@@ -1579,9 +1708,13 @@ def simple_nodes_dict_type1(sample_crs: str) -> dict[str, gpd.GeoDataFrame]:
 def simple_edges_dict_type1_type2(sample_crs: str) -> dict[tuple[str, str, str], gpd.GeoDataFrame]:
     """Fixture for simple edges dict connecting type1 to type2."""
     return {
-        ("type1", "connects", "type2"): gpd.GeoDataFrame({
-            "geometry": [LineString([(0, 0), (1, 1)])],
-        }, index=pd.MultiIndex.from_tuples([("a", "b")], names=["from", "to"]), crs=sample_crs),
+        ("type1", "connects", "type2"): gpd.GeoDataFrame(
+            {
+                "geometry": [LineString([(0, 0), (1, 1)])],
+            },
+            index=pd.MultiIndex.from_tuples([("a", "b")], names=["from", "to"]),
+            crs=sample_crs,
+        ),
     }
 
 
@@ -1596,11 +1729,13 @@ def gtfs_dict_add_service(sample_gtfs_dict: dict[str, pd.DataFrame]) -> dict[str
     gtfs_dict["calendar"] = calendar_df
 
     # Add calendar_dates that adds service on the test date
-    calendar_dates_df = pd.DataFrame({
-        "service_id": ["service1"],
-        "date": ["20240101"],
-        "exception_type": [1],  # 1 = add service
-    })
+    calendar_dates_df = pd.DataFrame(
+        {
+            "service_id": ["service1"],
+            "date": ["20240101"],
+            "exception_type": [1],  # 1 = add service
+        },
+    )
 
     gtfs_dict["calendar_dates"] = calendar_dates_df
     return gtfs_dict
@@ -1617,11 +1752,13 @@ def gtfs_dict_remove_service(sample_gtfs_dict: dict[str, pd.DataFrame]) -> dict[
     gtfs_dict["calendar"] = calendar_df
 
     # Add calendar_dates that removes service on the test date
-    calendar_dates_df = pd.DataFrame({
-        "service_id": ["service1"],
-        "date": ["20240101"],
-        "exception_type": [2],  # 2 = remove service
-    })
+    calendar_dates_df = pd.DataFrame(
+        {
+            "service_id": ["service1"],
+            "date": ["20240101"],
+            "exception_type": [2],  # 2 = remove service
+        },
+    )
 
     gtfs_dict["calendar_dates"] = calendar_dates_df
     return gtfs_dict

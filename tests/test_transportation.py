@@ -8,6 +8,7 @@ from pathlib import Path
 
 # Third-party imports
 import geopandas as gpd
+import networkx as nx
 import pandas as pd
 import pytest
 from shapely.geometry import LineString
@@ -82,8 +83,14 @@ class TestGetOdPairs:
 
         # Check required columns
         expected_cols = {
-            "trip_id", "service_id", "orig_stop_id", "dest_stop_id",
-            "departure_ts", "arrival_ts", "travel_time_sec", "date",
+            "trip_id",
+            "service_id",
+            "orig_stop_id",
+            "dest_stop_id",
+            "departure_ts",
+            "arrival_ts",
+            "travel_time_sec",
+            "date",
         }
         assert expected_cols.issubset(result.columns)
 
@@ -120,7 +127,10 @@ class TestGetOdPairs:
         assert isinstance(result, pd.DataFrame)
         assert len(result) == 0
 
-    def test_get_od_pairs_with_calendar_dates(self, sample_gtfs_dict_with_exceptions: dict[str, pd.DataFrame]) -> None:
+    def test_get_od_pairs_with_calendar_dates(
+        self,
+        sample_gtfs_dict_with_exceptions: dict[str, pd.DataFrame],
+    ) -> None:
         """Test OD pairs with calendar exceptions."""
         result = get_od_pairs(sample_gtfs_dict_with_exceptions)
 
@@ -128,7 +138,10 @@ class TestGetOdPairs:
         # Should handle calendar exceptions properly
         assert len(result) > 0
 
-    def test_get_od_pairs_with_malformed_times(self, sample_gtfs_dict: dict[str, pd.DataFrame]) -> None:
+    def test_get_od_pairs_with_malformed_times(
+        self,
+        sample_gtfs_dict: dict[str, pd.DataFrame],
+    ) -> None:
         """Test OD pairs with malformed time values that trigger non-string handling."""
         # Create a modified GTFS with some malformed times
         gtfs_copy = sample_gtfs_dict.copy()
@@ -147,32 +160,45 @@ class TestGetOdPairs:
     def test_get_od_pairs_removal_exception_integration(self) -> None:
         """Test removal exception via calendar_dates in get_od_pairs."""
         # Minimal GTFS with one trip on 2024-01-01, then removed by exception
-        stops = pd.DataFrame({
-            "stop_id": ["s1", "s2"],
-            "stop_lat": [0.0, 1.0],
-            "stop_lon": [0.0, 1.0],
-        })
+        stops = pd.DataFrame(
+            {
+                "stop_id": ["s1", "s2"],
+                "stop_lat": [0.0, 1.0],
+                "stop_lon": [0.0, 1.0],
+            },
+        )
         trips = pd.DataFrame({"trip_id": ["t1"], "service_id": ["svc"]})
         # stop_times should not include service_id; it's merged from trips
-        stop_times = pd.DataFrame({
-            "trip_id": ["t1", "t1"],
-            "stop_id": ["s1", "s2"],
-            "stop_sequence": [1, 2],
-            "departure_time": ["08:00:00", "08:10:00"],
-            "arrival_time": ["08:10:00", "08:20:00"],
-        })
-        calendar = pd.DataFrame({
-            "service_id": ["svc"],
-            "start_date": ["20240101"],
-            "end_date": ["20240101"],
-            "monday": [False], "tuesday": [False], "wednesday": [False],
-            "thursday": [False], "friday": [False], "saturday": [False], "sunday": [True],
-        })
-        calendar_dates = pd.DataFrame({
-            "service_id": ["svc"],
-            "date": ["20240101"],
-            "exception_type": [2],
-        })
+        stop_times = pd.DataFrame(
+            {
+                "trip_id": ["t1", "t1"],
+                "stop_id": ["s1", "s2"],
+                "stop_sequence": [1, 2],
+                "departure_time": ["08:00:00", "08:10:00"],
+                "arrival_time": ["08:10:00", "08:20:00"],
+            },
+        )
+        calendar = pd.DataFrame(
+            {
+                "service_id": ["svc"],
+                "start_date": ["20240101"],
+                "end_date": ["20240101"],
+                "monday": [False],
+                "tuesday": [False],
+                "wednesday": [False],
+                "thursday": [False],
+                "friday": [False],
+                "saturday": [False],
+                "sunday": [True],
+            },
+        )
+        calendar_dates = pd.DataFrame(
+            {
+                "service_id": ["svc"],
+                "date": ["20240101"],
+                "exception_type": [2],
+            },
+        )
         gtfs = {
             "stops": stops,
             "trips": trips,
@@ -208,7 +234,10 @@ class TestTravelSummaryGraph:
         assert isinstance(edges_gdf.index, pd.MultiIndex)
         assert edges_gdf.index.names == ["from_stop_id", "to_stop_id"]
 
-    def test_travel_summary_graph_time_filter(self, sample_gtfs_dict: dict[str, pd.DataFrame]) -> None:
+    def test_travel_summary_graph_time_filter(
+        self,
+        sample_gtfs_dict: dict[str, pd.DataFrame],
+    ) -> None:
         """Test travel summary graph with time filtering."""
         nodes_gdf, edges_gdf = travel_summary_graph(
             sample_gtfs_dict,
@@ -221,7 +250,10 @@ class TestTravelSummaryGraph:
         # Should have fewer edges due to time filtering
         assert len(edges_gdf) >= 0
 
-    def test_travel_summary_graph_calendar_range(self, sample_gtfs_dict: dict[str, pd.DataFrame]) -> None:
+    def test_travel_summary_graph_calendar_range(
+        self,
+        sample_gtfs_dict: dict[str, pd.DataFrame],
+    ) -> None:
         """Test travel summary graph with calendar date range."""
         nodes_gdf, edges_gdf = travel_summary_graph(
             sample_gtfs_dict,
@@ -236,8 +268,6 @@ class TestTravelSummaryGraph:
         """Test travel summary graph returning NetworkX graph."""
         result = travel_summary_graph(sample_gtfs_dict, as_nx=True)
 
-        # Should import networkx for this test
-        import networkx as nx
         assert isinstance(result, nx.Graph)
         assert result.number_of_nodes() > 0
         assert result.number_of_edges() >= 0
@@ -249,10 +279,15 @@ class TestTravelSummaryGraph:
         with pytest.raises(ValueError, match="GTFS must contain at least stop_times and stops"):
             travel_summary_graph(incomplete_gtfs)
 
-    def test_travel_summary_graph_empty_stop_times(self, sample_gtfs_dict: dict[str, pd.DataFrame]) -> None:
+    def test_travel_summary_graph_empty_stop_times(
+        self,
+        sample_gtfs_dict: dict[str, pd.DataFrame],
+    ) -> None:
         """Test travel summary graph with empty stop_times."""
         gtfs_copy = sample_gtfs_dict.copy()
-        gtfs_copy["stop_times"] = pd.DataFrame(columns=["trip_id", "stop_id", "arrival_time", "departure_time", "stop_sequence"])
+        gtfs_copy["stop_times"] = pd.DataFrame(
+            columns=["trip_id", "stop_id", "arrival_time", "departure_time", "stop_sequence"],
+        )
 
         nodes_gdf, edges_gdf = travel_summary_graph(gtfs_copy)
 
@@ -261,7 +296,10 @@ class TestTravelSummaryGraph:
         assert isinstance(edges_gdf, gpd.GeoDataFrame)
         assert len(edges_gdf) == 0
 
-    def test_travel_summary_graph_with_calendar_dates(self, sample_gtfs_dict_with_exceptions: dict[str, pd.DataFrame]) -> None:
+    def test_travel_summary_graph_with_calendar_dates(
+        self,
+        sample_gtfs_dict_with_exceptions: dict[str, pd.DataFrame],
+    ) -> None:
         """Test travel summary graph with calendar_dates to cover _get_service_counts calendar_dates logic."""
         # This test covers lines 177-189 in transportation.py (_get_service_counts function)
         nodes_gdf, edges_gdf = travel_summary_graph(
@@ -276,7 +314,8 @@ class TestTravelSummaryGraph:
         assert len(edges_gdf) >= 0
 
     def test_travel_summary_graph_with_calendar_dates_add_service(
-        self, gtfs_dict_add_service: dict[str, pd.DataFrame | gpd.GeoDataFrame],
+        self,
+        gtfs_dict_add_service: dict[str, pd.DataFrame | gpd.GeoDataFrame],
     ) -> None:
         """Test travel summary graph with calendar_dates that adds service."""
         nodes_gdf, edges_gdf = travel_summary_graph(
@@ -291,7 +330,8 @@ class TestTravelSummaryGraph:
         assert len(edges_gdf) > 0
 
     def test_travel_summary_graph_with_calendar_dates_remove_service(
-        self, gtfs_dict_remove_service: dict[str, pd.DataFrame | gpd.GeoDataFrame],
+        self,
+        gtfs_dict_remove_service: dict[str, pd.DataFrame | gpd.GeoDataFrame],
     ) -> None:
         """Test travel summary graph with calendar_dates that removes service."""
         nodes_gdf, edges_gdf = travel_summary_graph(
@@ -305,55 +345,131 @@ class TestTravelSummaryGraph:
         # Should have no edges because service was removed by calendar_dates
         assert len(edges_gdf) == 0
 
-    def test_travel_summary_graph_missing_calendar(self, sample_gtfs_dict: dict[str, pd.DataFrame]) -> None:
+    def test_travel_summary_graph_missing_calendar(
+        self,
+        sample_gtfs_dict: dict[str, pd.DataFrame],
+    ) -> None:
         """Test travel summary graph with missing calendar.txt when calendar dates are specified."""
         gtfs_copy = sample_gtfs_dict.copy()
         del gtfs_copy["calendar"]  # Remove calendar.txt
 
-        with pytest.raises(ValueError, match="calendar_start/calendar_end specified but GTFS feed has no calendar.txt"):
+        with pytest.raises(
+            ValueError,
+            match="calendar_start/calendar_end specified but GTFS feed has no calendar.txt",
+        ):
             travel_summary_graph(gtfs_copy, calendar_start="20240101", calendar_end="20240107")
 
-    def test_travel_summary_graph_empty_calendar(self, sample_gtfs_dict: dict[str, pd.DataFrame]) -> None:
+    def test_travel_summary_graph_empty_calendar(
+        self,
+        sample_gtfs_dict: dict[str, pd.DataFrame],
+    ) -> None:
         """Test travel summary graph with empty calendar.txt when calendar dates are specified."""
         gtfs_copy = sample_gtfs_dict.copy()
-        gtfs_copy["calendar"] = pd.DataFrame(columns=["service_id", "start_date", "end_date"])  # Empty calendar
+        gtfs_copy["calendar"] = pd.DataFrame(
+            columns=["service_id", "start_date", "end_date"],
+        )  # Empty calendar
 
-        with pytest.raises(ValueError, match="calendar_start/calendar_end specified but calendar.txt is empty"):
+        with pytest.raises(
+            ValueError,
+            match="calendar_start/calendar_end specified but calendar.txt is empty",
+        ):
             travel_summary_graph(gtfs_copy, calendar_start="20240101", calendar_end="20240107")
 
-    def test_travel_summary_graph_invalid_calendar_start_format(self, sample_gtfs_dict: dict[str, pd.DataFrame]) -> None:
+    def test_travel_summary_graph_invalid_calendar_start_format(
+        self,
+        sample_gtfs_dict: dict[str, pd.DataFrame],
+    ) -> None:
         """Test travel summary graph with invalid calendar_start format."""
-        with pytest.raises(ValueError, match="Invalid calendar_start format: invalid-date. Expected YYYYMMDD."):
-            travel_summary_graph(sample_gtfs_dict, calendar_start="invalid-date", calendar_end="20240107")
+        with pytest.raises(
+            ValueError,
+            match="Invalid calendar_start format: invalid-date. Expected YYYYMMDD.",
+        ):
+            travel_summary_graph(
+                sample_gtfs_dict,
+                calendar_start="invalid-date",
+                calendar_end="20240107",
+            )
 
-    def test_travel_summary_graph_invalid_calendar_end_format(self, sample_gtfs_dict: dict[str, pd.DataFrame]) -> None:
+    def test_travel_summary_graph_invalid_calendar_end_format(
+        self,
+        sample_gtfs_dict: dict[str, pd.DataFrame],
+    ) -> None:
         """Test travel summary graph with invalid calendar_end format."""
-        with pytest.raises(ValueError, match="Invalid calendar_end format: invalid-date. Expected YYYYMMDD."):
-            travel_summary_graph(sample_gtfs_dict, calendar_start="20240101", calendar_end="invalid-date")
+        with pytest.raises(
+            ValueError,
+            match="Invalid calendar_end format: invalid-date. Expected YYYYMMDD.",
+        ):
+            travel_summary_graph(
+                sample_gtfs_dict,
+                calendar_start="20240101",
+                calendar_end="invalid-date",
+            )
 
-    def test_travel_summary_graph_calendar_start_outside_range(self, sample_gtfs_dict: dict[str, pd.DataFrame]) -> None:
+    def test_travel_summary_graph_calendar_start_outside_range(
+        self,
+        sample_gtfs_dict: dict[str, pd.DataFrame],
+    ) -> None:
         """Test travel summary graph with calendar_start outside GTFS date range."""
         # Use a date that's before the GTFS range (sample data is from 2024)
-        with pytest.raises(ValueError, match=r"calendar_start \(20230101\) is outside the valid GTFS date range"):
-            travel_summary_graph(sample_gtfs_dict, calendar_start="20230101", calendar_end="20240107")
+        with pytest.raises(
+            ValueError,
+            match=r"calendar_start \(20230101\) is outside the valid GTFS date range",
+        ):
+            travel_summary_graph(
+                sample_gtfs_dict,
+                calendar_start="20230101",
+                calendar_end="20240107",
+            )
 
-    def test_travel_summary_graph_calendar_end_outside_range(self, sample_gtfs_dict: dict[str, pd.DataFrame]) -> None:
+    def test_travel_summary_graph_calendar_end_outside_range(
+        self,
+        sample_gtfs_dict: dict[str, pd.DataFrame],
+    ) -> None:
         """Test travel summary graph with calendar_end outside GTFS date range."""
         # Use a date that's after the GTFS range (sample data is from 2024)
-        with pytest.raises(ValueError, match=r"calendar_end \(20250101\) is outside the valid GTFS date range"):
-            travel_summary_graph(sample_gtfs_dict, calendar_start="20240101", calendar_end="20250101")
+        with pytest.raises(
+            ValueError,
+            match=r"calendar_end \(20250101\) is outside the valid GTFS date range",
+        ):
+            travel_summary_graph(
+                sample_gtfs_dict,
+                calendar_start="20240101",
+                calendar_end="20250101",
+            )
 
-    def test_travel_summary_graph_calendar_start_after_end(self, sample_gtfs_dict: dict[str, pd.DataFrame]) -> None:
+    def test_travel_summary_graph_calendar_start_after_end(
+        self,
+        sample_gtfs_dict: dict[str, pd.DataFrame],
+    ) -> None:
         """Test travel summary graph with calendar_start after calendar_end."""
-        with pytest.raises(ValueError, match=r"calendar_start \(20240107\) must be <= calendar_end \(20240101\)"):
-            travel_summary_graph(sample_gtfs_dict, calendar_start="20240107", calendar_end="20240101")
+        with pytest.raises(
+            ValueError,
+            match=r"calendar_start \(20240107\) must be <= calendar_end \(20240101\)",
+        ):
+            travel_summary_graph(
+                sample_gtfs_dict,
+                calendar_start="20240107",
+                calendar_end="20240101",
+            )
 
-    def test_travel_summary_graph_calendar_start_only_invalid(self, sample_gtfs_dict: dict[str, pd.DataFrame]) -> None:
+    def test_travel_summary_graph_calendar_start_only_invalid(
+        self,
+        sample_gtfs_dict: dict[str, pd.DataFrame],
+    ) -> None:
         """Test travel summary graph with only calendar_start specified and invalid."""
-        with pytest.raises(ValueError, match=r"calendar_start \(20230101\) is outside the valid GTFS date range"):
+        with pytest.raises(
+            ValueError,
+            match=r"calendar_start \(20230101\) is outside the valid GTFS date range",
+        ):
             travel_summary_graph(sample_gtfs_dict, calendar_start="20230101")
 
-    def test_travel_summary_graph_calendar_end_only_invalid(self, sample_gtfs_dict: dict[str, pd.DataFrame]) -> None:
+    def test_travel_summary_graph_calendar_end_only_invalid(
+        self,
+        sample_gtfs_dict: dict[str, pd.DataFrame],
+    ) -> None:
         """Test travel summary graph with only calendar_end specified and invalid."""
-        with pytest.raises(ValueError, match=r"calendar_end \(20250101\) is outside the valid GTFS date range"):
+        with pytest.raises(
+            ValueError,
+            match=r"calendar_end \(20250101\) is outside the valid GTFS date range",
+        ):
             travel_summary_graph(sample_gtfs_dict, calendar_end="20250101")

@@ -78,6 +78,7 @@ GRAPH_NO_NODES_MSG = "Graph has no nodes"
 # GRAPH CONVERSION FUNCTIONS
 # ============================================================================
 
+
 def gdf_to_pyg(
     nodes: dict[str, gpd.GeoDataFrame] | gpd.GeoDataFrame,
     edges: dict[tuple[str, str, str], gpd.GeoDataFrame] | gpd.GeoDataFrame | None = None,
@@ -87,7 +88,8 @@ def gdf_to_pyg(
     device: str | torch.device | None = None,
     dtype: torch.dtype | None = None,
 ) -> Data | HeteroData:
-    """Convert GeoDataFrames (nodes/edges) to a PyTorch Geometric object.
+    """
+    Convert GeoDataFrames (nodes/edges) to a PyTorch Geometric object.
 
     This function serves as the main entry point for converting spatial data into
     PyTorch Geometric graph objects. It automatically detects whether to create
@@ -144,9 +146,15 @@ def gdf_to_pyg(
 
     See Also
     --------
-    pyg_to_gdf : Convert PyTorch Geometric data back to GeoDataFrames
-    nx_to_pyg : Convert NetworkX graph to PyTorch Geometric object
-    city2graph.utils.validate_gdf : Validate GeoDataFrame structure
+    pyg_to_gdf : Convert PyTorch Geometric data back to GeoDataFrames.
+    nx_to_pyg : Convert NetworkX graph to PyTorch Geometric object.
+    city2graph.utils.validate_gdf : Validate GeoDataFrame structure.
+
+    Notes
+    -----
+    This function automatically detects the graph type based on input structure.
+    For heterogeneous graphs, provide dictionaries mapping types to GeoDataFrames.
+    Node positions are automatically extracted from geometry centroids when available.
 
     Examples
     --------
@@ -221,8 +229,13 @@ def gdf_to_pyg(
             raise TypeError(msg)
 
         data = _build_heterogeneous_graph(
-            nodes, edges, node_feature_cols_hetero, node_label_cols_hetero,
-            edge_feature_cols_hetero, device, dtype,
+            nodes,
+            edges,
+            node_feature_cols_hetero,
+            node_label_cols_hetero,
+            edge_feature_cols_hetero,
+            device,
+            dtype,
         )
     else:
         # Type assertions for homogeneous graphs
@@ -250,9 +263,13 @@ def gdf_to_pyg(
 
         # Create a homogeneous Data object
         data = _build_homogeneous_graph(
-            nodes, edges, node_feature_cols_homo,
+            nodes,
+            edges,
+            node_feature_cols_homo,
             node_label_cols_homo,
-            edge_feature_cols_homo, device, dtype,
+            edge_feature_cols_homo,
+            device,
+            dtype,
         )
 
     # Validate the created PyG object
@@ -268,7 +285,8 @@ def pyg_to_gdf(
     tuple[dict[str, gpd.GeoDataFrame], dict[tuple[str, str, str], gpd.GeoDataFrame]]
     | tuple[gpd.GeoDataFrame | None, gpd.GeoDataFrame | None]
 ):
-    """Convert PyTorch Geometric data to GeoDataFrames.
+    """
+    Convert PyTorch Geometric data to GeoDataFrames.
 
     Reconstructs the original GeoDataFrame structure from PyTorch Geometric
     Data or HeteroData objects. This function provides bidirectional conversion
@@ -301,8 +319,8 @@ def pyg_to_gdf(
 
     See Also
     --------
-    gdf_to_pyg : Convert GeoDataFrames to PyTorch Geometric object
-    pyg_to_nx : Convert PyTorch Geometric data to NetworkX graph
+    gdf_to_pyg : Convert GeoDataFrames to PyTorch Geometric object.
+    pyg_to_nx : Convert PyTorch Geometric data to NetworkX graph.
 
     Notes
     -----
@@ -339,9 +357,7 @@ def pyg_to_gdf(
         node_gdfs = {
             nt: _reconstruct_node_gdf(data, metadata, node_type=nt) for nt in node_types_to_process
         }
-        edge_gdfs = {
-            et: _reconstruct_edge_gdf(data, metadata, et) for et in edge_types_to_process
-        }
+        edge_gdfs = {et: _reconstruct_edge_gdf(data, metadata, et) for et in edge_types_to_process}
         return node_gdfs, edge_gdfs
 
     # ------------------------------------------------------------------
@@ -356,8 +372,10 @@ def pyg_to_gdf(
 # NETWORKX CONVERSION FUNCTIONS
 # ============================================================================
 
+
 def pyg_to_nx(data: Data | HeteroData) -> nx.Graph:
-    """Convert a PyTorch Geometric object to a NetworkX graph.
+    """
+    Convert a PyTorch Geometric object to a NetworkX graph.
 
     Converts PyTorch Geometric Data or HeteroData objects to NetworkX graphs,
     preserving node and edge features as graph attributes. This enables
@@ -381,8 +399,8 @@ def pyg_to_nx(data: Data | HeteroData) -> nx.Graph:
 
     See Also
     --------
-    nx_to_pyg : Convert NetworkX graph to PyTorch Geometric object
-    pyg_to_gdf : Convert PyTorch Geometric data to GeoDataFrames
+    nx_to_pyg : Convert NetworkX graph to PyTorch Geometric object.
+    pyg_to_gdf : Convert PyTorch Geometric data to GeoDataFrames.
 
     Notes
     -----
@@ -421,7 +439,8 @@ def nx_to_pyg(
     device: torch.device | str | None = None,
     dtype: torch.dtype | None = None,
 ) -> Data | HeteroData:
-    """Convert NetworkX graph to PyTorch Geometric Data object.
+    """
+    Convert NetworkX graph to PyTorch Geometric Data object.
 
     Converts a NetworkX Graph to a PyTorch Geometric Data object by first
     converting to GeoDataFrames then using the main conversion pipeline. This
@@ -464,9 +483,9 @@ def nx_to_pyg(
 
     See Also
     --------
-    pyg_to_nx : Convert PyTorch Geometric data to NetworkX graph
-    gdf_to_pyg : Convert GeoDataFrames to PyTorch Geometric object
-    city2graph.utils.nx_to_gdf : Convert NetworkX graph to GeoDataFrames
+    pyg_to_nx : Convert PyTorch Geometric data to NetworkX graph.
+    gdf_to_pyg : Convert GeoDataFrames to PyTorch Geometric object.
+    city2graph.utils.nx_to_gdf : Convert NetworkX graph to GeoDataFrames.
 
     Notes
     -----
@@ -528,8 +547,10 @@ def nx_to_pyg(
 # TORCH UTILITIES FUNCTIONS
 # ============================================================================
 
+
 def is_torch_available() -> bool:
-    """Check if PyTorch Geometric is available.
+    """
+    Check if PyTorch Geometric is available.
 
     This utility function checks whether the required PyTorch and PyTorch Geometric
     packages are installed and can be imported. It's useful for conditional
@@ -542,8 +563,8 @@ def is_torch_available() -> bool:
 
     See Also
     --------
-    gdf_to_pyg : Convert GeoDataFrames to PyTorch Geometric (requires torch)
-    pyg_to_gdf : Convert PyTorch Geometric to GeoDataFrames (requires torch)
+    gdf_to_pyg : Convert GeoDataFrames to PyTorch Geometric (requires torch).
+    pyg_to_gdf : Convert PyTorch Geometric to GeoDataFrames (requires torch).
 
     Examples
     --------
@@ -567,7 +588,8 @@ def is_torch_available() -> bool:
 
 
 def _get_device(device: str | torch.device | None) -> torch.device:
-    """Normalize the device argument and return a torch.device instance.
+    """
+    Normalize the device argument and return a torch.device instance.
 
     Parameters
     ----------
@@ -622,10 +644,12 @@ def _get_device(device: str | torch.device | None) -> torch.device:
 # NODE PREPARATION FUNCTIONS
 # ============================================================================
 
+
 def _create_node_id_mapping(
     node_gdf: gpd.GeoDataFrame,
 ) -> tuple[dict[str | int, int], str, list[str | int]]:
-    """Create mapping from node IDs (from index) to sequential integer indices.
+    """
+    Create mapping from node IDs (from index) to sequential integer indices.
 
     PyTorch Geometric requires nodes to be identified by sequential integers starting from 0.
     This function creates the necessary mapping from original node identifiers (taken from
@@ -739,10 +763,12 @@ def _create_node_positions(
 
     # Map torch dtype to numpy dtype for consistency
     numpy_dtype = torch.tensor(0, dtype=dtype).numpy().dtype
-    pos_data = np.column_stack([
-        centroids.x.to_numpy(),
-        centroids.y.to_numpy(),
-    ]).astype(numpy_dtype)
+    pos_data = np.column_stack(
+        [
+            centroids.x.to_numpy(),
+            centroids.y.to_numpy(),
+        ],
+    ).astype(numpy_dtype)
 
     return torch.tensor(pos_data, dtype=dtype, device=device)
 
@@ -750,6 +776,7 @@ def _create_node_positions(
 # ============================================================================
 # EDGE PREPARATION FUNCTIONS
 # ============================================================================
+
 
 def _create_edge_features(
     edge_gdf: gpd.GeoDataFrame,
@@ -817,8 +844,10 @@ def _create_edge_indices(
 
 def _extract_edge_ids(edge_gdf: gpd.GeoDataFrame) -> tuple[pd.Series, pd.Series]:
     """Extract source and target IDs from MultiIndex DataFrame."""
-    return (edge_gdf.index.get_level_values(0),  # First level = source
-            edge_gdf.index.get_level_values(1))   # Second level = target
+    return (
+        edge_gdf.index.get_level_values(0),  # First level = source
+        edge_gdf.index.get_level_values(1),
+    )  # Second level = target
 
 
 def _map_edge_ids_to_indices(
@@ -838,12 +867,12 @@ def _map_edge_ids_to_indices(
     valid_targets = target_ids[valid_edges_mask]
 
     # Map original node IDs to integer indices
-    from_indices: np.ndarray[tuple[int, ...], np.dtype[np.int64]] = (
-        valid_sources.map(source_mapping).to_numpy(dtype=int)
-    )
-    to_indices: np.ndarray[tuple[int, ...], np.dtype[np.int64]] = (
-        valid_targets.map(target_mapping).to_numpy(dtype=int)
-    )
+    from_indices: np.ndarray[tuple[int, ...], np.dtype[np.int64]] = valid_sources.map(
+        source_mapping,
+    ).to_numpy(dtype=int)
+    to_indices: np.ndarray[tuple[int, ...], np.dtype[np.int64]] = valid_targets.map(
+        target_mapping,
+    ).to_numpy(dtype=int)
 
     combined_array = np.column_stack([from_indices, to_indices]).astype(int)
     result: list[list[int]] = combined_array.tolist()
@@ -912,6 +941,7 @@ def _create_linestring_geometries(
 # GRAPH BUILDING FUNCTIONS
 # ============================================================================
 
+
 def _build_homogeneous_graph(
     nodes_gdf: gpd.GeoDataFrame,
     edges_gdf: gpd.GeoDataFrame | None = None,
@@ -977,11 +1007,15 @@ def _build_homogeneous_graph(
 
     if edges_gdf is not None and not edges_gdf.empty:
         edge_pairs = _create_edge_indices(
-            edges_gdf, id_mapping, id_mapping,
+            edges_gdf,
+            id_mapping,
+            id_mapping,
         )
         if edge_pairs:
             edge_index = torch.tensor(
-                np.array(edge_pairs).T, dtype=torch.long, device=device,
+                np.array(edge_pairs).T,
+                dtype=torch.long,
+                device=device,
             )
         edge_attr = _create_edge_features(edges_gdf, edge_feature_cols, device, dtype)
 
@@ -1001,16 +1035,13 @@ def _build_homogeneous_graph(
     metadata.edge_feature_cols = edge_feature_cols or []
 
     # Store index names and values for preservation
-    metadata.node_index_names = (
-        nodes_gdf.index.names if hasattr(nodes_gdf.index, "names") else None
-    )
+    metadata.node_index_names = nodes_gdf.index.names if hasattr(nodes_gdf.index, "names") else None
     if edges_gdf is not None and hasattr(edges_gdf.index, "names"):
         metadata.edge_index_names = edges_gdf.index.names
 
         # Store original edge index values for reconstruction
         metadata.edge_index_values = [
-            edges_gdf.index.get_level_values(i).tolist()
-            for i in range(edges_gdf.index.nlevels)
+            edges_gdf.index.get_level_values(i).tolist() for i in range(edges_gdf.index.nlevels)
         ]
     else:
         metadata.edge_index_names = None
@@ -1043,17 +1074,33 @@ def _build_heterogeneous_graph(
 
     # Process nodes and get mappings
     node_mappings = _process_hetero_nodes(
-        data, nodes_dict, node_feature_cols, node_label_cols, device, dtype,
+        data,
+        nodes_dict,
+        node_feature_cols,
+        node_label_cols,
+        device,
+        dtype,
     )
 
     # Process edges
     _process_hetero_edges(
-        data, edges_dict, node_mappings, edge_feature_cols, device, dtype,
+        data,
+        edges_dict,
+        node_mappings,
+        edge_feature_cols,
+        device,
+        dtype,
     )
 
     # Store metadata
     _store_hetero_metadata(
-        data, node_mappings, nodes_dict, edges_dict, node_feature_cols, node_label_cols, edge_feature_cols,
+        data,
+        node_mappings,
+        nodes_dict,
+        edges_dict,
+        node_feature_cols,
+        node_label_cols,
+        edge_feature_cols,
     )
 
     return data
@@ -1129,15 +1176,22 @@ def _process_hetero_edges(
                 src_mapping,
                 dst_mapping,
             )
-            edge_index = (torch.tensor(np.array(edge_pairs).T, dtype=torch.long, device=device)
-                         if edge_pairs else torch.zeros((2, 0), dtype=torch.long, device=device))
+            edge_index = (
+                torch.tensor(np.array(edge_pairs).T, dtype=torch.long, device=device)
+                if edge_pairs
+                else torch.zeros((2, 0), dtype=torch.long, device=device)
+            )
             data[edge_type].edge_index = edge_index
 
             feature_cols = edge_feature_cols.get(rel_type) if edge_feature_cols else None
             data[edge_type].edge_attr = _create_edge_features(edge_gdf, feature_cols, device, dtype)
         else:
             data[edge_type].edge_index = torch.zeros((2, 0), dtype=torch.long, device=device)
-            data[edge_type].edge_attr = torch.empty((0, 0), dtype=dtype or torch.float32, device=device)
+            data[edge_type].edge_attr = torch.empty(
+                (0, 0),
+                dtype=dtype or torch.float32,
+                device=device,
+            )
 
 
 def _store_hetero_metadata(
@@ -1175,8 +1229,7 @@ def _store_hetero_metadata(
 
             # Store original edge index values for reconstruction
             metadata.edge_index_values[edge_type] = [
-                edge_gdf.index.get_level_values(i).tolist()
-                for i in range(edge_gdf.index.nlevels)
+                edge_gdf.index.get_level_values(i).tolist() for i in range(edge_gdf.index.nlevels)
             ]
 
     # Set CRS
@@ -1191,6 +1244,7 @@ def _store_hetero_metadata(
 # ============================================================================
 # GRAPH VALIDATION FUNCTIONS
 # ============================================================================
+
 
 def validate_pyg(data: Data | HeteroData) -> GraphMetadata:
     """
@@ -1309,7 +1363,11 @@ def _validate_hetero_structure(data: HeteroData, metadata: GraphMetadata) -> Non
             num_nodes = node_data.x.size(0)
 
             # Check position tensor consistency
-            if hasattr(node_data, "pos") and node_data.pos is not None and node_data.pos.size(0) != num_nodes:
+            if (
+                hasattr(node_data, "pos")
+                and node_data.pos is not None
+                and node_data.pos.size(0) != num_nodes
+            ):
                 msg = (
                     f"Node type '{node_type}': position tensor size ({node_data.pos.size(0)}) "
                     f"doesn't match node feature tensor size ({num_nodes})"
@@ -1317,7 +1375,11 @@ def _validate_hetero_structure(data: HeteroData, metadata: GraphMetadata) -> Non
                 raise ValueError(msg)
 
             # Check label tensor consistency
-            if hasattr(node_data, "y") and node_data.y is not None and node_data.y.size(0) != num_nodes:
+            if (
+                hasattr(node_data, "y")
+                and node_data.y is not None
+                and node_data.y.size(0) != num_nodes
+            ):
                 msg = (
                     f"Node type '{node_type}': label tensor size ({node_data.y.size(0)}) "
                     f"doesn't match node feature tensor size ({num_nodes})"
@@ -1379,7 +1441,11 @@ def _validate_homo_structure(data: Data, metadata: GraphMetadata) -> None:
         num_edges = data.edge_index.size(1)
 
         # Check edge attribute tensor consistency
-        if hasattr(data, "edge_attr") and data.edge_attr is not None and data.edge_attr.size(0) != num_edges:
+        if (
+            hasattr(data, "edge_attr")
+            and data.edge_attr is not None
+            and data.edge_attr.size(0) != num_edges
+        ):
             msg = (
                 f"Edge attribute tensor size ({data.edge_attr.size(0)}) "
                 f"doesn't match number of edges ({num_edges})"
@@ -1391,8 +1457,10 @@ def _validate_homo_structure(data: Data, metadata: GraphMetadata) -> None:
 # GRAPH RECONSTRUCTION FUNCTIONS
 # ============================================================================
 
+
 def _extract_tensor_data(
-    tensor: torch.Tensor | None, column_names: list[str] | None = None,
+    tensor: torch.Tensor | None,
+    column_names: list[str] | None = None,
 ) -> dict[str, np.ndarray[tuple[int, ...], np.dtype[np.float32]]]:
     """Extract data from tensor with proper column names."""
     if tensor is None or tensor.numel() == 0 or column_names is None:
@@ -1402,8 +1470,11 @@ def _extract_tensor_data(
     num_cols = min(len(column_names), features_array.shape[1])
     return {column_names[i]: features_array[:, i] for i in range(num_cols)}
 
+
 def _get_node_data_info(
-    data: Data | HeteroData, node_type: str | None, metadata: GraphMetadata,
+    data: Data | HeteroData,
+    node_type: str | None,
+    metadata: GraphMetadata,
 ) -> tuple[Data | HeteroData, int]:
     """Get node data and number of nodes."""
     node_data = data[node_type] if metadata.is_hetero and node_type else data
@@ -1411,7 +1482,8 @@ def _get_node_data_info(
 
 
 def _get_mapping_info(
-    node_type: str | None, metadata: GraphMetadata,
+    node_type: str | None,
+    metadata: GraphMetadata,
 ) -> dict[str, dict[str | int, int] | str | list[str | int]] | None:
     """Get mapping info for the given node type."""
     mapping_key = "default" if not metadata.is_hetero or not node_type else node_type
@@ -1434,12 +1506,16 @@ def _create_geometry_from_positions(node_data: Data | HeteroData) -> gpd.array.G
     """Create geometry from node positions."""
     if not hasattr(node_data, "pos") or node_data.pos is None:
         return None
-    pos_array: np.ndarray[tuple[int, ...], np.dtype[np.float32]] = node_data.pos.detach().cpu().numpy()
+    pos_array: np.ndarray[tuple[int, ...], np.dtype[np.float32]] = (
+        node_data.pos.detach().cpu().numpy()
+    )
     return gpd.points_from_xy(pos_array[:, 0], pos_array[:, 1])
 
 
 def _extract_node_features_and_labels(
-    node_data: Data | HeteroData, node_type: str | None, metadata: GraphMetadata,
+    node_data: Data | HeteroData,
+    node_type: str | None,
+    metadata: GraphMetadata,
 ) -> dict[str, np.ndarray[tuple[int, ...], np.dtype[np.float32]]]:
     """Extract features and labels from node data."""
     gdf_data = {}
@@ -1471,7 +1547,9 @@ def _extract_node_features_and_labels(
 
 
 def _set_gdf_index_and_crs(
-    gdf: gpd.GeoDataFrame, node_type: str | None, metadata: GraphMetadata,
+    gdf: gpd.GeoDataFrame,
+    node_type: str | None,
+    metadata: GraphMetadata,
 ) -> None:
     """Set index names and CRS on GeoDataFrame."""
     # Set index names
@@ -1484,9 +1562,13 @@ def _set_gdf_index_and_crs(
             index_names = metadata.node_index_names
 
         # Set index name if available
-        if (index_names and hasattr(gdf.index, "names") and
-            isinstance(index_names, list) and len(index_names) > 0):
-                gdf.index.name = index_names[0]
+        if (
+            index_names
+            and hasattr(gdf.index, "names")
+            and isinstance(index_names, list)
+            and len(index_names) > 0
+        ):
+            gdf.index.name = index_names[0]
 
     # Set CRS
     if metadata.crs and hasattr(gdf, "geometry") and gdf.geometry is not None:
@@ -1500,7 +1582,9 @@ def _set_gdf_index_and_crs(
 
 
 def _reconstruct_node_gdf(
-    data: Data | HeteroData, metadata: GraphMetadata, node_type: str | None = None,
+    data: Data | HeteroData,
+    metadata: GraphMetadata,
+    node_type: str | None = None,
 ) -> gpd.GeoDataFrame:
     """Reconstruct node GeoDataFrame from PyTorch Geometric data."""
     node_data, num_nodes = _get_node_data_info(data, node_type, metadata)
@@ -1599,7 +1683,9 @@ def _create_edge_geometries(
 
     # If not hetero or no specific edge type, use default positions
     elif hasattr(data, "pos") and data.pos is not None:
-        pos_array: np.ndarray[tuple[int, ...], np.dtype[np.float64]] = data.pos.detach().cpu().numpy()
+        pos_array: np.ndarray[tuple[int, ...], np.dtype[np.float64]] = (
+            data.pos.detach().cpu().numpy()
+        )
         src_pos_array = pos_array
         dst_pos_array = pos_array
 
@@ -1624,13 +1710,19 @@ def _set_edge_index_names(
     elif not is_hetero and isinstance(metadata.edge_index_names, list):
         index_names = metadata.edge_index_names
 
-    if (hasattr(gdf.index, "names") and isinstance(index_names, list) and
-        len(index_names) > 1 and isinstance(gdf.index, pd.MultiIndex)):
+    if (
+        hasattr(gdf.index, "names")
+        and isinstance(index_names, list)
+        and len(index_names) > 1
+        and isinstance(gdf.index, pd.MultiIndex)
+    ):
         gdf.index.names = index_names
 
 
 def _reconstruct_edge_gdf(
-    data: Data | HeteroData, metadata: GraphMetadata, edge_type: str | tuple[str, str, str] | None = None,
+    data: Data | HeteroData,
+    metadata: GraphMetadata,
+    edge_type: str | tuple[str, str, str] | None = None,
 ) -> gpd.GeoDataFrame:
     """Reconstruct edge GeoDataFrame from PyTorch Geometric data."""
     is_hetero = metadata.is_hetero
@@ -1680,6 +1772,7 @@ def _reconstruct_edge_gdf(
 # NETWORKX CONVERSION HELPERS
 # ============================================================================
 
+
 def _add_homo_nodes_to_graph(graph: nx.Graph, data: Data) -> None:
     """Add homogeneous nodes to NetworkX graph."""
     metadata = data.graph_metadata
@@ -1688,9 +1781,13 @@ def _add_homo_nodes_to_graph(graph: nx.Graph, data: Data) -> None:
     num_nodes = data.x.size(0)
 
     # Prepare base attributes
-    attrs_df = pd.DataFrame({
-        "_original_index": [original_ids[i] if i < len(original_ids) else i for i in range(num_nodes)],
-    })
+    attrs_df = pd.DataFrame(
+        {
+            "_original_index": [
+                original_ids[i] if i < len(original_ids) else i for i in range(num_nodes)
+            ],
+        },
+    )
 
     # Add positions using vectorized operations
     if hasattr(data, "pos") and data.pos is not None:
@@ -1701,14 +1798,14 @@ def _add_homo_nodes_to_graph(graph: nx.Graph, data: Data) -> None:
     if hasattr(data, "x") and data.x is not None:
         x_np: np.ndarray[tuple[int, ...], np.dtype[np.float32]] = data.x.detach().cpu().numpy()
         feature_cols = metadata.node_feature_cols or [f"feat_{j}" for j in range(x_np.shape[1])]
-        for j, col_name in enumerate(feature_cols[:x_np.shape[1]]):
+        for j, col_name in enumerate(feature_cols[: x_np.shape[1]]):
             attrs_df[col_name] = x_np[:, j]
 
     # Add labels using vectorized operations
     if hasattr(data, "y") and data.y is not None:
         y_np: np.ndarray[tuple[int, ...], np.dtype[np.float32]] = data.y.detach().cpu().numpy()
         label_cols = metadata.node_label_cols or [f"label_{j}" for j in range(y_np.shape[1])]
-        for j, col_name in enumerate(label_cols[:y_np.shape[1]]):
+        for j, col_name in enumerate(label_cols[: y_np.shape[1]]):
             attrs_df[col_name] = y_np[:, j]
 
     # Add nodes in bulk
@@ -1760,10 +1857,14 @@ def _add_hetero_nodes_to_graph(graph: nx.Graph, data: HeteroData) -> dict[str, i
         # Get original node IDs and prepare base attributes
         node_mapping_info = metadata.node_mappings.get(node_type, {})
         original_ids = node_mapping_info.get("original_ids", list(range(num_nodes)))
-        attrs_df = pd.DataFrame({
-            "node_type": node_type,
-            "_original_index": [original_ids[i] if i < len(original_ids) else i for i in range(num_nodes)],
-        })
+        attrs_df = pd.DataFrame(
+            {
+                "node_type": node_type,
+                "_original_index": [
+                    original_ids[i] if i < len(original_ids) else i for i in range(num_nodes)
+                ],
+            },
+        )
 
         # Add positions using vectorized operations
         if hasattr(node_data, "pos") and node_data.pos is not None:
@@ -1774,26 +1875,36 @@ def _add_hetero_nodes_to_graph(graph: nx.Graph, data: HeteroData) -> dict[str, i
         if hasattr(node_data, "x") and node_data.x is not None:
             x_np = node_data.x.detach().cpu().numpy()
             # Handle the type union for node_feature_cols
-            feature_cols = metadata.node_feature_cols.get(node_type) or [f"feat_{j}" for j in range(x_np.shape[1])]
-            for j, col_name in enumerate(feature_cols[:x_np.shape[1]]):
+            feature_cols = metadata.node_feature_cols.get(node_type) or [
+                f"feat_{j}" for j in range(x_np.shape[1])
+            ]
+            for j, col_name in enumerate(feature_cols[: x_np.shape[1]]):
                 attrs_df[col_name] = x_np[:, j]
 
         # Add labels using vectorized operations
         if hasattr(node_data, "y") and node_data.y is not None:
             y_np = node_data.y.detach().cpu().numpy()
             # Handle the type union for node_label_cols
-            label_cols = metadata.node_label_cols.get(node_type) or [f"label_{j}" for j in range(y_np.shape[1])]
-            for j, col_name in enumerate(label_cols[:y_np.shape[1]]):
+            label_cols = metadata.node_label_cols.get(node_type) or [
+                f"label_{j}" for j in range(y_np.shape[1])
+            ]
+            for j, col_name in enumerate(label_cols[: y_np.shape[1]]):
                 attrs_df[col_name] = y_np[:, j]
 
         # Add nodes in bulk
-        graph.add_nodes_from([(current_offset + i, attrs_df.iloc[i].to_dict()) for i in range(num_nodes)])
+        graph.add_nodes_from(
+            [(current_offset + i, attrs_df.iloc[i].to_dict()) for i in range(num_nodes)],
+        )
         current_offset += num_nodes
 
     return node_offset
 
 
-def _add_hetero_edges_to_graph(graph: nx.Graph, data: HeteroData, node_offset: dict[str, int]) -> None:
+def _add_hetero_edges_to_graph(
+    graph: nx.Graph,
+    data: HeteroData,
+    node_offset: dict[str, int],
+) -> None:
     """Add heterogeneous edges to NetworkX graph."""
     metadata = data.graph_metadata
 
@@ -1805,7 +1916,13 @@ def _add_hetero_edges_to_graph(graph: nx.Graph, data: HeteroData, node_offset: d
         num_edges = edge_index.shape[1]
 
         # Create attributes DataFrame using helper functions
-        attrs_df = _create_edge_attrs_dataframe(edge_store, metadata, rel_type, edge_type, num_edges)
+        attrs_df = _create_edge_attrs_dataframe(
+            edge_store,
+            metadata,
+            rel_type,
+            edge_type,
+            num_edges,
+        )
 
         # Add relation type and convert to records
         attrs_df["edge_type"] = rel_type
@@ -1846,14 +1963,22 @@ def _create_edge_attrs_dataframe(
     return attrs_df
 
 
-def _get_edge_attrs_array(edge_store: Data) -> np.ndarray[tuple[int, ...], np.dtype[np.float32]] | None:
+def _get_edge_attrs_array(
+    edge_store: Data,
+) -> np.ndarray[tuple[int, ...], np.dtype[np.float32]] | None:
     """Extract edge attributes array from edge store, or None if not available."""
-    return (edge_store.edge_attr.detach().cpu().numpy()
-            if hasattr(edge_store, "edge_attr") and edge_store.edge_attr is not None
-            else None)
+    return (
+        edge_store.edge_attr.detach().cpu().numpy()
+        if hasattr(edge_store, "edge_attr") and edge_store.edge_attr is not None
+        else None
+    )
 
 
-def _get_edge_feature_columns(metadata: GraphMetadata, rel_type: str, num_features: int) -> list[str]:
+def _get_edge_feature_columns(
+    metadata: GraphMetadata,
+    rel_type: str,
+    num_features: int,
+) -> list[str]:
     """Get feature column names, using metadata or generating defaults."""
     feature_cols = None
     if isinstance(metadata.edge_feature_cols, dict):
@@ -1861,6 +1986,7 @@ def _get_edge_feature_columns(metadata: GraphMetadata, rel_type: str, num_featur
     # For heterogeneous graphs, edge_feature_cols should be dict or None, not list
     # If it's a list, we ignore it as it indicates homogeneous usage
     return feature_cols or [f"edge_feat_{j}" for j in range(num_features)]
+
 
 def _convert_homo_pyg_to_nx(data: Data, metadata: GraphMetadata) -> nx.Graph:
     """Convert homogeneous PyG data to NetworkX graph."""
