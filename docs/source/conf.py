@@ -62,7 +62,7 @@ html_baseurl = "https://city2graph.net/"
 html_extra_path = ["robots.txt"]
 # Default meta description for pages
 html_meta = {
-    "description": "A Python package for transforming urban data into graphs for spatial analysis and Graph Neural Networks.",
+    "description": "A Python package for transforming urban data (GeoDataFrame / networkx.Graph) into graphs for spatial analysis and Graph Neural Networks by PyTorch Geometric.",
     "author": "Yuta Sato",
 }
 # Sitemap settings for better SEO
@@ -151,6 +151,7 @@ html_theme_options = {
     "sticky_navigation": True,           # Make navigation sticky
     "includehidden": True,               # Include hidden toctree entries
     "titles_only": False,                # Show full titles, not just page names
+    "default_mode": "auto",              # Options: "auto", "light", "dark"
 }
 
 # Additional HTML context variables
