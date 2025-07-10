@@ -23,9 +23,9 @@ try:
     from city2graph.utils import nx_to_gdf
 except ImportError:
     # These imports may fail if torch is not available
-    gdf_to_pyg = None
-    gdf_to_nx = None
-    nx_to_gdf = None
+    gdf_to_pyg = typing.cast("Any", None)
+    gdf_to_nx = typing.cast("Any", None)
+    nx_to_gdf = typing.cast("Any", None)
 
 if TYPE_CHECKING:
     from torch_geometric.data import Data
@@ -103,7 +103,7 @@ def sample_edges_gdf() -> gpd.GeoDataFrame:
     }
     # Create a MultiIndex for source and target IDs
     multi_index = pd.MultiIndex.from_arrays(
-        [data["source_id"], data["target_id"]],
+        [pd.Series(data["source_id"]), pd.Series(data["target_id"])],
         names=("source_id", "target_id"),
     )
     return gpd.GeoDataFrame(data, index=multi_index, crs="EPSG:27700")
@@ -149,7 +149,7 @@ def sample_hetero_edges_dict(sample_crs: str) -> dict[tuple[str, str, str], gpd.
         ],
     }
     connections_multi_index = pd.MultiIndex.from_arrays(
-        [connections_data["building_id"], connections_data["road_id"]],
+        [pd.Series(connections_data["building_id"]), pd.Series(connections_data["road_id"])],
         names=("building_id", "road_id"),
     )
     connections_gdf = gpd.GeoDataFrame(
@@ -166,7 +166,10 @@ def sample_hetero_edges_dict(sample_crs: str) -> dict[tuple[str, str, str], gpd.
         "geometry": [LineString([(10, 12), (12, 12)]), LineString([(12, 12), (10, 12)])],
     }
     road_links_multi_index = pd.MultiIndex.from_arrays(
-        [road_links_data["source_road_id"], road_links_data["target_road_id"]],
+        [
+            pd.Series(road_links_data["source_road_id"]),
+            pd.Series(road_links_data["target_road_id"]),
+        ],
         names=("source_road_id", "target_road_id"),
     )
     road_links_gdf = gpd.GeoDataFrame(
@@ -989,7 +992,7 @@ def network_gdf_with_pos(sample_crs: str) -> gpd.GeoDataFrame:
         ],
     }
     multi_index = pd.MultiIndex.from_arrays(
-        [data["source_id"], data["target_id"]],
+        [pd.Series(data["source_id"]), pd.Series(data["target_id"])],
         names=("source_id", "target_id"),
     )
     edges_gdf = gpd.GeoDataFrame(data, index=multi_index, crs=sample_crs)
@@ -1011,7 +1014,7 @@ def network_gdf_no_pos(sample_crs: str) -> gpd.GeoDataFrame:
         "geometry": [LineString([(0, 0), (1, 1)])],
     }
     multi_index = pd.MultiIndex.from_arrays(
-        [data["source_id"], data["target_id"]],
+        [pd.Series(data["source_id"]), pd.Series(data["target_id"])],
         names=("source_id", "target_id"),
     )
     return gpd.GeoDataFrame(data, index=multi_index, crs=sample_crs)
