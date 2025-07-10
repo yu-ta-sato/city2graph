@@ -4,69 +4,47 @@ repos:
     hooks:
       - id: check-added-large-files
         args: [--maxkb=50]
-        exclude: \.(ipynb|geojson)$
       - id: check-ast
-        exclude: \.(ipynb|geojson)$
       - id: check-case-conflict
-        exclude: \.(ipynb|geojson)$
       - id: check-executables-have-shebangs
-        exclude: \.(ipynb|geojson)$
       - id: check-json
-        exclude: \.(ipynb|geojson)$
       - id: check-merge-conflict
         args: [--assume-in-merge]
-        exclude: \.(ipynb|geojson)$
       - id: check-shebang-scripts-are-executable
-        exclude: \.(ipynb|geojson)$
       - id: check-toml
-        exclude: \.(ipynb|geojson)$
       - id: check-xml
-        exclude: \.(ipynb|geojson)$
       - id: check-yaml
-        exclude: ^(activate/|deactivate/|notebooks/|docs/|htmlcov/)|.*\.(ipynb|geojson)$
       - id: detect-private-key
-        exclude: \.(ipynb|geojson)$
       - id: end-of-file-fixer
-        exclude: ^(activate/|deactivate/)|.*\.(ipynb|geojson)$
       - id: fix-byte-order-marker
-        exclude: \.(ipynb|geojson)$
       - id: mixed-line-ending
-        exclude: \.(ipynb|geojson)$
       - id: no-commit-to-branch
-        exclude: \.(ipynb|geojson)$
       - id: pretty-format-json
         args: [--autofix]
-        exclude: \.(ipynb|geojson)$
       - id: trailing-whitespace
-        exclude: ^(activate/|deactivate/)|.*\.(ipynb|geojson)$
 
   - repo: https://github.com/adrienverge/yamllint
     rev: v1.37.1
     hooks:
       - id: yamllint
         args: [--strict, --config-file=./tests/.yamllint.yml]
-        exclude: ^(activate/|deactivate/|\.github/|docs/|notebooks/|htmlcov/)|.*\.(ipynb|geojson)$
 
   - repo: https://github.com/numpy/numpydoc
     rev: v1.9.0
     hooks:
       - id: numpydoc-validation
-        exclude: ^(tests/|notebooks/|docs/|activate/|deactivate/|htmlcov/)|.*\.(ipynb|geojson)$
 
   - repo: https://github.com/astral-sh/ruff-pre-commit
     rev: v0.12.2
     hooks:
       - id: ruff-check
         args: [--fix]
-        exclude: ^(notebooks/|activate/|deactivate/|htmlcov/)|.*\.(ipynb|geojson)$
       - id: ruff-format
-        exclude: ^(notebooks/|activate/|deactivate/|htmlcov/)|.*\.(ipynb|geojson)$
 
   - repo: https://github.com/pre-commit/mirrors-mypy
     rev: v1.16.1
     hooks:
       - id: mypy
-        exclude: ^(tests/|notebooks/|docs/|activate/|deactivate/|htmlcov/)|.*\.(ipynb|geojson)$
         additional_dependencies:
           - geopandas
           - matplotlib
