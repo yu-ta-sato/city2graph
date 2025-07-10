@@ -115,7 +115,7 @@ Examples
    :align: center
 
 .. code-block:: python
-   # Create a nodes dictionary for multi-layer network
+
    nodes_dict = {
       "restaurants": poi_gdf,
       "hospitals": hospital_gdf,
@@ -126,7 +126,7 @@ Examples
    proximity_nodes, proximity_edges = city2graph.bridge_nodes(
       nodes_dict, 
       proximity_method="knn", 
-      k=5,  # Connect to 5 nearest neighbors in each target layer
+      k=5,
       distance_metric="euclidean"
    )
 

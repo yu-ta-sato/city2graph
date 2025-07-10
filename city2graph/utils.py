@@ -6,40 +6,6 @@ and spatial analysis operations. It serves as the foundation for the city2graph
 package, offering robust data structures and conversion functions that enable
 seamless integration between different graph representations and geospatial
 data formats.
-
-Key Features
-------------
-- Bidirectional conversion between GeoDataFrames and NetworkX graphs
-- Comprehensive data validation and type checking
-- Support for both homogeneous and heterogeneous graph structures
-- Spatial analysis utilities (tessellation, isochrones, filtering)
-- Robust metadata preservation across conversions
-- Integration with multiple geospatial libraries
-
-Main Functions
---------------
-gdf_to_nx : Convert GeoDataFrames to NetworkX graphs
-nx_to_gdf : Convert NetworkX graphs to GeoDataFrames
-segments_to_graph : Convert line segments to graph representation
-dual_graph : Create dual graph representations
-filter_graph_by_distance : Spatial filtering based on network distance
-create_isochrone : Generate accessibility isochrones
-create_tessellation : Create spatial tessellations
-validate_gdf : Validate GeoDataFrame inputs
-validate_nx : Validate NetworkX graph inputs
-
-Core Classes
-------------
-GraphMetadata : Centralized graph metadata management
-GeoDataProcessor : Common GeoDataFrame processing operations
-GraphConverter : Unified graph conversion engine
-GraphAnalyzer : Graph analysis and filtering operations
-
-See Also
---------
-city2graph.graph : PyTorch Geometric integration utilities
-city2graph.morphology : Urban morphology analysis functions
-city2graph.proximity : Spatial proximity analysis functions
 """
 
 # Standard library imports
