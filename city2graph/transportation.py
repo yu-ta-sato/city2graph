@@ -533,6 +533,10 @@ def travel_summary_graph(
         msg = f"GTFS must contain at least stop_times and stops. Missing: {', '.join(missing)}"
         raise ValueError(msg)
 
+    # Validate calendar date range if provided
+    if calendar_start is not None or calendar_end is not None:
+        _validate_calendar_dates(gtfs, calendar_start, calendar_end)
+
     # Preprocess Data
     stop_times = gtfs["stop_times"].copy()
     trips = gtfs["trips"][["trip_id", "service_id"]].copy()
@@ -597,3 +601,64 @@ def travel_summary_graph(
     ).set_index(["from_stop_id", "to_stop_id"])
 
     return (nodes_gdf, edges_gdf) if not as_nx else gdf_to_nx(nodes_gdf, edges_gdf)
+
+def _validate_calendar_dates(
+    gtfs: dict[str, pd.DataFrame | gpd.GeoDataFrame],
+    calendar_start: str | None,
+    calendar_end: str | None,
+) -> None:
+    """Validate that calendar_start and calendar_end are within GTFS date range."""
+    if "calendar" not in gtfs:
+        msg = "calendar_start/calendar_end specified but GTFS feed has no calendar.txt"
+        raise ValueError(msg)
+
+    calendar = gtfs["calendar"]
+    if calendar.empty:
+        msg = "calendar_start/calendar_end specified but calendar.txt is empty"
+        raise ValueError(msg)
+
+    # Get the valid GTFS date range
+    gtfs_start_date = datetime.strptime(calendar["start_date"].min(), "%Y%m%d")
+    gtfs_end_date = datetime.strptime(calendar["end_date"].max(), "%Y%m%d")
+
+    calendar_start_dt = None
+    calendar_end_dt = None
+
+    # Validate calendar_start
+    if calendar_start is not None:
+        try:
+            calendar_start_dt = datetime.strptime(calendar_start, "%Y%m%d")
+        except ValueError as e:
+            msg = f"Invalid calendar_start format: {calendar_start}. Expected YYYYMMDD."
+            raise ValueError(msg) from e
+
+        if calendar_start_dt < gtfs_start_date or calendar_start_dt > gtfs_end_date:
+            gtfs_start_str = gtfs_start_date.strftime("%Y%m%d")
+            gtfs_end_str = gtfs_end_date.strftime("%Y%m%d")
+            msg = (
+                f"calendar_start ({calendar_start}) is outside the valid GTFS date range "
+                f"({gtfs_start_str} to {gtfs_end_str})"
+            )
+            raise ValueError(msg)
+
+    # Validate calendar_end
+    if calendar_end is not None:
+        try:
+            calendar_end_dt = datetime.strptime(calendar_end, "%Y%m%d")
+        except ValueError as e:
+            msg = f"Invalid calendar_end format: {calendar_end}. Expected YYYYMMDD."
+            raise ValueError(msg) from e
+
+        if calendar_end_dt < gtfs_start_date or calendar_end_dt > gtfs_end_date:
+            gtfs_start_str = gtfs_start_date.strftime("%Y%m%d")
+            gtfs_end_str = gtfs_end_date.strftime("%Y%m%d")
+            msg = (
+                f"calendar_end ({calendar_end}) is outside the valid GTFS date range "
+                f"({gtfs_start_str} to {gtfs_end_str})"
+            )
+            raise ValueError(msg)
+
+    # Validate that calendar_start <= calendar_end if both are provided
+    if calendar_start_dt is not None and calendar_end_dt is not None and calendar_start_dt > calendar_end_dt:
+        msg = f"calendar_start ({calendar_start}) must be <= calendar_end ({calendar_end})"
+        raise ValueError(msg)
