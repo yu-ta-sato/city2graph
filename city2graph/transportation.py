@@ -171,6 +171,23 @@ def _get_service_counts(gtfs_data: dict[str, pd.DataFrame | gpd.GeoDataFrame], s
         ]
         service_days = active_days.groupby("service_id").size()
 
+    # Process calendar date exceptions from calendar_dates.txt
+    if calendar_dates is not None:
+        # Filter calendar_dates to our date range
+        calendar_dates_filtered = calendar_dates.copy()
+        calendar_dates_filtered["date"] = pd.to_datetime(calendar_dates_filtered["date"], format="%Y%m%d")
+        calendar_dates_filtered = calendar_dates_filtered[
+            (calendar_dates_filtered["date"] >= start_date) &
+            (calendar_dates_filtered["date"] <= end_date)
+        ]
+
+        # Process both added (1) and removed (2) service exceptions
+        for exception_type, operation in [(1, service_days.add), (2, service_days.subtract)]:
+            exception_services = calendar_dates_filtered[calendar_dates_filtered["exception_type"] == exception_type]
+            if not exception_services.empty:
+                exception_counts = exception_services.groupby("service_id").size()
+                service_days = operation(exception_counts, fill_value=0)
+
     return service_days.astype(int).clip(lower=0)
 
 # ---------------------------------------------------------------------------

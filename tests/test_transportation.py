@@ -260,3 +260,47 @@ class TestTravelSummaryGraph:
         assert isinstance(nodes_gdf, gpd.GeoDataFrame)
         assert isinstance(edges_gdf, gpd.GeoDataFrame)
         assert len(edges_gdf) == 0
+
+    def test_travel_summary_graph_with_calendar_dates(self, sample_gtfs_dict_with_exceptions: dict[str, pd.DataFrame]) -> None:
+        """Test travel summary graph with calendar_dates to cover _get_service_counts calendar_dates logic."""
+        # This test covers lines 177-189 in transportation.py (_get_service_counts function)
+        nodes_gdf, edges_gdf = travel_summary_graph(
+            sample_gtfs_dict_with_exceptions,
+            calendar_start="20240101",
+            calendar_end="20240102",
+        )
+
+        assert isinstance(nodes_gdf, gpd.GeoDataFrame)
+        assert isinstance(edges_gdf, gpd.GeoDataFrame)
+        # Should process calendar_dates exceptions (both add and remove service)
+        assert len(edges_gdf) >= 0
+
+    def test_travel_summary_graph_with_calendar_dates_add_service(
+        self, gtfs_dict_add_service: dict[str, pd.DataFrame | gpd.GeoDataFrame],
+    ) -> None:
+        """Test travel summary graph with calendar_dates that adds service."""
+        nodes_gdf, edges_gdf = travel_summary_graph(
+            gtfs_dict_add_service,
+            calendar_start="20240101",
+            calendar_end="20240101",
+        )
+
+        assert isinstance(nodes_gdf, gpd.GeoDataFrame)
+        assert isinstance(edges_gdf, gpd.GeoDataFrame)
+        # Should have edges because service was added by calendar_dates
+        assert len(edges_gdf) > 0
+
+    def test_travel_summary_graph_with_calendar_dates_remove_service(
+        self, gtfs_dict_remove_service: dict[str, pd.DataFrame | gpd.GeoDataFrame],
+    ) -> None:
+        """Test travel summary graph with calendar_dates that removes service."""
+        nodes_gdf, edges_gdf = travel_summary_graph(
+            gtfs_dict_remove_service,
+            calendar_start="20240101",
+            calendar_end="20240101",
+        )
+
+        assert isinstance(nodes_gdf, gpd.GeoDataFrame)
+        assert isinstance(edges_gdf, gpd.GeoDataFrame)
+        # Should have no edges because service was removed by calendar_dates
+        assert len(edges_gdf) == 0

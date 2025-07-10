@@ -1583,3 +1583,45 @@ def simple_edges_dict_type1_type2(sample_crs: str) -> dict[tuple[str, str, str],
             "geometry": [LineString([(0, 0), (1, 1)])],
         }, index=pd.MultiIndex.from_tuples([("a", "b")], names=["from", "to"]), crs=sample_crs),
     }
+
+
+@pytest.fixture
+def gtfs_dict_add_service(sample_gtfs_dict: dict[str, pd.DataFrame]) -> dict[str, pd.DataFrame]:
+    """Create a sample GTFS dictionary where calendar_dates adds service."""
+    gtfs_dict = sample_gtfs_dict.copy()
+
+    # Modify calendar to have no service on test date initially
+    calendar_df = gtfs_dict["calendar"].copy()
+    calendar_df["monday"] = [False]  # 20240101 is a Monday
+    gtfs_dict["calendar"] = calendar_df
+
+    # Add calendar_dates that adds service on the test date
+    calendar_dates_df = pd.DataFrame({
+        "service_id": ["service1"],
+        "date": ["20240101"],
+        "exception_type": [1],  # 1 = add service
+    })
+
+    gtfs_dict["calendar_dates"] = calendar_dates_df
+    return gtfs_dict
+
+
+@pytest.fixture
+def gtfs_dict_remove_service(sample_gtfs_dict: dict[str, pd.DataFrame]) -> dict[str, pd.DataFrame]:
+    """Create a sample GTFS dictionary where calendar_dates removes service."""
+    gtfs_dict = sample_gtfs_dict.copy()
+
+    # Ensure calendar has service on test date initially
+    calendar_df = gtfs_dict["calendar"].copy()
+    calendar_df["monday"] = [True]  # 20240101 is a Monday
+    gtfs_dict["calendar"] = calendar_df
+
+    # Add calendar_dates that removes service on the test date
+    calendar_dates_df = pd.DataFrame({
+        "service_id": ["service1"],
+        "date": ["20240101"],
+        "exception_type": [2],  # 2 = remove service
+    })
+
+    gtfs_dict["calendar_dates"] = calendar_dates_df
+    return gtfs_dict
