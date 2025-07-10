@@ -31,7 +31,7 @@ Features
 - Construct graphs from transportation datasets (e.g. public transport of buses, trams, and trains)
 - Construct graphs from contiguity datasets (e.g. land use, land cover, and administrative boundaries)
 - Construct graphs from mobility datasets (e.g. bike-sharing, migration, and pedestrian flows)
-- Convert geospatial data into pytorch tensors for graph representation learning, such as Graph Neural Networks (GNNs)
+- Convert geospatial data into tensors (PyTorch Geometric's Data and HeteroData) for graph representation learning, such as Graph Neural Networks (GNNs)
 
 Examples
 --------
@@ -64,9 +64,8 @@ Examples
    sample_gtfs_path = Path("./itm_london_gtfs.zip")
    gtfs_data = city2graph.load_gtfs(sample_gtfs_path)   
 
-   travel_summary_gdf = city2graph.travel_summary_network(
-      gtfs_data, calendar_start="20250401", calendar_end="20250401", as_gdf=True
-   )
+   travel_summary_nodes, travel_summary_edges = city2graph.travel_summary_graph(
+      gtfs_data, calendar_start="20250601", calendar_end="20250601")
 
 .. figure:: _static/trav_sum_network_overview.png
    :width: 1000px
@@ -81,7 +80,7 @@ Examples
 
 .. code-block:: python
 
-   gilbert_graph = city2graph.gilbert_graph(poi_gdf, radius=100)
+   fixed_radius_graph = city2graph.fixed_radius_graph(poi_gdf, radius=100)
 
 .. raw:: html
 
@@ -94,28 +93,46 @@ Examples
 
 .. code-block:: python
 
-   wax_l1 = city2graph.waxman_graph(poi_gdf,
+   wax_l1_nodes, wax_l1_edges = city2graph.waxman_graph(poi_gdf,
                                     distance_metric="manhattan",
                                     r0=100,
-                                    beta=0.5,
-                                    as_gdf=True)
+                                    beta=0.5)
 
-   wax_l2 = city2graph.waxman_graph(poi_gdf,
+   wax_l2_nodes, wax_l2_edges = city2graph.waxman_graph(poi_gdf,
                                     distance_metric="euclidean",
                                     r0=100,
-                                    beta=0.5,
-                                    as_gdf=True)
+                                    beta=0.5)
 
-   wax_net = city2graph.waxman_graph(poi_gdf,
+   wax_net_nodes, wax_net_edges = city2graph.waxman_graph(poi_gdf,
                                     distance_metric="network",
                                     r0=100,
                                     beta=0.5,
-                                    network_gdf=segments_gdf.to_crs(epsg=6677),
-                                    as_gdf=True)
+                                    network_gdf=segments_gdf.to_crs(epsg=6677))
 
 .. figure:: _static/waxman_graph.png
    :width: 1000px
    :alt: Waxman graph of points of interest in Liverpool
+   :align: center
+
+.. code-block:: python
+   # Create a nodes dictionary for multi-layer network
+   nodes_dict = {
+      "restaurants": poi_gdf,
+      "hospitals": hospital_gdf,
+      "commercial": commercial_gdf
+   }
+
+   # Generate proximity edges between layers using KNN method
+   proximity_nodes, proximity_edges = city2graph.bridge_nodes(
+      nodes_dict, 
+      proximity_method="knn", 
+      k=5,  # Connect to 5 nearest neighbors in each target layer
+      distance_metric="euclidean"
+   )
+
+.. figure:: _static/bridge_nodes.png
+   :width: 1000px
+   :alt: Bridge nodes connecting different layers of POIs
    :align: center
 
 >> For details, see :doc:`examples/generating_graphs_by_proximity`

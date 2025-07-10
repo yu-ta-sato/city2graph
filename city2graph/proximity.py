@@ -1455,7 +1455,13 @@ def _add_edges(
                            for i in range(len(path_coords))
                            if i == 0 or path_coords[i] != path_coords[i - 1]]
 
-            geom_attr[(u, v)] = LineString(path_coords)
+            if len(path_coords) > 1:
+                geom_attr[(u, v)] = LineString(path_coords)
+            else:
+                # Fallback for nodes mapping to the same network point
+                p1 = coords[idx_map[u]]
+                p2 = coords[idx_map[v]]
+                geom_attr[(u, v)] = LineString([p1, p2])
 
     # Manhattan or Euclidean metric
     else:
