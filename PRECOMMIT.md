@@ -11,12 +11,7 @@ uv sync --group dev --extra cpu
 
 2. Install the pre-commit hooks:
 ```bash
-pre-commit install
-```
-
-3. (Optional) Run the automated setup script:
-```bash
-./setup-precommit.sh
+uv run pre-commit install
 ```
 
 ## What's Included
@@ -35,13 +30,13 @@ Pre-commit hooks run automatically on `git commit`. You can also run them manual
 
 ```bash
 # Run all hooks on all files
-pre-commit run --all-files
+uv run pre-commit run --all-files
 
 # Run specific hook on all files
-pre-commit run ruff-check --all-files
+uv run pre-commit run ruff-check --all-files
 
 # Run hooks on specific files
-pre-commit run --files city2graph/utils.py city2graph/graph.py
+uv run pre-commit run --files city2graph/utils.py city2graph/graph.py
 ```
 
 ## Configuration
