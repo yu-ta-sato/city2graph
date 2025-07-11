@@ -1595,8 +1595,8 @@ def validate_pyg(data: Data | HeteroData) -> GraphMetadata:
 
     See Also
     --------
-    _validate_hetero_structure : Validate heterogeneous graph structure.
-    _validate_homo_structure : Validate homogeneous graph structure.
+    pyg_to_gdf : Convert PyG objects to GeoDataFrames.
+    pyg_to_nx : Convert PyG objects to NetworkX graphs.
 
     Examples
     --------

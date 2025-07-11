@@ -482,8 +482,8 @@ def load_gtfs(path: str | Path) -> dict[str, pd.DataFrame | gpd.GeoDataFrame]:
 
     See Also
     --------
-    _enrich_stops_with_geometry : Add geometry to stops data.
-    _enrich_shapes_with_geometry : Add geometry to shapes data.
+    get_od_pairs : Create origin-destination pairs from GTFS data.
+    travel_summary_graph : Create network representation from GTFS data.
 
     Notes
     -----

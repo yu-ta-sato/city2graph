@@ -2847,6 +2847,10 @@ def validate_gdf(
     ValueError
         If the input types are inconsistent or invalid.
 
+    See Also
+    --------
+    validate_nx : Validate a NetworkX graph.
+
     Examples
     --------
     >>> import geopandas as gpd
@@ -2955,6 +2959,10 @@ def validate_nx(graph: nx.Graph | nx.MultiGraph) -> None:
         If the input is not a NetworkX graph.
     ValueError
         If the graph has no nodes, no edges, or is missing essential metadata.
+
+    See Also
+    --------
+    validate_gdf : Validate GeoDataFrames for graph conversion.
 
     Examples
     --------
