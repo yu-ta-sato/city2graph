@@ -18,8 +18,8 @@ jobs:
       - name: Set up Python
         run: uv python install 3.12
 
-      - name: Build wheel
-        run: uv build --wheel --out-dir dist
+      - name: Build distributions
+        run: uv build --sdist --wheel --out-dir dist
 
       - name: Publish to TestPyPI
-        run: uv publish --index testpypi dist/*.whl
+        run: uv publish --index testpypi dist/*
