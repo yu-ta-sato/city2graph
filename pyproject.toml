@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "city2graph"
-version = "0.1.0"
+version = "0.1.1"
 description = "Transform geospatial relations into graphs for spatial analysis and GNNs."
 authors = [
     {name = "Yuta Sato", email = "y.sato@liverpool.ac.uk"}
