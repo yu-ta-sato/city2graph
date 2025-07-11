@@ -12,28 +12,16 @@ Setting Up Development Environment
 
    .. code-block:: bash
 
-       git clone https://github.com/yourusername/city2graph.git
+       git clone https://github.com/<your-name>/city2graph.git
        cd city2graph
+       git remote add upstream https://github.com/c2g-dev/city2graph.git
 
-3. Create a conda environment using the provided environment file:
-
-   .. code-block:: bash
-
-       conda env create -f environment.yml
-       conda activate city2graph
-
-4. Install the package in development mode:
+3. Set up the development environment:
 
    .. code-block:: bash
 
-       pip install -e .
-
-5. Install pre-commit hooks:
-
-   .. code-block:: bash
-
-       pip install pre-commit
-       pre-commit install
+       uv sync --group dev --extra cpu
+       source .venv/bin/activate  # On Windows: .venv\Scripts\activate
 
 Making Changes
 -------------
@@ -45,24 +33,39 @@ Making Changes
        git checkout -b feature/your-feature-name
 
 2. Make your changes to the codebase.
-3. Run the tests to ensure your changes don't break existing functionality:
+
+3. Run pre-commit checks before committing:
 
    .. code-block:: bash
 
-       pytest
+       uv run pre-commit run --all-files
 
-4. Update or add documentation as needed.
-5. Commit your changes with a descriptive commit message.
+4. Run the tests to ensure your changes don't break existing functionality:
+
+   .. code-block:: bash
+
+       uv run pytest --cov=city2graph --cov-report=html --cov-report=term
+
+5. Update or add documentation as needed.
+6. Commit your changes with a descriptive commit message.
 
 Code Style
 ---------
 
-We follow PEP 8 style guidelines for Python code. Some key points:
+We follow strict code quality standards using the following tools:
+
+* **Ruff**: For linting and formatting Python code
+* **mypy**: For static type checking
+* **numpydoc**: For docstring style validation
+
+Key style guidelines:
 
 * Use 4 spaces for indentation.
-* Maximum line length of 88 characters (using Black formatter).
-* Use docstrings for all public modules, functions, classes, and methods.
+* Maximum line length of 88 characters.
+* Use docstrings following numpydoc conventions for all public modules, functions, classes, and methods.
 * Use type hints where appropriate.
+
+Pre-commit hooks will automatically run these checks when you commit changes.
 
 Documentation
 ------------
@@ -93,18 +96,24 @@ Building Documentation
 
 To build and preview the documentation locally:
 
-1. Create and activate the documentation environment:
+1. Create and activate a virtual environment with uv:
 
    .. code-block:: bash
 
-       conda env create -f docs_environment.yml
-       conda activate city2graph_docs
+       uv venv docs-env
+       source docs-env/bin/activate  # On Windows: docs-env\Scripts\activate
 
-2. Build the documentation:
+2. Install documentation dependencies:
+
+   .. code-block:: bash
+
+       uv pip install -e ".[docs]"
+
+3. Build the documentation:
 
    .. code-block:: bash
 
        cd docs
        make html
 
-3. Open ``docs/build/html/index.html`` in your browser to view the documentation.
+4. Open ``docs/build/html/index.html`` in your browser to view the documentation.

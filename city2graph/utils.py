@@ -3,9 +3,10 @@ Core Utilities Module.
 
 This module provides essential utilities for graph conversion, data validation,
 and spatial analysis operations. It serves as the foundation for the city2graph
-package, offering robust data structures and conversion functions that enable
-seamless integration between different graph representations and geospatial
-data formats.
+package, offering a standardized data format for handling geospatial relations
+across GeoPandas, NetworkX objects, and eventually PyTorch Geometric objects.
+The module enables seamless integration between different graph representations
+and geospatial data formats through robust data structures and conversion functions.
 """
 
 # Standard library imports
@@ -2051,6 +2052,7 @@ def dual_graph(
     -------
     tuple[geopandas.GeoDataFrame, geopandas.GeoDataFrame]
         A tuple containing the nodes and edges of the dual graph as GeoDataFrames.
+
         - Dual nodes GeoDataFrame: Nodes represent original edges. The geometry is the
           centroid of the original edge's geometry. The index is derived from `edge_id_col`
           or the original edge index.
@@ -2232,6 +2234,7 @@ def segments_to_graph(
     -------
     tuple[geopandas.GeoDataFrame, geopandas.GeoDataFrame]
         A tuple containing two GeoDataFrames:
+
         - nodes_gdf: A GeoDataFrame of unique nodes (Points), indexed by `node_id`.
         - edges_gdf: A GeoDataFrame of edges (LineStrings), with a MultiIndex
           mapping to the `node_id` in `nodes_gdf`. If `multigraph` is True,

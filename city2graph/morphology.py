@@ -5,7 +5,8 @@ This module provides comprehensive functionality for analyzing urban morphology
 through graph representations, focusing on the relationships between private
 spaces (buildings and their tessellations) and public spaces (street segments).
 It creates heterogeneous graphs that capture the complex spatial relationships
-inherent in urban environments.
+inherent in urban environments. Both GeoDataFrame and NetworkX objects can be
+converted to PyTorch Geometric Data or HeteroData by functions from graph.py.
 
 The module specializes in three types of spatial relationships:
 1. Private-to-private: Adjacency relationships between building tessellations
@@ -94,23 +95,11 @@ def morphological_graph(  # noqa: PLR0912, PLR0915
         removed and tessellation cells are kept only if their own distance via
         these segments does not exceed this value.
     clipping_buffer : float, default=math.inf
-        Additional buffer distance (non-negative) to be added to `distance` when
-        `distance` and `center_point` are specified.
-        This sum (`distance + clipping_buffer`) is used as the radius for filtering
-        `segs_buffer` (segments used for tessellation context).
-        If `clipping_buffer` is `math.inf` (and `distance` is set), `segs_buffer` is
-        filtered by `distance` alone.
-        The `max_distance` for `_filter_adjacent_tessellations` becomes
-        `distance + clipping_buffer` (this evaluates to `math.inf` if `clipping_buffer`
-        is `math.inf` or if `distance` is not set).
-        If `distance` is not provided, `clipping_buffer` is effectively ignored for
-        `segs_buffer` filtering, and `max_distance` for `_filter_adjacent_tessellations`
-        defaults to `math.inf`.
-        Must be non-negative. Defaults to `math.inf`.
+        Buffer distance to ensure adequate context for generating tessellation.
+        Must be non-negative.
     primary_barrier_col : str, optional
         Column name containing alternative geometry for public spaces. If specified and exists,
         this geometry will be used instead of the main geometry column for tessellation barriers.
-        Default is "barrier_geometry".
     contiguity : str, default="queen"
         Type of spatial contiguity for private-to-private connections.
         Must be either "queen" or "rook".
@@ -141,8 +130,9 @@ def morphological_graph(  # noqa: PLR0912, PLR0915
 
     See Also
     --------
-    create_tessellation : Create Voronoi tessellation from buildings and segments.
-    create_enclosures : Create enclosures from street network.
+    private_to_private_graph : Create adjacency between private spaces.
+    private_to_public_graph : Create connections between private and public spaces.
+    public_to_public_graph : Create connectivity between public spaces.
 
     Notes
     -----
@@ -387,6 +377,7 @@ def private_to_private_graph(
     --------
     morphological_graph : Main function that creates comprehensive morphological graphs.
     private_to_public_graph : Create connections between private and public spaces.
+    public_to_public_graph : Create connectivity between public spaces.
 
     Notes
     -----
@@ -519,6 +510,7 @@ def private_to_public_graph(
     --------
     morphological_graph : Main function that creates comprehensive morphological graphs.
     private_to_private_graph : Create adjacency between private spaces.
+    public_to_public_graph : Create connectivity between public spaces.
 
     Notes
     -----
@@ -682,6 +674,7 @@ def public_to_public_graph(
     See Also
     --------
     morphological_graph : Main function that creates comprehensive morphological graphs.
+    private_to_private_graph : Create adjacency between private spaces.
     private_to_public_graph : Create connections between private and public spaces.
 
     Notes
