@@ -2,8 +2,8 @@
 Module for creating heterogeneous graph representations of urban environments.
 
 This module provides comprehensive functionality for converting spatial data
-(GeoDataFrames) into PyTorch Geometric graph objects, supporting
-both homogeneous and heterogeneous graphs. It handles the complex mapping between
+(GeoDataFrames and NetworkX objects) into PyTorch Geometric Data and HeteroData objects,
+supporting both homogeneous and heterogeneous graphs. It handles the complex mapping between
 geographical coordinates, node/edge features, and the tensor representations
 required by graph neural networks.
 
@@ -69,7 +69,7 @@ __all__ = [
 ]
 
 # Constants for error messages
-TORCH_ERROR_MSG = "PyTorch required. Install with: pip install city2graph[torch]"
+TORCH_ERROR_MSG = "PyTorch and PyTorch Geometric required for graph conversion functionality."
 DEVICE_ERROR_MSG = "Device must be 'cuda', 'cpu', a torch.device object, or None"
 GRAPH_NO_NODES_MSG = "Graph has no nodes"
 
@@ -187,8 +187,9 @@ def gdf_to_pyg(
     >>> nodes_dict = {'building': buildings_gdf, 'road': roads_gdf}
     >>> edges_dict = {('building', 'connects', 'road'): connections_gdf}
     >>>
-    >>> # Convert to heterogeneous graph
-    >>> data = gdf_to_pyg(nodes_dict, edges_dict)
+    >>> # Convert to heterogeneous graph with labels
+    >>> data = gdf_to_pyg(nodes_dict, edges_dict,
+    ...                   node_label_cols={'building': ['type'], 'road': ['category']})
     """
     # ------------------------------------------------------------------
     # 0. Input validation & dispatch
@@ -567,7 +568,6 @@ def is_torch_available() -> bool:
     -----
     - Returns False if either PyTorch or PyTorch Geometric is missing
     - Used internally by torch-dependent functions to provide helpful error messages
-    - Installation can be done with: ``pip install city2graph[torch]``
 
     Examples
     --------
@@ -579,7 +579,7 @@ def is_torch_available() -> bool:
     ...     from city2graph.graph import gdf_to_pyg
     ...     data = gdf_to_pyg(nodes_gdf, edges_gdf)
     ... else:
-    ...     print("PyTorch Geometric not available. Install with: pip install city2graph[torch]")
+    ...     print("PyTorch Geometric not available.")
     """
     return TORCH_AVAILABLE
 

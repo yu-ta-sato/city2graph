@@ -4,15 +4,9 @@ Proximity-Based Graph Generation Module.
 This module provides comprehensive functionality for generating graph networks based
 on spatial proximity relationships between geographic features. It implements several
 classical proximity models commonly used in spatial network analysis and geographic
-information systems.
-
-The module follows a consistent internal workflow across all proximity models:
-1. Input validation and preprocessing of GeoDataFrame(s)
-2. Base graph construction with cached node coordinates
-3. Distance matrix computation (Euclidean, Manhattan, or network-based)
-4. Edge list derivation according to the selected proximity model
-5. Edge weight and geometry attachment
-6. Output formatting as NetworkX graphs or GeoDataFrames
+information systems. The module is particularly useful for constructing heterogeneous
+graphs from multiple domains of geospatial relations, enabling complex spatial analysis
+across different feature types and scales.
 """
 
 # Future annotations for type hints
@@ -354,7 +348,7 @@ def gabriel_graph(
     Generate a Gabriel graph from a GeoDataFrame of points.
 
     In a Gabriel graph two nodes *u* and *v* are connected iff the closed
-    disc that has $uv$ as its diameter contains no other node of the set.
+    disc that has :math:`uv` as its diameter contains no other node of the set.
 
     Parameters
     ----------
@@ -382,7 +376,11 @@ def gabriel_graph(
       the implementation first builds the Delaunay edges then filters them
       according to the disc-emptiness predicate, achieving an overall
 
-      $$\mathcal O(n \log n + m k)$$ complexity ( *m* = Delaunay edges,
+      .. math::
+
+         \mathcal{O}(n \log n + m k)
+
+      complexity ( *m* = Delaunay edges,
       *k* = average neighbours tested per edge).
     • When the input layer has exactly two points, the unique edge is returned.
     • If the layer has fewer than two points, an empty graph is produced.
@@ -460,10 +458,9 @@ def relative_neighborhood_graph(
     Generate a Relative-Neighbourhood Graph (RNG) from a GeoDataFrame.
 
     In an RNG two nodes *u* and *v* are connected iff there is **no third node
-    *w*** such that both $$d(u,w) < d(u,v)$$ **and** $$d(v,w) < d(u,v)$$.
+    *w*** such that both :math:`d(u,w) < d(u,v)` **and** :math:`d(v,w) < d(u,v)`.
     Equivalently, the intersection of the two open discs having radius
-
-    $$d(u,v)$$ and centres *u* and *v* (the *lune*) is empty.
+    :math::`d(u,v)` and centres *u* and *v* (the *lune*) is empty.
 
     Parameters
     ----------
@@ -488,7 +485,7 @@ def relative_neighborhood_graph(
     Notes
     -----
     •  The RNG is a sub-graph of the Delaunay triangulation; therefore the
-       implementation first collects Delaunay edges ( $$\mathcal O(n\log n)$$ )
+       implementation first collects Delaunay edges ( :math:`\mathcal{O}(n\log n)` )
        and then filters them according to the lune-emptiness predicate.
     •  When the input layer has exactly two points the unique edge is returned.
     •  If the layer has fewer than two points, an empty graph is produced.
@@ -566,14 +563,12 @@ def euclidean_minimum_spanning_tree(
 
     The classical Euclidean Minimum Spanning Tree (EMST) is the minimum-
     total-length tree that connects a set of points when edge weights are the
-    straight-line ( L₂ ) distances.  For consistency with the other generators
+    straight-line ( :math:`L_2` ) distances.  For consistency with the other generators
     this implementation also supports *manhattan* and *network* metrics - it
     simply computes the minimum-weight spanning tree under the chosen metric.
     When the metric is *euclidean* the edge search is restricted to the
-    Delaunay triangulation (  EMST ⊆ Delaunay ), guaranteeing an
-
-    $$\mathcal O(n \log n)$$ overall complexity.  With other metrics, or
-    degenerate cases where the triangulation cannot be built, the algorithm
+    Delaunay triangulation (  EMST ⊆ Delaunay ), guaranteeing an :math:`\mathcal{O}(n \log n)`
+    overall complexity.  With other metrics, or degenerate cases where the triangulation cannot be built, the algorithm
     gracefully falls back to the complete graph.
 
     Parameters
@@ -601,9 +596,8 @@ def euclidean_minimum_spanning_tree(
     -----
     •  The resulting graph always contains *n - 1* edges (or 0 / 1 when the
        input has < 2 points).
-    •  For planar Euclidean inputs the computation is
-
-       $\mathcal O(n \log n)$ thanks to the Delaunay pruning.
+    •  For planar Euclidean inputs the computation is :math:`\mathcal{O}(n \log n)`
+       thanks to the Delaunay pruning.
     •  All the usual spatial attributes (*weight*, *geometry*, CRS checks,
        etc.) are attached through the shared private helpers.
 
@@ -882,7 +876,9 @@ def waxman_graph(
 
     The connection probability follows the formula:
 
-    $P(u,v) = \beta \times \exp \left(-\frac{\text{dist}(u,v)}{r_0}\right)$
+    .. math::
+
+       P(u,v) = \beta \times \exp \left(-\frac{\text{dist}(u,v)}{r_0}\right)
 
     Parameters
     ----------
@@ -1066,9 +1062,12 @@ def bridge_nodes(
     This function creates a multi-layer spatial network by generating directed proximity
     edges from nodes in one GeoDataFrame layer to nodes in another. It systematically
     processes all ordered pairs of layers and applies either k-nearest neighbors (KNN)
-    or fixed-radius method to establish inter-layer connections. This is
-    particularly useful for modeling complex urban systems, ecological networks, or
-    multi-modal transportation systems where different types of entities interact.
+    or fixed-radius method to establish inter-layer connections. This function is
+    specifically designed for constructing heterogeneous graphs by generating new edge
+    types ("is_nearby") between different types of nodes, enabling the modeling of
+    complex relationships across multiple domains. It is useful for modeling complex
+    urban systems, ecological networks, or multi-modal transportation systems where
+    different types of entities interact through spatial proximity.
 
     Parameters
     ----------
@@ -1090,6 +1089,7 @@ def bridge_nodes(
         Additional keyword arguments passed to the underlying proximity method:
 
         For `proximity_method="knn"`:
+
         - k : int, default 1
             Number of nearest neighbors to connect to in target layer
         - distance_metric : str, default "euclidean"
@@ -1098,6 +1098,7 @@ def bridge_nodes(
             Network for "network" distance calculations
 
         For `proximity_method="fixed_radius"`:
+
         - radius : float, required
             Maximum connection distance between layers
         - distance_metric : str, default "euclidean"
@@ -1108,13 +1109,20 @@ def bridge_nodes(
     Returns
     -------
     tuple[dict[str, geopandas.GeoDataFrame], dict[tuple[str, str, str], geopandas.GeoDataFrame]] | networkx.Graph
-        If `as_nx` is False, returns a tuple:
+        If `as_nx` is False, returns a tuple containing:
+
         - nodes_dict: The original input `nodes_dict` (unchanged)
-        - edges_dict: Dictionary where keys are edge type tuples
+        - edges_dict: Dictionary where keys are edge type tuples of the form
           `(source_layer_name, "is_nearby", target_layer_name)` and values are
-          GeoDataFrames of the generated directed edges
+          GeoDataFrames of the generated directed edges. **Each unique tuple
+          represents a distinct edge type in the heterogeneous graph, enabling
+          differentiation between relationships across different node type
+          combinations.**
+
         If `as_nx` is True, returns a NetworkX graph object containing all nodes
-        from all layers and the generated directed inter-layer edges.
+        from all layers and the generated directed inter-layer edges, forming a
+        **heterogeneous graph structure** where different node types are connected
+        through proximity-based relationships.
 
     Raises
     ------
@@ -1131,10 +1139,16 @@ def bridge_nodes(
     Notes
     -----
     - All generated edges are directed from source layer to target layer
-    - The relation type for all generated edges is fixed as "is_nearby"
+    - **The relation type for all generated edges is fixed as "is_nearby", creating
+      a new edge type that bridges different node types in heterogeneous graphs**
+    - **Each ordered pair of node layers generates a distinct edge type, enabling
+      the construction of rich heterogeneous graph structures with multiple
+      relationship types between different domain entities**
     - Edge weights and geometries are calculated based on the chosen distance_metric
     - Each ordered pair of layers generates a separate edge GeoDataFrame
     - Self-connections (layer to itself) are not created
+    - **The resulting structure is ideal for heterogeneous graph neural networks,
+      multi-layer network analysis, and cross-domain spatial relationship modeling**
 
     Examples
     --------

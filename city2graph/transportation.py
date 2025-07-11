@@ -6,9 +6,7 @@ Specification (GTFS) data and creating transportation network representations. I
 specializes in converting public transit data into graph structures suitable for
 network analysis and accessibility studies.
 
-The module emphasizes functional programming principles, using plain functions
-without class dependencies to ensure explicit state management and maintain a
-minimal public API surface. All functions return ready-to-use pandas/GeoPandas
+All functions return ready-to-use pandas/GeoPandas
 objects or NetworkX graphs that can be seamlessly integrated into analysis
 pipelines, notebooks, or model training workflows.
 """
@@ -872,7 +870,7 @@ def travel_summary_graph(
 
     Returns
     -------
-    (nodes_gdf, edges_gdf) or networkx.Graph
+    tuple[geopandas.GeoDataFrame, geopandas.GeoDataFrame] or networkx.Graph
         • **Nodes** - every stop with a valid geometry.
         • **Edges** - columns = ``from_stop_id, to_stop_id, mean_travel_time,
           frequency, geometry``.

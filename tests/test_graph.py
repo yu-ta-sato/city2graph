@@ -72,10 +72,10 @@ class TestTorchAvailability:
 
         for func, args in functions_to_test:
             if isinstance(args, tuple):
-                with pytest.raises(ImportError, match="PyTorch required"):
+                with pytest.raises(ImportError, match="PyTorch and PyTorch Geometric required"):
                     func(*args)
             else:
-                with pytest.raises(ImportError, match="PyTorch required"):
+                with pytest.raises(ImportError, match="PyTorch and PyTorch Geometric required"):
                     func(args)
 
         # Test nx_to_pyg with valid graph
@@ -86,7 +86,7 @@ class TestTorchAvailability:
         valid_graph.graph["is_hetero"] = False
         valid_graph.graph["crs"] = "EPSG:4326"
 
-        with pytest.raises(ImportError, match="PyTorch required"):
+        with pytest.raises(ImportError, match="PyTorch and PyTorch Geometric required"):
             graph_module.nx_to_pyg(valid_graph)
 
 

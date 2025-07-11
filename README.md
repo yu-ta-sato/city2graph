@@ -129,9 +129,46 @@ docker compose down
 
 You can customize the services in the `docker-compose.yml` file according to your needs.
 
-#### Docker Compose Configuration
+## Contributing
 
-The project includes a `docker-compose.yml` file that sets up:
-- A Jupyter notebook server with all dependencies pre-installed
-- GPU support if available on your system
-- Mounted volumes for your data and notebooks
+We welcome contributions to the city2graph project! To contribute:
+
+1. **Fork and clone the repository:**
+   ```bash
+   git clone https://github.com/<your-name>/city2graph.git
+   cd city2graph
+   git remote add upstream https://github.com/c2g-dev/city2graph.git
+   ```
+
+2. **Set up the development environment:**
+   ```bash
+   uv sync --group dev --extra cpu
+   source .venv/bin/activate  # On Windows: .venv\Scripts\activate
+   ```
+
+3. **Create a feature branch:**
+   ```bash
+   git checkout -b feature/your-feature-name
+   ```
+
+4. **Make your changes and test:**
+   ```bash
+   # Run pre-commit checks
+   uv run pre-commit run --all-files
+
+   # Run tests
+   uv run pytest --cov=city2graph --cov-report=html --cov-report=term
+   ```
+
+5. **Submit a pull request** with a clear description of your changes.
+
+For detailed contributing guidelines, code style requirements, and documentation standards, please see our [Contributing Guide](docs/source/contributing.rst).
+
+## Code Quality
+
+We maintain strict code quality standards using:
+- **Ruff**: For linting and formatting
+- **mypy**: For static type checking
+- **numpydoc**: For docstring style validation
+
+All contributions must pass pre-commit checks before being merged.
