@@ -592,6 +592,12 @@ def euclidean_minimum_spanning_tree(
         - edges_gdf: GeoDataFrame of edges with 'weight' and 'geometry' attributes
         If `as_nx` is True, returns a NetworkX graph object with spatial attributes.
 
+    See Also
+    --------
+    delaunay_graph : Generate a Delaunay triangulation graph.
+    gabriel_graph : Generate a Gabriel graph.
+    relative_neighborhood_graph : Generate a Relative Neighborhood Graph.
+
     Notes
     -----
     •  The resulting graph always contains *n - 1* edges (or 0 / 1 when the
