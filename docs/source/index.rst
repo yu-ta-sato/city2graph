@@ -137,6 +137,29 @@ Examples
 
 >> For details, see :doc:`examples/generating_graphs_by_proximity`
 
+Citation
+--------
+
+If you use city2graph in your research, please cite it as follows:
+
+.. code-block:: bibtex
+
+   @software{sato2025city2graph,
+     title = {city2graph: Transform geospatial relations into graphs for spatial network analysis and Graph Neural Networks},
+     author = {Sato, Yuta},
+     year = {2025},
+     url = {https://github.com/c2g-dev/city2graph},
+     doi = {10.5281/zenodo.15858846},
+     version = {0.1.0}
+   }
+
+You can also use the DOI to cite a specific version: |DOI|
+
+.. |DOI| image:: https://zenodo.org/badge/DOI/10.5281/zenodo.15858846.svg
+   :target: https://doi.org/10.5281/zenodo.15858846
+
+Alternatively, you can find the citation information in the `CITATION.cff <https://github.com/c2g-dev/city2graph/blob/main/CITATION.cff>`_ file in the repository, which follows the Citation File Format standard.
+
 Documentation
 ------------
 

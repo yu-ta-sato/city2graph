@@ -4,7 +4,7 @@
 
 **city2graph** is a Python library for converting urban geometry into graph representations, enabling advanced analysis of urban environments. For more information, please reach out to the document (https://city2graph.net).
 
-[![PyPI Version](https://badge.fury.io/py/city2graph.svg)](https://pypi.org/project/city2graph/) [![conda-forge Version](https://anaconda.org/conda-forge/city2graph/badges/version.svg)](https://anaconda.org/conda-forge/city2graph/) [![codecov](https://codecov.io/gh/c2g-dev/city2graph/graph/badge.svg?token=2R449G75Z0)](https://codecov.io/gh/c2g-dev/city2graph)
+[![PyPI Version](https://badge.fury.io/py/city2graph.svg)](https://pypi.org/project/city2graph/) [![conda-forge Version](https://anaconda.org/conda-forge/city2graph/badges/version.svg)](https://anaconda.org/conda-forge/city2graph/) [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.15858846.svg)](https://doi.org/10.5281/zenodo.15858846) [![codecov](https://codecov.io/gh/c2g-dev/city2graph/graph/badge.svg?token=2R449G75Z0)](https://codecov.io/gh/c2g-dev/city2graph)
 [![License](https://img.shields.io/badge/License-BSD_3--Clause-blue.svg)](https://github.com/c2g-dev/city2graph/blob/main/LICENSE)
 [![Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff)
 
@@ -165,6 +165,25 @@ docker compose down
 ```
 
 You can customize the services in the `docker-compose.yml` file according to your needs.
+
+## Citation
+
+If you use city2graph in your research, please cite it as follows:
+
+```bibtex
+@software{sato2025city2graph,
+  title = {city2graph: Transform geospatial relations into graphs for spatial network analysis and Graph Neural Networks},
+  author = {Sato, Yuta},
+  year = {2025},
+  url = {https://github.com/c2g-dev/city2graph},
+  doi = {10.5281/zenodo.15858846},
+  version = {0.1.1}
+}
+```
+
+You can also use the DOI to cite a specific version: [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.15858846.svg)](https://doi.org/10.5281/zenodo.15858846)
+
+Alternatively, you can find the citation information in the [CITATION.cff](CITATION.cff) file in this repository, which follows the Citation File Format standard.
 
 ## Contributing
 
