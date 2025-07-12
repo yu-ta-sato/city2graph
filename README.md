@@ -4,8 +4,7 @@
 
 **city2graph** is a Python library for converting urban geometry into graph representations, enabling advanced analysis of urban environments. For more information, please reach out to the document (https://city2graph.net).
 
-[![PyPI Version](https://badge.fury.io/py/city2graph.svg)](https://pypi.org/project/city2graph/)
-[![codecov](https://codecov.io/gh/c2g-dev/city2graph/graph/badge.svg?token=2R449G75Z0)](https://codecov.io/gh/c2g-dev/city2graph)
+[![PyPI Version](https://badge.fury.io/py/city2graph.svg)](https://pypi.org/project/city2graph/) [![conda-forge Version](https://anaconda.org/conda-forge/city2graph/badges/version.svg)](https://anaconda.org/conda-forge/city2graph/) [![codecov](https://codecov.io/gh/c2g-dev/city2graph/graph/badge.svg?token=2R449G75Z0)](https://codecov.io/gh/c2g-dev/city2graph)
 [![License](https://img.shields.io/badge/License-BSD_3--Clause-blue.svg)](https://github.com/c2g-dev/city2graph/blob/main/LICENSE)
 [![Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff)
 
@@ -23,42 +22,80 @@
 
 ## Installation
 
-### Without PyTorch
+### Using pip
+
+#### Basic Installation
 
 The simplest way to install city2graph is via pip:
 
 ```bash
-# Basic installation (without PyTorch)
 pip install city2graph
 ```
 
 This installs the core functionality without PyTorch and PyTorch Geometric.
 
-### With PyTorch (CPU)
+#### With PyTorch (CPU)
 
 If you need the Graph Neural Networks functionality, install with the `cpu` option:
 
 ```bash
-# Install with PyTorch and PyTorch Geometric (CPU version)
 pip install "city2graph[cpu]"
 ```
 
 This will install PyTorch and PyTorch Geometric with CPU support, suitable for development and small-scale processing.
 
-### With PyTorch + CUDA (GPU)
+#### With PyTorch + CUDA (GPU)
 
 For GPU acceleration, you can install city2graph with a specific CUDA version extra. For example, for CUDA 12.8:
 
 ```bash
-# e.g., for CUDA 12.8
 pip install "city2graph[cu128]"
 ```
 
 Supported CUDA versions are `cu118`, `cu124`, `cu126`, and `cu128`.
 
-**Important:** The PyTorch Geometric extensions (`pyg_lib`, `torch_scatter`, etc.) are not included and must be installed separately. Please refer to the [PyTorch Geometric documentation](https://pytorch-geometric.readthedocs.io/en/latest/notes/installation.html) for instructions. Due to the low demand, `conda` distributions are deprecated for PyTorch and PyTorch Geometric. For the most reliable setup, we recommend using pip or uv as described above.
+### Using conda
 
-#### For Development
+#### Basic Installation
+
+You can also install city2graph using conda from conda-forge:
+
+```bash
+conda install -c conda-forge city2graph
+```
+
+This installs the core functionality without PyTorch and PyTorch Geometric.
+
+#### With PyTorch (CPU)
+
+To use PyTorch and PyTorch Geometric with city2graph installed from conda-forge, you need to manually add these libraries to your environment:
+
+```bash
+# Install city2graph
+conda install -c conda-forge city2graph
+
+# Then install PyTorch and PyTorch Geometric
+conda install -c conda-forge pytorch pytorch_geometric
+```
+
+#### With PyTorch + CUDA (GPU)
+
+For GPU support, you should select the appropriate PyTorch variant by specifying the version and CUDA build string. For example, to install PyTorch 2.7.1 with CUDA 12.9 support:
+
+```bash
+# Install city2graph
+conda install -c conda-forge city2graph
+
+# Then install PyTorch with CUDA support
+conda install -c conda-forge pytorch=2.7.1=*cuda129*
+conda install -c conda-forge pytorch_geometric
+```
+
+You can browse available CUDA-enabled builds on the [conda-forge PyTorch files page](https://anaconda.org/conda-forge/pytorch/files) and substitute the desired version and CUDA variant in your install command. Make sure that the versions of PyTorch and PyTorch Geometric you install are compatible with each other and with your system.
+
+**⚠️ Important:** conda is not officially supported by PyTorch and PyTorch Geometric anymore, and only conda-forge distributions are available for them. We recommend using pip or uv for the most streamlined installation experience if you need PyTorch functionality.
+
+## For Development
 
 If you want to contribute to city2graph, you can set up a development environment using `uv`.
 
@@ -84,7 +121,7 @@ uv run ipython kernel install --name "your-env-name" --user
 uv run jupyter notebook
 ```
 
-#### Development Environment
+### Development Environment
 
 The development dependencies include:
 - `ipython`: Enhanced interactive Python shell with Jupyter kernel support
@@ -94,7 +131,7 @@ The development dependencies include:
 
 The Jupyter kernel installation ensures that when you start Jupyter notebooks, you can select the "city2graph" kernel which has access to all your project dependencies in the correct virtual environment.
 
-## Using Docker Compose
+### Using Docker Compose
 
 Before using Docker Compose, ensure you have Docker and Docker Compose installed on your system:
 
