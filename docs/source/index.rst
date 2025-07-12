@@ -149,14 +149,14 @@ If you use city2graph in your research, please cite it as follows:
      author = {Sato, Yuta},
      year = {2025},
      url = {https://github.com/c2g-dev/city2graph},
-     doi = {10.5281/zenodo.15858846},
-     version = {0.1.0}
+     doi = {10.5281/zenodo.15870729},
+     version = {0.1.1}
    }
 
 You can also use the DOI to cite a specific version: |DOI|
 
-.. |DOI| image:: https://zenodo.org/badge/DOI/10.5281/zenodo.15858846.svg
-   :target: https://doi.org/10.5281/zenodo.15858846
+.. |DOI| image:: https://zenodo.org/badge/DOI/10.5281/zenodo.15870729.svg
+   :target: https://doi.org/10.5281/zenodo.15870729
 
 Alternatively, you can find the citation information in the `CITATION.cff <https://github.com/c2g-dev/city2graph/blob/main/CITATION.cff>`_ file in the repository, which follows the Citation File Format standard.
 
