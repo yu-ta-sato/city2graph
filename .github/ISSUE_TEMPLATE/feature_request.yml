@@ -1,0 +1,76 @@
+name: Feature Request
+description: Suggest an idea for city2graph
+title: '[FEATURE] '
+labels: [enhancement]
+assignees: ['']
+body:
+  - type: checkboxes
+    id: contributing
+    attributes:
+      label: Contributing guidelines
+      description: |
+        Before you proceed, read the
+        [contributing guidelines](https://city2graph.net/contributing.html)
+        regarding where to ask usage questions and how to propose a feature.
+      options:
+        - label: I understand the contributing guidelines
+          required: true
+  - type: checkboxes
+    id: documentation_examples
+    attributes:
+      label: Documentation
+      description: |
+        Before you proceed, review the [documentation](https://city2graph.net), which covers
+        key concepts, installation, and package usage.
+      options:
+        - label: My proposal is not addressed by the documentation or examples
+          required: true
+  - type: checkboxes
+    id: existing_issue
+    attributes:
+      label: Existing issues
+      description: |
+        Before you proceed, search the open/closed issues and pull requests to see if
+        anything similar has been proposed.
+      options:
+        - label: Nothing similar appears in an existing issue
+          required: true
+  - type: textarea
+    id: related-problem
+    attributes:
+      label: Is your feature request related to a problem? Please describe.
+      description: A clear and concise description of what the problem is.
+    validations:
+      required: true
+  - type: textarea
+    id: solution
+    attributes:
+      label: Describe the solution you'd like
+      description: A clear and concise description of what you want to happen.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Describe alternatives you've considered
+      description: >-
+        A clear and concise description of any alternative solutions or
+        features you've considered.
+  - type: textarea
+    id: api-changes
+    attributes:
+      label: API changes
+      description: >-
+        If the feature would involve changes to the public API, please provide
+        a sketch of the new or modified functions/classes.
+      placeholder: |
+        # Example of proposed API change
+        def new_function(param1: str, param2: int) -> bool:
+            '''Description of the new function.'''
+            pass
+      render: python
+  - type: textarea
+    id: additional-context
+    attributes:
+      label: Additional context
+      description: Add any other context or screenshots about the feature request here.
