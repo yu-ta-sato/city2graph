@@ -1,10 +1,10 @@
-# city2graph
+# city2graph: GeoAI with Graph Neural Networks (GNNs) and Spatial Network Analysis
 
 [![city2graph](http://city2graph.net/_static/social_preview.png)](http://city2graph.net/_static/social_preview.png)
 
-**city2graph** is a Python library for converting urban geometry into graph representations, enabling advanced analysis of urban environments. For more information, please reach out to the document (https://city2graph.net).
+**city2graph** is a Python library for converting geospatial datasets into graph representations, providing an integrated interface for [GeoPandas](https://geopandas.org/), [NetworkX](https://networkx.org/), and [PyTorch Geometric](https://pytorch-geometric.readthedocs.io/en/latest/) across multiple domains (e.g. streets, transportations, OD matrices, POI proximities, etc.). It enables researchers and practitioners to seamlessly develop advanced GeoAI and geographic data science applications. For more information, please visit the [documentation](https://city2graph.net).
 
-[![PyPI version](https://badge.fury.io/py/city2graph.svg)](https://badge.fury.io/py/city2graph) [![conda-forge Version](https://anaconda.org/conda-forge/city2graph/badges/version.svg)](https://anaconda.org/conda-forge/city2graph/) [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.15858845.svg)](https://doi.org/10.5281/zenodo.15858845) [![codecov](https://codecov.io/gh/c2g-dev/city2graph/graph/badge.svg?token=2R449G75Z0)](https://codecov.io/gh/c2g-dev/city2graph)
+[![PyPI version](https://badge.fury.io/py/city2graph.svg)](https://badge.fury.io/py/city2graph/) [![conda-forge Version](https://anaconda.org/conda-forge/city2graph/badges/version.svg)](https://anaconda.org/conda-forge/city2graph/) [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.15858845.svg)](https://doi.org/10.5281/zenodo.15858845) [![codecov](https://codecov.io/gh/c2g-dev/city2graph/graph/badge.svg?token=2R449G75Z0)](https://codecov.io/gh/c2g-dev/city2graph)
 [![License](https://img.shields.io/badge/License-BSD_3--Clause-blue.svg)](https://github.com/c2g-dev/city2graph/blob/main/LICENSE)
 [![Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff)
 
@@ -12,12 +12,11 @@
 
 [![scope](http://city2graph.net/_static/scope.png)](http://city2graph.net/_static/scope.png)
 
-
-- Construct graphs from morphological datasets (e.g. buildings, streets, and land use)
-- Construct graphs from transportation datasets (e.g. public transport of buses, trams, and trains)
-- Construct graphs from contiguity datasets (e.g. land use, land cover, and administrative boundaries)
-- Construct graphs from mobility datasets (e.g. bike-sharing, migration, and pedestrian flows)
-- Convert geospatial data into pytorch tensors for graph representation learning, such as Graph Neural Networks (GNNs)
+- **Graph Construction for GeoAI:** Build graphs from diverse urban datasets, including buildings, streets, and land use, to power GeoAI and GNN applications.
+- **Transportation Network Modeling:** Analyze public transport systems (buses, trams, trains) by constructing detailed transportation graphs with support of GTFS format.
+- **Proximity and Contiguity Analysis:** Create graphs based on spatial proximity and adjacency for applications in urban planning and environmental analysis.
+- **Mobility Flow Analysis:** Model and analyze urban mobility patterns from various data sources like bike-sharing, migration, and pedestrian flows.
+- **PyTorch Geometric Integration:** Seamlessly convert geospatial data into PyTorch tensors for GNNs.
 
 
 ## Installation
@@ -228,3 +227,5 @@ We maintain strict code quality standards using:
 - **numpydoc**: For docstring style validation
 
 All contributions must pass pre-commit checks before being merged.
+
+[![GeoGraphic Data Science Lab](http://city2graph.net/_static/gdsl.png)](https://www.liverpool.ac.uk/geographic-data-science/)

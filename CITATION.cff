@@ -2,7 +2,7 @@ cff-version: 1.2.0
 message: "If you use this software, please cite it as below."
 type: software
 title: "city2graph: Transform geospatial relations into graphs for spatial network analysis and Graph Neural Networks"
-abstract: "city2graph is a Python library that provides an integrated interface of geospatial datasets from multiple domains converting into graph representations. It facilitates the one-stop data pipeline for spatial network analysis and Graph Neaural Networks (GNNs)."
+abstract: "city2graph is a Python library that provides an integrated interface of geospatial datasets from multiple domains converting into graph representations. It facilitates the one-stop data pipeline for spatial network analysis and Graph Neaural Networks (GNNs)  for GeoAI applications."
 authors:
   - given-names: Yuta
     family-names: Sato
@@ -15,17 +15,23 @@ license: BSD-3-Clause
 version: 0.1.1
 date-released: 2025-07-12
 keywords:
-  - graph-neural-networks
-  - pytorch-geometric
-  - transportation
-  - mobility
-  - morphology
-  - urban-planning
-  - overturemaps
-  - gtfs
-  - geospatial
-  - spatial-analysis
-  - network-analysis
+  - GeoAI
+  - Graph Neural Networks
+  - GNNs
+  - PyTorch Geometric
+  - Geospatial Analysis
+  - Urban Analytics
+  - Spatial Data Science
+  - Urban Mobility
+  - Transportation Networks
+  - Spatial Knowledge Graphs
+  - Spatiotemporal Analysis
+  - Geospatial Foundation Models
+  - Digital Twin
+  - Urban Informatics
+  - Geographic Data Science
+  - Graph Representation Learning
+  - Urban Planning and Design
 preferred-citation:
   type: software
   title: "city2graph: Transform geospatial relations into graphs for spatial analysis and Graph Neural Networks"
