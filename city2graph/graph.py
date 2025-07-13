@@ -9,7 +9,7 @@ required by graph neural networks.
 
 The module serves as a bridge between geospatial data analysis tools and deep
 learning frameworks, enabling seamless integration of spatial urban data with
-Graph Neural Networks (GNNs) for tasks such as urban modeling, traffic prediction,
+Graph Neural Networks (GNNs) for tasks of GeoAI such as urban modeling, traffic prediction,
 and spatial analysis.
 """
 

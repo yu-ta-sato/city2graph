@@ -1,8 +1,7 @@
 .. city2graph documentation master file
 
-city2graph documentation
-========================
-
+city2graph
+==========
 .. figure:: _static/city2graph_logo_main.png
    :width: 400px
    :alt: city2graph logo
@@ -15,9 +14,7 @@ city2graph documentation
    :align: center
    :class: only-dark
 
-**city2graph** is a Python library for converting datasets of geospatial relations into graphs.
-It is designed to facilitate the graph data analytics in particular for urban studies and spatial analysis.
-It supports `Pytorch Geometric <https://pytorch-geometric.readthedocs.io/en/latest/>`_ to enable graph representation learning, such as Graph Neural Networks (GNNs).
+**city2graph** is a Python library for converting geospatial datasets into graph representations, providing an integrated interface for `GeoPandas <https://geopandas.org/>`_, `NetworkX <https://networkx.org/>`_, and `Pytorch Geometric <https://pytorch-geometric.readthedocs.io/en/latest/>`_ across multiple domains (e.g. streets, transportations, OD matrices, POI proximities, etc.). It enables researchers and practitioners to seamlessly develop advanced GeoAI and geographic data science applications.
 
 .. figure:: _static/scope.png
    :width: 1000px
@@ -27,11 +24,16 @@ It supports `Pytorch Geometric <https://pytorch-geometric.readthedocs.io/en/late
 Features
 --------
 
-- Construct graphs from morphological datasets (e.g. buildings, streets, and land use)
-- Construct graphs from transportation datasets (e.g. public transport of buses, trams, and trains)
+- Construct graphs from morphological datasets (e.g. buildings, streets, and land use from OpenStreetMap (OSM), Overture Maps, and others)
+- Construct graphs from transportation datasets (e.g. public transport of buses, trams, and trains from GTFS)
 - Construct graphs from contiguity datasets (e.g. land use, land cover, and administrative boundaries)
 - Construct graphs from mobility datasets (e.g. bike-sharing, migration, and pedestrian flows)
-- Convert geospatial data into tensors (PyTorch Geometric's Data and HeteroData) for graph representation learning, such as Graph Neural Networks (GNNs)
+- Convert geospatial data (GeoPandas / NetworkX) into tensors (PyTorch Geometric's Data and HeteroData) for graph representation learning, such as Graph Neural Networks (GNNs)
+
+Keywords
+--------
+
+GeoAI, Graph Neural Networks, GNNs, PyTorch Geometric, Geospatial Analysis, Urban Analytics, Spatial Data Science, Urban Mobility, Transportation Networks, Spatial Knowledge Graphs, Spatiotemporal Analysis, Geospatial Foundation Models, Digital Twin, Urban Informatics, Geographic Data Science, Graph Representation Learning, Urban Planning and Design.
 
 Examples
 --------

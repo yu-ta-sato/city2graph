@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "city2graph"
 version = "0.1.1"
-description = "Transform geospatial relations into graphs for spatial analysis and GNNs."
+description = "A Python library for Geospatial Graph Neural Networks and GeoAI for Urban Analytics with PyTorch Geometric. Convert geospatial data to graphs for spatiotemporal analysis, urban mobility studies, and more."
 authors = [
     {name = "Yuta Sato", email = "y.sato@liverpool.ac.uk"}
 ]
@@ -22,7 +22,7 @@ classifiers = [
     "Programming Language :: Python :: 3 :: Only",
     "Topic :: Scientific/Engineering :: GIS",
 ]
-keywords = ["graph-neural-networks", "pytorch-geometric", "urban", "transportation", "mobility", "overturemaps", "gtfs"]
+keywords = ["GeoAI", "Graph Neural Networks", "GNNs", "PyTorch Geometric", "Geospatial Analysis", "Urban Analytics", "Spatial Data Science", "Urban Mobility", "Transportation Networks", "Spatial Knowledge Graphs", "Spatiotemporal Analysis", "Geospatial Foundation Models", "Digital Twin", "Urban Informatics", "Geographic Data Science", "Graph Representation Learning", "Urban Planning and Design"]
 requires-python = ">=3.11,<4.0"
 dependencies = [
     "networkx >=2.8",
