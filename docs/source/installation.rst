@@ -68,7 +68,7 @@ To use PyTorch and PyTorch Geometric with city2graph installed from conda-forge,
 With PyTorch + CUDA (GPU)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-For GPU support, you should select the appropriate PyTorch variant by specifying the version and CUDA build string. For example, to install PyTorch 2.7.1 with CUDA 12.9 support:
+For GPU support, you should select the appropriate PyTorch variant by specifying the version and CUDA build string. For example, to install PyTorch 2.7.1 with CUDA 12.8 support:
 
 .. code-block:: bash
 
@@ -76,7 +76,7 @@ For GPU support, you should select the appropriate PyTorch variant by specifying
     conda install -c conda-forge city2graph
 
     # Then install PyTorch with CUDA support
-    conda install -c conda-forge pytorch=2.7.1=*cuda129*
+    conda install -c conda-forge pytorch=2.7.1=*cuda128*
     conda install -c conda-forge pytorch_geometric
 
 You can browse available CUDA-enabled builds on the `conda-forge PyTorch files page <https://anaconda.org/conda-forge/pytorch/files>`_ and substitute the desired version and CUDA variant in your install command. Make sure that the versions of PyTorch and PyTorch Geometric you install are compatible with each other and with your system.
