@@ -55,7 +55,7 @@ exclude_patterns = ["_build", "**.ipynb_checkpoints"]
 # Optimize documentation for search engines and social media sharing
 
 # Title for the HTML documentation
-html_title = "city2graph - GeoAI with Graph Neural Networks (GNNs) and Spatial Network Analysis"
+html_title = "city2graph - GeoAI with Graph Neural Networks (GNNs) and Spatial Network Analysis in Python"
 # Base URL for sitemap and canonical URLs
 html_baseurl = "https://city2graph.net/"
 # Include robots.txt in the output
