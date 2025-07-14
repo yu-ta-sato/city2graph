@@ -30,10 +30,84 @@ Features
 - Construct graphs from mobility datasets (e.g. bike-sharing, migration, and pedestrian flows)
 - Convert geospatial data (GeoPandas / NetworkX) into tensors (PyTorch Geometric's Data and HeteroData) for graph representation learning, such as Graph Neural Networks (GNNs)
 
+.. |PyPI| image:: https://badge.fury.io/py/city2graph.svg
+   :target: https://badge.fury.io/py/city2graph
+   :alt: PyPI version
+
+.. |conda-forge| image:: https://anaconda.org/conda-forge/city2graph/badges/version.svg
+   :target: https://anaconda.org/conda-forge/city2graph
+   :alt: conda-forge Version
+
+.. |PyPIDownloads| image:: https://static.pepy.tech/badge/city2graph
+   :target: https://pepy.tech/projects/city2graph
+   :alt: PyPI Downloads
+
+.. |DOI| image:: https://zenodo.org/badge/DOI/10.5281/zenodo.15858845.svg
+   :target: https://doi.org/10.5281/zenodo.15858845
+   :alt: DOI
+
+.. |License| image:: https://img.shields.io/badge/License-BSD_3--Clause-blue.svg
+   :target: https://github.com/c2g-dev/city2graph/blob/main/LICENSE
+   :alt: License
+
+.. |Platform| image:: https://anaconda.org/conda-forge/city2graph/badges/platforms.svg
+   :target: https://anaconda.org/conda-forge/city2graph
+   :alt: Platform
+
+.. |codecov| image:: https://codecov.io/gh/c2g-dev/city2graph/graph/badge.svg?token=2R449G75Z0
+   :target: https://codecov.io/gh/c2g-dev/city2graph
+   :alt: codecov
+
+.. |Ruff| image:: https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json
+   :target: https://github.com/astral-sh/ruff
+   :alt: Ruff
+
+|PyPI| |conda-forge| |PyPIDownloads| |DOI| |License| |Platform| |codecov| |Ruff|
+
 Keywords
 --------
 
-GeoAI, Graph Neural Networks, GNNs, PyTorch Geometric, Geospatial Analysis, Urban Analytics, Spatial Data Science, Urban Mobility, Transportation Networks, Spatial Knowledge Graphs, Spatiotemporal Analysis, Geospatial Foundation Models, Digital Twin, Urban Informatics, Geographic Data Science, Graph Representation Learning, Urban Planning and Design.
+GeoAI, Graph Neural Networks, GNNs, PyTorch Geometric, Geospatial Analysis, Urban Analytics, Spatial Data Science, Urban Mobility, Transportation Networks, Geospatial Foundation Models, Digital Twin, Urban Informatics, Geographic Data Science, Graph Representation Learning, Urban Planning and Design, Urban Morphology.
+
+Quickstart
+----------
+
+Install city2graph using pip (recommended):
+
+.. code-block:: bash
+
+   pip install city2graph
+
+For graph neural network functionality (PyTorch, PyTorch Geometric):
+
+.. code-block:: bash
+
+   pip install "city2graph[cpu]"  # CPU only
+   pip install "city2graph[cu128]"  # For CUDA 12.8 (GPU)
+
+Supported CUDA options: cu118, cu124, cu126, cu128
+
+Or install with conda (core functionality only):
+
+.. code-block:: bash
+
+   conda install -c conda-forge city2graph
+
+To add PyTorch and PyTorch Geometric (conda):
+
+.. code-block:: bash
+
+   conda install -c conda-forge pytorch pytorch_geometric
+
+For CUDA-enabled PyTorch (conda):
+
+.. code-block:: bash
+
+   conda install -c conda-forge pytorch=2.7.1=*cuda128*
+   conda install -c conda-forge pytorch_geometric
+
+.. note::
+   For most users, pip is recommended for full PyTorch support. See :doc:`installation` for details.
 
 Examples
 --------
@@ -156,9 +230,6 @@ If you use city2graph in your research, please cite it as follows:
 
 You can also use the DOI to cite a specific version: |DOI|
 
-.. |DOI| image:: https://zenodo.org/badge/DOI/10.5281/zenodo.15858845.svg
-   :target: https://doi.org/10.5281/zenodo.15858845
-
 Alternatively, you can find the citation information in the `CITATION.cff <https://github.com/c2g-dev/city2graph/blob/main/CITATION.cff>`_ file in the repository, which follows the Citation File Format standard.
 
 Documentation
@@ -180,3 +251,8 @@ Indices and tables
 * :ref:`genindex`
 * :ref:`modindex`
 * :ref:`search`
+
+.. image:: http://city2graph.net/_static/gdsl.png
+   :target: https://www.liverpool.ac.uk/geographic-data-science/
+   :alt: GeoGraphic Data Science Lab
+   :align: center
