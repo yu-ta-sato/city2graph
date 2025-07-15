@@ -707,19 +707,9 @@ def public_to_public_graph(
     public_gdf_copy = public_gdf.copy()
 
     # Check if public_id column already exists (shared with other components)
-    if "public_id" in public_gdf_copy.columns:
-        edge_id_col = "public_id"
-        # If the public_id column contains MultiIndex tuples, we need to ensure
-        # they can be used safely in dual_graph operations
-        has_multiindex = isinstance(public_gdf_copy.index, pd.MultiIndex)
-        has_tuple_ids = any(isinstance(pid, tuple) for pid in public_gdf_copy["public_id"])
-        # Always convert public_id to string to ensure consistency
-        if has_multiindex or has_tuple_ids:
-            public_gdf_copy["public_id"] = public_gdf_copy["public_id"].astype(str)
-    else:
-        # Create a unique identifier for each row that can handle any index type
-        edge_id_col = "_edge_id"
-        public_gdf_copy["_edge_id"] = [str(idx) for idx in public_gdf_copy.index]
+    edge_id_col = "public_id" if "public_id" in public_gdf_copy.columns else "_edge_id"
+
+    public_gdf_copy[edge_id_col] = [str(idx) for idx in public_gdf_copy.index]
 
     # Convert public_gdf to a graph
     segment_nodes, segment_edges = segments_to_graph(public_gdf_copy)
@@ -731,8 +721,9 @@ def public_to_public_graph(
         keep_original_geom=True,
     )
 
-    # Rename the MultiIndex levels for clarity and consistency
+    # Preserve the original MultiIndex structure and data types
     if isinstance(dual_edges.index, pd.MultiIndex):
+        # Rename the MultiIndex levels for clarity and consistency
         dual_edges.index.names = ["from_public_id", "to_public_id"]
 
     # Reset index to ensure it is a regular DataFrame
