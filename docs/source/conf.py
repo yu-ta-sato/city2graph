@@ -20,8 +20,8 @@ sys.path.insert(0, os.path.abspath("../.."))
 project = "city2graph"
 copyright = "2025, Yuta Sato & city2graph developers"
 author = "Yuta Sato"
-release = "0.1.1"
-version = "0.1.1"
+release = "0.1.2"
+version = "0.1.2"
 
 # -- General configuration ---------------------------------------------------
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#general-configuration
@@ -55,7 +55,7 @@ exclude_patterns = ["_build", "**.ipynb_checkpoints"]
 # Optimize documentation for search engines and social media sharing
 
 # Title for the HTML documentation
-html_title = "city2graph - GeoAI with Graph Neural Networks (GNNs) and Spatial Network Analysis in Python"
+html_title = "city2graph - GeoAI with Graph Neural Networks (GNN) and Spatial Network Analysis in Python"
 # Base URL for sitemap and canonical URLs
 html_baseurl = "https://city2graph.net/"
 # Include robots.txt in the output
