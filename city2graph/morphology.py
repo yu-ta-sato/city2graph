@@ -173,6 +173,11 @@ def morphological_graph(  # noqa: PLR0912, PLR0915
         msg = "clipping_buffer cannot be negative."
         raise ValueError(msg)
 
+    # Convert MultiIndex to tuples if buildings_gdf has MultiIndex
+    if isinstance(buildings_gdf.index, pd.MultiIndex):
+        buildings_gdf = buildings_gdf.copy()
+        buildings_gdf.index = buildings_gdf.index.to_flat_index()
+
     # Ensure CRS consistency between buildings and segments
     segments_gdf = _ensure_crs_consistency(buildings_gdf, segments_gdf)
 
@@ -707,9 +712,12 @@ def public_to_public_graph(
     public_gdf_copy = public_gdf.copy()
 
     # Check if public_id column already exists (shared with other components)
-    edge_id_col = "public_id" if "public_id" in public_gdf_copy.columns else "_edge_id"
+    if "public_id" in public_gdf_copy.columns:
+        edge_id_col = "public_id"
 
-    public_gdf_copy[edge_id_col] = [str(idx) for idx in public_gdf_copy.index]
+    else:
+        edge_id_col = "_edge_id"
+        public_gdf_copy[edge_id_col] = [str(idx) for idx in public_gdf_copy.index]
 
     # Convert public_gdf to a graph
     segment_nodes, segment_edges = segments_to_graph(public_gdf_copy)

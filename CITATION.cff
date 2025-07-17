@@ -12,12 +12,12 @@ authors:
 repository-code: "https://github.com/c2g-dev/city2graph"
 url: "https://city2graph.net"
 license: BSD-3-Clause
-version: 0.1.1
+version: 0.1.2
 date-released: 2025-07-12
 keywords:
   - GeoAI
   - Graph Neural Networks
-  - GNNs
+  - GNN
   - PyTorch Geometric
   - Geospatial Analysis
   - Urban Analytics
@@ -40,6 +40,6 @@ preferred-citation:
       family-names: Sato
       email: y.sato@liverpool.ac.uk
       affiliation: University of Liverpool
-  version: 0.1.1
+  version: 0.1.2
   url: "https://github.com/c2g-dev/city2graph"
   year: 2025

@@ -803,7 +803,12 @@ def _create_node_positions(
     geom_series = node_gdf.geometry
 
     # Get centroids of geometries
-    centroids = geom_series.centroid
+    if geom_series.crs and geom_series.crs.is_geographic:
+        # Reproject to a suitable projected CRS (UTM) to get accurate centroids
+        utm_crs = geom_series.estimate_utm_crs()
+        centroids = geom_series.to_crs(utm_crs).centroid.to_crs(geom_series.crs)
+    else:
+        centroids = geom_series.centroid
 
     # Map torch dtype to numpy dtype for consistency
     numpy_dtype = torch.tensor(0, dtype=dtype).numpy().dtype

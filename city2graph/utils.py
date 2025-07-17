@@ -339,15 +339,25 @@ class GeoDataProcessor:
             msg = "Graph is missing 'graph' attribute dictionary for metadata."
             raise ValueError(msg)
 
+        # If 'is_hetero' is not set, default to False
+        is_hetero = graph.graph.setdefault("is_hetero", False)
+
         metadata_keys = ["is_hetero", "crs"]
         for key in metadata_keys:
             if key not in graph.graph:
                 msg = f"Graph metadata is missing required key: '{key}'"
                 raise ValueError(msg)
 
-        # Check for node-level attributes in a single pass
-        is_hetero = graph.graph.get("is_hetero", False)
+        # Create 'pos' from 'x' and 'y' if it's missing
+        pos_dict = {
+            node: (attrs["x"], attrs["y"])
+            for node, attrs in graph.nodes(data=True)
+            if "pos" not in attrs and "x" in attrs and "y" in attrs
+        }
+        if pos_dict:
+            nx.set_node_attributes(graph, pos_dict, "pos")
 
+        # Check for node-level attributes in a single pass
         if is_hetero:
             if "node_types" not in graph.graph or not graph.graph["node_types"]:
                 msg = "Heterogeneous graph metadata is missing 'node_types'."
@@ -2108,8 +2118,7 @@ def dual_graph(
 
     if isinstance(graph, (nx.Graph, nx.MultiGraph)):
         # If input is a NetworkX graph, convert it to GeoDataFrames
-        converter = GraphConverter()
-        nodes_gdf, edges_gdf = converter.nx_to_gdf(graph, nodes=True, edges=True)
+        nodes_gdf, edges_gdf = nx_to_gdf(graph, nodes=True, edges=True)
     else:
         # Input is guaranteed to be tuple[GeoDataFrame, GeoDataFrame] by type annotation
         nodes_gdf, edges_gdf = graph
@@ -2179,24 +2188,23 @@ def dual_graph(
     assert isinstance(dual_nodes, gpd.GeoDataFrame)
     assert isinstance(dual_edges, gpd.GeoDataFrame)
 
-    new_index_name = None
-    if edge_id_col:
+    # Handle index mapping based on whether edge_id_col is provided
+    if edge_id_col is not None:
         # Create a mapping from the old index (used by momepy) to the new index values
         id_map = dual_nodes[edge_id_col]
 
         # Set the new index for the dual nodes
         dual_nodes = dual_nodes.set_index(edge_id_col)
-        new_index_name = edge_id_col
 
         # Remap the dual edges' MultiIndex to use the new node IDs
         if isinstance(dual_edges, gpd.GeoDataFrame) and not dual_edges.empty:
-            level_0 = dual_edges.index.get_level_values(0).map(id_map)
-            level_1 = dual_edges.index.get_level_values(1).map(id_map)
+            level_0 = dual_edges.index.get_level_values(0).map(id_map).to_list()
+            level_1 = dual_edges.index.get_level_values(1).map(id_map).to_list()
             dual_edges.index = pd.MultiIndex.from_arrays([level_0, level_1])
-
-    # Align edge index names with the new node index name
-    if new_index_name and isinstance(dual_edges, gpd.GeoDataFrame) and not dual_edges.empty:
-        dual_edges.index.names = [f"from_{new_index_name}", f"to_{new_index_name}"]
+            dual_edges.index.names = [f"from_{edge_id_col}", f"to_{edge_id_col}"]
+    # When edge_id_col is None, use the existing index structure
+    elif isinstance(dual_edges, gpd.GeoDataFrame) and not dual_edges.empty:
+        dual_edges.index.names = ["from_edge_id", "to_edge_id"]
 
     return dual_nodes, dual_edges if not as_nx else gdf_to_nx(dual_nodes, dual_edges)
 

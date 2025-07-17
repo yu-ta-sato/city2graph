@@ -416,6 +416,73 @@ def test_distance_metric_relationships(sample_nodes_gdf: gpd.GeoDataFrame) -> No
     assert euclidean_weight <= manhattan_weight + TOLERANCE
 
 
+class TestCoverageImprovements:
+    """Test cases to improve coverage in proximity module."""
+
+    def test_invalid_distance_metric_handling(
+        self,
+        sample_hetero_nodes_dict: dict[str, gpd.GeoDataFrame],
+    ) -> None:
+        """Test invalid distance metric handling (lines 1272, 1290)."""
+        # Use existing heterogeneous nodes fixture for bridge_nodes testing
+        # Test with invalid distance metric (non-string) - should default to "euclidean"
+        _, edges = bridge_nodes(
+            sample_hetero_nodes_dict,
+            proximity_method="knn",
+            k=1,
+            distance_metric=123,  # Invalid type, should default to "euclidean"
+        )
+
+        assert isinstance(edges, dict)
+        assert len(edges) > 0
+
+    def test_distance_metric_type_validation(self, sample_nodes_gdf: gpd.GeoDataFrame) -> None:
+        """Test distance_metric type validation to cover line 1290 in proximity.py."""
+        # Test with non-string distance_metric to trigger line 1290
+        nodes, edges = _run_or_skip(
+            fixed_radius_graph,
+            sample_nodes_gdf,
+            radius=2.0,
+            distance_metric=None,  # Non-string type, should default to "euclidean"
+        )
+        # Should not raise an error and use euclidean as default
+        assert isinstance(nodes, gpd.GeoDataFrame)
+        assert isinstance(edges, gpd.GeoDataFrame)
+
+    def test_network_path_fallback_handling(
+        self,
+        sample_nodes_gdf: gpd.GeoDataFrame,
+        sample_crs: str,
+    ) -> None:
+        """Test network path fallback for same network points (lines 1636-1638)."""
+        # Use existing nodes fixture but create very close points to trigger fallback
+        close_nodes = sample_nodes_gdf.copy()
+        # Make all nodes very close to trigger same network point mapping
+        close_nodes.geometry = [
+            Point(0, 0),
+            Point(0.001, 0.001),
+            Point(0.002, 0.002),
+            Point(0.003, 0.003),
+        ]
+
+        # Create minimal network
+        network_gdf = gpd.GeoDataFrame(
+            {"network_id": [1]},
+            geometry=[LineString([(0, 0), (1, 0)])],
+            crs=sample_crs,
+        )
+
+        # This should trigger the fallback path for nodes mapping to same network point
+        _, edges = fixed_radius_graph(
+            close_nodes,
+            radius=2.0,
+            distance_metric="network",
+            network_gdf=network_gdf,
+        )
+
+        assert isinstance(edges, gpd.GeoDataFrame)
+
+
 # Error condition tests
 class TestErrorConditions:
     """Test various error conditions."""
