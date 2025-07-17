@@ -5,6 +5,33 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.1.2 (2025-07-17)
+
+### Added
+- GitHub issue templates for bug reports and feature requests.
+- Pull request template for better contribution workflow.
+- Enhanced test coverage with improved test codes across all modules.
+- New example notebooks in documentation including morphological graph examples.
+
+### Changed
+- Updated `morphological_graph()` function to accept MultiGraph inputs (e.g., from OSMnx) with bug fix.
+- Enhanced `utils.py` module with improved compliance and functionality.
+- Updated PyTorch dependencies to support newer CUDA versions (cu126, cu128).
+- Improved documentation structure and content across multiple files.
+- Updated uv dependency management configuration.
+
+### Fixed
+- Fixed edge index data types in `public_to_public_graph()` function.
+- Fixed HTML title in documentation.
+- Fixed CUDA version examples in documentation.
+- Updated pre-commit configuration for better code quality.
+
+### Documentation
+- Added new badges and improved documentation presentation.
+- Enhanced installation instructions with clearer CUDA support information.
+- Updated example notebooks with more comprehensive demonstrations.
+- Improved API documentation and descriptions.
+
 ## 0.1.1 (2025-07-12)
 
 ### Added
