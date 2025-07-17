@@ -131,7 +131,7 @@ Examples
 
    A morphological graph of 500m walking distance in Liverpool
 
->> For details, see :doc:`examples/morphological_networks_from_overturemaps`
+>> For details, see :doc:`examples/morphological_graphs_from_overturemaps`
 
 **Transportation**
 
