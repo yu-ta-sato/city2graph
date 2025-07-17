@@ -670,3 +670,20 @@ class TestSpecialCases:
         data.graph_metadata.edge_types = [("wrong", "type", "tuple")]
         with pytest.raises(ValueError, match="Edge types mismatch"):
             validate_pyg(data)
+
+    def test_gdf_to_pyg_geographic_crs_handling(
+        self,
+        sample_nodes_gdf_alt_crs: gpd.GeoDataFrame,
+        sample_edges_gdf: gpd.GeoDataFrame,
+    ) -> None:
+        """Test geographic CRS handling in gdf_to_pyg (lines 808-809)."""
+        # Use the fixture that provides nodes with geographic CRS (EPSG:4326)
+        # Convert edges to same CRS to match
+        edges_geographic = sample_edges_gdf.to_crs("EPSG:4326")
+
+        # This should trigger the geographic CRS handling code path
+        pyg_data = gdf_to_pyg(sample_nodes_gdf_alt_crs, edges_geographic)
+
+        assert isinstance(pyg_data, Data)
+        assert pyg_data.pos is not None
+        assert pyg_data.pos.shape[0] == len(sample_nodes_gdf_alt_crs)  # All nodes
