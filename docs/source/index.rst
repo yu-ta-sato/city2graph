@@ -30,6 +30,12 @@ Features
 - Construct graphs from mobility datasets (e.g. bike-sharing, migration, and pedestrian flows)
 - Convert geospatial data (GeoPandas / NetworkX) into tensors (PyTorch Geometric's Data and HeteroData) for graph representation learning, such as Graph Neural Networks (GNNs)
 
+
+Keywords
+--------
+
+GeoAI, Graph Neural Networks, GNNs, PyTorch Geometric, Geospatial Analysis, Urban Analytics, Spatial Data Science, Urban Mobility, Transportation Networks, Geospatial Foundation Models, Digital Twin, Urban Informatics, Geographic Data Science, Graph Representation Learning, Urban Planning and Design, Urban Morphology.
+
 .. |PyPI| image:: https://badge.fury.io/py/city2graph.svg
    :target: https://badge.fury.io/py/city2graph
    :alt: PyPI version
@@ -63,11 +69,6 @@ Features
    :alt: Ruff
 
 |PyPI| |conda-forge| |PyPIDownloads| |DOI| |License| |Platform| |codecov| |Ruff|
-
-Keywords
---------
-
-GeoAI, Graph Neural Networks, GNNs, PyTorch Geometric, Geospatial Analysis, Urban Analytics, Spatial Data Science, Urban Mobility, Transportation Networks, Geospatial Foundation Models, Digital Twin, Urban Informatics, Geographic Data Science, Graph Representation Learning, Urban Planning and Design, Urban Morphology.
 
 Quickstart
 ----------
@@ -131,7 +132,7 @@ Examples
 
    A morphological graph of 500m walking distance in Liverpool
 
->> For details, see :doc:`examples/morphological_graphs_from_overturemaps`
+>> For details, see :doc:`examples/morphological_graph_from_overturemaps`
 
 **Transportation**
 
