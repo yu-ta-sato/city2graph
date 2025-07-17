@@ -6,6 +6,8 @@ import geopandas as gpd
 import networkx as nx
 import pandas as pd
 import pytest
+from shapely.geometry import LineString
+from shapely.geometry import Point
 
 from city2graph import utils
 from city2graph.utils import GeoDataProcessor
@@ -835,6 +837,69 @@ class TestEdgeCases:
         # This should trigger the MultiIndex path (line 294)
         graph = utils.gdf_to_nx(nodes=multiindex_nodes_gdf, edges=simple_edges_gdf)
         assert graph.graph["node_index_names"] == ["node_type", "node_id"]
+
+    def test_validate_nx_missing_graph_attr_edge_cases(self) -> None:
+        """Test validate_nx with missing graph attributes to cover line 358."""
+        # Create a graph with missing graph attribute
+        graph = nx.Graph()
+        graph.add_node(1, pos=(0, 0))
+        graph.add_edge(1, 2)
+        # Remove graph attribute to trigger line 358
+        delattr(graph, "graph")
+
+        with pytest.raises(ValueError, match="Graph is missing 'graph' attribute dictionary"):
+            utils.validate_nx(graph)
+
+    def test_nx_to_gdf_multiindex_edge_cases(self, sample_crs: str) -> None:
+        """Test nx_to_gdf with MultiIndex edge cases to cover lines 1373-1377, 1633, 1637."""
+        # Create a graph with complex edge indices to trigger MultiIndex handling
+        graph = nx.MultiGraph()
+        graph.add_node(1, pos=(0, 0), geometry=Point(0, 0))
+        graph.add_node(2, pos=(1, 1), geometry=Point(1, 1))
+        graph.add_edge(1, 2, key=0, geometry=LineString([(0, 0), (1, 1)]))
+        graph.add_edge(1, 2, key=1, geometry=LineString([(0, 0), (1, 1)]))
+        graph.graph = {"crs": sample_crs, "is_hetero": False}
+
+        # Set complex original edge indices to trigger lines 1373-1377
+        for u, v, k, attrs in graph.edges(data=True, keys=True):
+            attrs["_original_edge_index"] = [u, v, k]  # List format to trigger tuple conversion
+
+        nodes_gdf, edges_gdf = utils.nx_to_gdf(graph, nodes=True, edges=True)
+
+        assert isinstance(nodes_gdf, gpd.GeoDataFrame)
+        assert isinstance(edges_gdf, gpd.GeoDataFrame)
+        # The index should be a regular index with list elements, not MultiIndex
+        assert len(edges_gdf) == 2  # Two edges from the multigraph
+
+    def test_nx_to_gdf_empty_edges_handling(self, sample_crs: str) -> None:
+        """Test nx_to_gdf with empty edges to cover lines 1496-1497."""
+        # Create a graph with no edges to trigger lines 1496-1497
+        graph = nx.Graph()
+        graph.add_node(1, pos=(0, 0), geometry=Point(0, 0))
+        graph.graph = {"crs": sample_crs, "is_hetero": False}
+
+        nodes_gdf, edges_gdf = utils.nx_to_gdf(graph, nodes=True, edges=True)
+
+        assert isinstance(nodes_gdf, gpd.GeoDataFrame)
+        assert isinstance(edges_gdf, gpd.GeoDataFrame)
+        assert edges_gdf.empty
+        assert "weight" in edges_gdf.columns
+        assert "geometry" in edges_gdf.columns
+
+    def test_nx_to_gdf_multigraph_edge_processing(self, sample_crs: str) -> None:
+        """Test nx_to_gdf multigraph edge processing to cover line 1510."""
+        # Create a multigraph to trigger line 1510
+        graph = nx.MultiGraph()
+        graph.add_node(1, pos=(0, 0), geometry=Point(0, 0))
+        graph.add_node(2, pos=(1, 1), geometry=Point(1, 1))
+        graph.add_edge(1, 2, key=0, weight=1.0, geometry=LineString([(0, 0), (1, 1)]))
+        graph.graph = {"crs": sample_crs, "is_hetero": False}
+
+        nodes_gdf, edges_gdf = utils.nx_to_gdf(graph, nodes=True, edges=True)
+
+        assert isinstance(edges_gdf, gpd.GeoDataFrame)
+        assert len(edges_gdf) == 1
+        assert "weight" in edges_gdf.columns
 
     def test_edge_index_names_handling(
         self,

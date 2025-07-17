@@ -436,6 +436,19 @@ class TestCoverageImprovements:
         assert isinstance(edges, dict)
         assert len(edges) > 0
 
+    def test_distance_metric_type_validation(self, sample_nodes_gdf: gpd.GeoDataFrame) -> None:
+        """Test distance_metric type validation to cover line 1290 in proximity.py."""
+        # Test with non-string distance_metric to trigger line 1290
+        nodes, edges = _run_or_skip(
+            fixed_radius_graph,
+            sample_nodes_gdf,
+            radius=2.0,
+            distance_metric=None,  # Non-string type, should default to "euclidean"
+        )
+        # Should not raise an error and use euclidean as default
+        assert isinstance(nodes, gpd.GeoDataFrame)
+        assert isinstance(edges, gpd.GeoDataFrame)
+
     def test_network_path_fallback_handling(
         self,
         sample_nodes_gdf: gpd.GeoDataFrame,
