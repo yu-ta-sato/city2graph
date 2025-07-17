@@ -2188,18 +2188,23 @@ def dual_graph(
     assert isinstance(dual_nodes, gpd.GeoDataFrame)
     assert isinstance(dual_edges, gpd.GeoDataFrame)
 
-    # Create a mapping from the old index (used by momepy) to the new index values
-    id_map = dual_nodes[edge_id_col]
+    # Handle index mapping based on whether edge_id_col is provided
+    if edge_id_col is not None:
+        # Create a mapping from the old index (used by momepy) to the new index values
+        id_map = dual_nodes[edge_id_col]
 
-    # Set the new index for the dual nodes
-    dual_nodes = dual_nodes.set_index(edge_id_col)
+        # Set the new index for the dual nodes
+        dual_nodes = dual_nodes.set_index(edge_id_col)
 
-    # Remap the dual edges' MultiIndex to use the new node IDs
-    if isinstance(dual_edges, gpd.GeoDataFrame) and not dual_edges.empty:
-        level_0 = dual_edges.index.get_level_values(0).map(id_map).to_list()
-        level_1 = dual_edges.index.get_level_values(1).map(id_map).to_list()
-        dual_edges.index = pd.MultiIndex.from_arrays([level_0, level_1])
-        dual_edges.index.names = [f"from_{edge_id_col}", f"to_{edge_id_col}"]
+        # Remap the dual edges' MultiIndex to use the new node IDs
+        if isinstance(dual_edges, gpd.GeoDataFrame) and not dual_edges.empty:
+            level_0 = dual_edges.index.get_level_values(0).map(id_map).to_list()
+            level_1 = dual_edges.index.get_level_values(1).map(id_map).to_list()
+            dual_edges.index = pd.MultiIndex.from_arrays([level_0, level_1])
+            dual_edges.index.names = [f"from_{edge_id_col}", f"to_{edge_id_col}"]
+    # When edge_id_col is None, use the existing index structure
+    elif isinstance(dual_edges, gpd.GeoDataFrame) and not dual_edges.empty:
+        dual_edges.index.names = ["from_edge_id", "to_edge_id"]
 
     return dual_nodes, dual_edges if not as_nx else gdf_to_nx(dual_nodes, dual_edges)
 
