@@ -125,6 +125,7 @@ html_theme_options = {
     "show_toc_level": 2,                 # Show 2 levels in table of contents
     "navigation_with_keys": True,        # Enable keyboard navigation
     "show_nav_level": 1,                 # Show 1 level in navigation
+    "show_breadcrumbs": True,            # Enable breadcrumbs
     "navbar_start": ["navbar-logo"],     # Left side of navbar
     "navbar_center": ["navbar-nav"],     # Center of navbar
     "navbar_end": ["navbar-icon-links", "theme-switcher"], # Right side of navbar
@@ -133,7 +134,7 @@ html_theme_options = {
     "logo": {
         "image_light": "_static/city2graph_logo_wide.png",
         "image_dark": "_static/city2graph_logo_wide_dark.png",
-        "alt_text": "city2graph - Urban Data to Graph Conversion",
+        "alt_text": "city2graph - GeoAI with Graph Neural Network (GNN) in Python",
     },
 
     # Footer configuration
