@@ -55,13 +55,14 @@ exclude_patterns = ["_build", "**.ipynb_checkpoints"]
 # Optimize documentation for search engines and social media sharing
 
 # Title for the HTML documentation
-html_title = "city2graph - GeoAI with Graph Neural Networks (GNN) and Spatial Network Analysis in Python"
+html_title = "GeoAI with Graph Neural Network (GNN) in Python"
 # Base URL for sitemap and canonical URLs
 html_baseurl = "https://city2graph.net/"
 # Include robots.txt in the output
 html_extra_path = ["robots.txt"]
 # Default meta description for pages
 html_meta = {
+    "application-name": "city2graph",
     "description": "A Python library for converting geospatial datasets into graph representations, providing an integrated interface for `GeoPandas <https://geopandas.org/>`_, `NetworkX <https://networkx.org/>`_, and `Pytorch Geometric <https://pytorch-geometric.readthedocs.io/en/latest/>`_ across multiple domains (e.g. streets, transportations, OD matrices, POI proximities, etc.). It enables researchers and practitioners to seamlessly develop advanced GeoAI and geographic data science applications. For more information, please reach out to the document (https://city2graph.net).",
     "author": "Yuta Sato",
 }

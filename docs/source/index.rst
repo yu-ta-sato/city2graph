@@ -14,7 +14,7 @@ city2graph
    :align: center
    :class: only-dark
 
-**city2graph** is a Python library for converting geospatial datasets into graph representations, providing an integrated interface for `GeoPandas <https://geopandas.org/>`_, `NetworkX <https://networkx.org/>`_, and `Pytorch Geometric <https://pytorch-geometric.readthedocs.io/en/latest/>`_ across multiple domains (e.g. streets, transportations, OD matrices, POI proximities, etc.). It enables researchers and practitioners to seamlessly develop advanced GeoAI and geographic data science applications.
+**city2graph** is a Python library for converting geospatial datasets into graphs for GNN with integrated interface of `GeoPandas <https://geopandas.org/>`_, `NetworkX <https://networkx.org/>`_, and `Pytorch Geometric <https://pytorch-geometric.readthedocs.io/en/latest/>`_ across multiple domains (e.g. streets, transportations, OD matrices, POI proximities, etc.). It enables researchers and practitioners to seamlessly develop advanced GeoAI and geographic data science applications.
 
 .. figure:: _static/scope.png
    :width: 1000px
