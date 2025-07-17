@@ -107,8 +107,8 @@ For CUDA-enabled PyTorch (conda):
    conda install -c conda-forge pytorch=2.7.1=*cuda128*
    conda install -c conda-forge pytorch_geometric
 
-.. note::
-   For most users, pip is recommended for full PyTorch support. See :doc:`installation` for details.
+.. warning::
+   As conda is not officially supported by PyTorch and PyTorch Geometric anymore, pip is recommended for full PyTorch support. See :doc:`installation` for details.
 
 Examples
 --------
