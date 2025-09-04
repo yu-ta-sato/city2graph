@@ -62,6 +62,7 @@ cu128 = [
 ]
 
 [tool.uv]
+required-version = "0.8.15"
 default-groups = []
 # Prevent selecting more than one variant at once
 conflicts = [
