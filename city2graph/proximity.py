@@ -2343,8 +2343,6 @@ def contiguity_graph(
 
     Examples
     --------
-    **Example 1: Basic contiguity analysis of administrative boundaries**
-
     >>> # Create sample administrative districts
     >>> districts = [
     ...     Polygon([(0, 0), (2, 0), (2, 2), (0, 2)]),  # District A
