@@ -1,12 +1,7 @@
 """Tests for the data module - refactored version focusing on public API only."""
 
-from __future__ import annotations
-
 import importlib.util
 import subprocess
-from typing import TYPE_CHECKING
-
-# Import directly from data module to avoid torch import issues
 from unittest.mock import Mock
 from unittest.mock import patch
 
@@ -14,9 +9,10 @@ import geopandas as gpd
 import pytest
 from shapely.geometry import LineString
 from shapely.geometry import Point
+from shapely.geometry import Polygon
 
-if TYPE_CHECKING:
-    from shapely.geometry import Polygon
+from tests.helpers import make_connectors_gdf
+from tests.helpers import make_segments_gdf
 
 spec = importlib.util.spec_from_file_location("data_module", "city2graph/data.py")
 assert spec is not None
@@ -263,35 +259,51 @@ def test_load_overture_data_file_not_exists(
 
 
 # Tests for process_overture_segments function
-def test_process_overture_segments_empty_input(data_empty_gdf: gpd.GeoDataFrame) -> None:
+def test_process_overture_segments_empty_input() -> None:
     """Test process_overture_segments with empty GeoDataFrame."""
-    result = process_overture_segments(data_empty_gdf)
+    empty_gdf = gpd.GeoDataFrame(geometry=[], crs=WGS84_CRS)
+    result = process_overture_segments(empty_gdf)
 
     assert result.empty
     assert result.crs == WGS84_CRS
 
 
-def test_process_overture_segments_basic(data_sample_segments_gdf: gpd.GeoDataFrame) -> None:
-    """Test basic functionality of process_overture_segments."""
-    result = process_overture_segments(data_sample_segments_gdf, get_barriers=False)
+def test_process_overture_segments_basic() -> None:
+    """Test basic functionality of process_overture_segments with local data."""
+    # Create a minimal segments GeoDataFrame locally to avoid fixture dependency
+    segments_gdf = make_segments_gdf(
+        ids=["s1", "s2"],
+        geoms_or_coords=[[(0, 0), (1, 0)], [(1, 0), (2, 0)]],
+        level_rules="",
+        crs=WGS84_CRS,
+    )
+
+    result = process_overture_segments(segments_gdf, get_barriers=False)
 
     # Should have length column
     assert "length" in result.columns
     assert all(result["length"] > 0)
 
     # Should preserve original data
-    assert len(result) >= len(data_sample_segments_gdf)
+    assert len(result) >= len(segments_gdf)
     assert "id" in result.columns
 
 
-def test_process_overture_segments_with_connectors(
-    data_sample_segments_gdf: gpd.GeoDataFrame,
-    data_sample_connectors_gdf: gpd.GeoDataFrame,
-) -> None:
+def test_process_overture_segments_with_connectors() -> None:
     """Test process_overture_segments with connectors."""
+    connectors_data = '[{"connector_id": "c1", "at": 0.25}, {"connector_id": "c2", "at": 0.75}]'
+    segments_gdf = make_segments_gdf(
+        ids=["seg1"],
+        geoms_or_coords=[[(0, 0), (4, 0)]],
+        connectors=connectors_data,
+        level_rules="",
+        crs=WGS84_CRS,
+    )
+    connectors_gdf = make_connectors_gdf(ids=["c1", "c2"], coords=[(1, 0), (3, 0)], crs=WGS84_CRS)
+
     result = process_overture_segments(
-        data_sample_segments_gdf,
-        connectors_gdf=data_sample_connectors_gdf,
+        segments_gdf,
+        connectors_gdf=connectors_gdf,
         get_barriers=False,
     )
 
@@ -302,11 +314,15 @@ def test_process_overture_segments_with_connectors(
         assert "split_to" in result.columns
 
 
-def test_process_overture_segments_with_barriers(
-    data_sample_segments_gdf: gpd.GeoDataFrame,
-) -> None:
+def test_process_overture_segments_with_barriers() -> None:
     """Test process_overture_segments with barrier generation."""
-    result = process_overture_segments(data_sample_segments_gdf, get_barriers=True)
+    segments_gdf = make_segments_gdf(
+        ids=["seg1"],
+        geoms_or_coords=[[(0, 0), (1, 1)]],
+        level_rules="",
+        crs=WGS84_CRS,
+    )
+    result = process_overture_segments(segments_gdf, get_barriers=True)
 
     # Should have barrier_geometry column
     assert "barrier_geometry" in result.columns
@@ -314,12 +330,10 @@ def test_process_overture_segments_with_barriers(
 
 def test_process_overture_segments_missing_level_rules() -> None:
     """Test process_overture_segments with missing level_rules column."""
-    geometries = [LineString([(0, 0), (1, 1)])]
-    segments_gdf = gpd.GeoDataFrame(
-        {
-            "id": ["seg1"],
-            "geometry": geometries,
-        },
+    segments_gdf = make_segments_gdf(
+        ids=["seg1"],
+        geoms_or_coords=[[(0, 0), (1, 1)]],
+        level_rules=None,
         crs=WGS84_CRS,
     )
 
@@ -329,14 +343,21 @@ def test_process_overture_segments_missing_level_rules() -> None:
     assert result["level_rules"].iloc[0] == ""
 
 
-def test_process_overture_segments_with_threshold(
-    data_sample_segments_gdf: gpd.GeoDataFrame,
-    data_sample_connectors_gdf: gpd.GeoDataFrame,
-) -> None:
+def test_process_overture_segments_with_threshold() -> None:
     """Test process_overture_segments with custom threshold."""
+    connectors_data = '[{"connector_id": "c1", "at": 0.5}]'
+    segments_gdf = make_segments_gdf(
+        ids=["seg1", "seg2"],
+        geoms_or_coords=[[(0, 0), (1, 1)], [(1.1, 1.1), (2, 2)]],
+        connectors=[connectors_data, connectors_data],
+        level_rules="",
+        crs=WGS84_CRS,
+    )
+    connectors_gdf = make_connectors_gdf(ids=["c1"], coords=[(1, 1)], crs=WGS84_CRS)
+
     result = process_overture_segments(
-        data_sample_segments_gdf,
-        connectors_gdf=data_sample_connectors_gdf,
+        segments_gdf,
+        connectors_gdf=connectors_gdf,
         threshold=2.0,
     )
 
@@ -344,37 +365,42 @@ def test_process_overture_segments_with_threshold(
     assert "length" in result.columns
 
 
-def test_process_overture_segments_no_connectors(
-    data_sample_segments_gdf: gpd.GeoDataFrame,
-) -> None:
+def test_process_overture_segments_no_connectors() -> None:
     """Test process_overture_segments with None connectors."""
-    result = process_overture_segments(data_sample_segments_gdf, connectors_gdf=None)
+    segments_gdf = make_segments_gdf(
+        ids=["s1", "s2"],
+        geoms_or_coords=[[(0, 0), (1, 0)], [(1, 0), (2, 0)]],
+        level_rules="",
+        crs=WGS84_CRS,
+    )
+    result = process_overture_segments(segments_gdf, connectors_gdf=None)
 
     # Should not perform endpoint clustering
-    assert len(result) == len(data_sample_segments_gdf)
+    assert len(result) == len(segments_gdf)
 
 
-def test_process_overture_segments_empty_connectors(
-    data_sample_segments_gdf: gpd.GeoDataFrame,
-    data_empty_gdf: gpd.GeoDataFrame,
-) -> None:
+def test_process_overture_segments_empty_connectors() -> None:
     """Test process_overture_segments with empty connectors GeoDataFrame."""
-    result = process_overture_segments(data_sample_segments_gdf, connectors_gdf=data_empty_gdf)
+    segments_gdf = make_segments_gdf(
+        ids=["s1", "s2"],
+        geoms_or_coords=[[(0, 0), (1, 0)], [(1, 0), (2, 0)]],
+        level_rules="",
+        crs=WGS84_CRS,
+    )
+    empty_connectors = make_connectors_gdf(ids=[], coords=[], crs=WGS84_CRS)
+    result = process_overture_segments(segments_gdf, connectors_gdf=empty_connectors)
 
     # Should not perform splitting or clustering
-    assert len(result) == len(data_sample_segments_gdf)
+    assert len(result) == len(segments_gdf)
 
 
 def test_process_overture_segments_invalid_connector_data() -> None:
     """Test process_overture_segments with invalid connector JSON."""
-    geometries = [LineString([(0, 0), (1, 1)])]
-    segments_gdf = gpd.GeoDataFrame(
-        {
-            "id": ["seg1"],
-            "connectors": ["invalid_json"],
-            "level_rules": [""],
-            "geometry": geometries,
-        },
+    segments_gdf = make_segments_gdf(
+        ids=["seg1"],
+        geoms_or_coords=[[(0, 0), (1, 1)]],
+        connectors="invalid_json",
+        level_rules="",
         crs=WGS84_CRS,
     )
 
@@ -384,20 +410,17 @@ def test_process_overture_segments_invalid_connector_data() -> None:
     assert len(result) == 1
 
 
-def test_process_overture_segments_malformed_connectors(
-    data_sample_connectors_gdf: gpd.GeoDataFrame,
-) -> None:
+def test_process_overture_segments_malformed_connectors() -> None:
     """Test process_overture_segments with malformed connector data."""
-    segments_gdf = gpd.GeoDataFrame(
-        {
-            "id": ["seg1"],
-            "connectors": ['{"invalid": "structure"}'],
-            "level_rules": [""],
-            "geometry": [LineString([(0, 0), (1, 1)])],
-        },
+    segments_gdf = make_segments_gdf(
+        ids=["seg1"],
+        geoms_or_coords=[[(0, 0), (1, 1)]],
+        connectors='{"invalid": "structure"}',
+        level_rules="",
         crs=WGS84_CRS,
     )
-    result = process_overture_segments(segments_gdf, connectors_gdf=data_sample_connectors_gdf)
+    connectors_gdf = make_connectors_gdf(ids=["x"], coords=[(0.5, 0.5)], crs=WGS84_CRS)
+    result = process_overture_segments(segments_gdf, connectors_gdf=connectors_gdf)
 
     # Should handle malformed data gracefully
     assert len(result) == 1
@@ -405,13 +428,10 @@ def test_process_overture_segments_malformed_connectors(
 
 def test_process_overture_segments_invalid_level_rules() -> None:
     """Test process_overture_segments with invalid level rules JSON."""
-    geometries = [LineString([(0, 0), (1, 1)])]
-    segments_gdf = gpd.GeoDataFrame(
-        {
-            "id": ["seg1"],
-            "level_rules": ["invalid_json"],
-            "geometry": geometries,
-        },
+    segments_gdf = make_segments_gdf(
+        ids=["seg1"],
+        geoms_or_coords=[[(0, 0), (1, 1)]],
+        level_rules="invalid_json",
         crs=WGS84_CRS,
     )
 
@@ -423,15 +443,11 @@ def test_process_overture_segments_invalid_level_rules() -> None:
 
 def test_process_overture_segments_complex_level_rules() -> None:
     """Test process_overture_segments with complex level rules."""
-    geometries = [LineString([(0, 0), (1, 1)])]
     level_rules = '[{"value": 1, "between": [0.1, 0.3]}, {"value": 1, "between": [0.7, 0.9]}]'
-
-    segments_gdf = gpd.GeoDataFrame(
-        {
-            "id": ["seg1"],
-            "level_rules": [level_rules],
-            "geometry": geometries,
-        },
+    segments_gdf = make_segments_gdf(
+        ids=["seg1"],
+        geoms_or_coords=[[(0, 0), (1, 1)]],
+        level_rules=level_rules,
         crs=WGS84_CRS,
     )
 
@@ -444,15 +460,11 @@ def test_process_overture_segments_complex_level_rules() -> None:
 
 def test_process_overture_segments_full_barrier() -> None:
     """Test process_overture_segments with full barrier level rules."""
-    geometries = [LineString([(0, 0), (1, 1)])]
     level_rules = '[{"value": 1}]'  # No "between" means full barrier
-
-    segments_gdf = gpd.GeoDataFrame(
-        {
-            "id": ["seg1"],
-            "level_rules": [level_rules],
-            "geometry": geometries,
-        },
+    segments_gdf = make_segments_gdf(
+        ids=["seg1"],
+        geoms_or_coords=[[(0, 0), (1, 1)]],
+        level_rules=level_rules,
         crs=WGS84_CRS,
     )
 
@@ -465,15 +477,11 @@ def test_process_overture_segments_full_barrier() -> None:
 
 def test_process_overture_segments_zero_value_rules() -> None:
     """Test process_overture_segments with zero value level rules."""
-    geometries = [LineString([(0, 0), (1, 1)])]
     level_rules = '[{"value": 0, "between": [0.2, 0.8]}]'
-
-    segments_gdf = gpd.GeoDataFrame(
-        {
-            "id": ["seg1"],
-            "level_rules": [level_rules],
-            "geometry": geometries,
-        },
+    segments_gdf = make_segments_gdf(
+        ids=["seg1"],
+        geoms_or_coords=[[(0, 0), (1, 1)]],
+        level_rules=level_rules,
         crs=WGS84_CRS,
     )
 
@@ -488,24 +496,23 @@ def test_process_overture_segments_zero_value_rules() -> None:
 
 def test_process_overture_segments_segment_splitting() -> None:
     """Test that segments are properly split at connector positions."""
-    geometries = [LineString([(0, 0), (2, 2)])]
-    connectors_data = '[{"connector_id": "conn1", "at": 0.0}, {"connector_id": "conn2", "at": 0.5}, {"connector_id": "conn3", "at": 1.0}]'
+    connectors_data = (
+        '[{"connector_id": "conn1", "at": 0.0}, '
+        '{"connector_id": "conn2", "at": 0.5}, '
+        '{"connector_id": "conn3", "at": 1.0}]'
+    )
 
-    segments_gdf = gpd.GeoDataFrame(
-        {
-            "id": ["seg1"],
-            "connectors": [connectors_data],
-            "level_rules": [""],
-            "geometry": geometries,
-        },
+    segments_gdf = make_segments_gdf(
+        ids=["seg1"],
+        geoms_or_coords=[[(0, 0), (2, 2)]],
+        connectors=connectors_data,
+        level_rules="",
         crs=WGS84_CRS,
     )
 
-    connectors_gdf = gpd.GeoDataFrame(
-        {
-            "id": ["conn1", "conn2", "conn3"],
-            "geometry": [Point(0, 0), Point(1, 1), Point(2, 2)],
-        },
+    connectors_gdf = make_connectors_gdf(
+        ids=["conn1", "conn2", "conn3"],
+        coords=[(0, 0), (1, 1), (2, 2)],
         crs=WGS84_CRS,
     )
 
@@ -521,27 +528,14 @@ def test_process_overture_segments_segment_splitting() -> None:
 def test_process_overture_segments_endpoint_clustering() -> None:
     """Test endpoint clustering functionality."""
     # Create segments with nearby endpoints
-    geometries = [
-        LineString([(0, 0), (1, 1)]),
-        LineString([(1.1, 1.1), (2, 2)]),
-    ]
-
-    segments_gdf = gpd.GeoDataFrame(
-        {
-            "id": ["seg1", "seg2"],
-            "level_rules": ["", ""],
-            "geometry": geometries,
-        },
+    segments_gdf = make_segments_gdf(
+        ids=["seg1", "seg2"],
+        geoms_or_coords=[[(0, 0), (1, 1)], [(1.1, 1.1), (2, 2)]],
+        level_rules="",
         crs=WGS84_CRS,
     )
 
-    connectors_gdf = gpd.GeoDataFrame(
-        {
-            "id": ["conn1"],
-            "geometry": [Point(1, 1)],
-        },
-        crs=WGS84_CRS,
-    )
+    connectors_gdf = make_connectors_gdf(ids=["conn1"], coords=[(1, 1)], crs=WGS84_CRS)
 
     result = process_overture_segments(
         segments_gdf,
@@ -556,12 +550,10 @@ def test_process_overture_segments_endpoint_clustering() -> None:
 def test_process_overture_segments_level_rules_handling() -> None:
     """Test process_overture_segments level_rules column handling."""
     # Test with None values in level_rules
-    segments_gdf = gpd.GeoDataFrame(
-        {
-            "id": ["seg1"],
-            "level_rules": [None],
-            "geometry": [LineString([(0, 0), (1, 1)])],
-        },
+    segments_gdf = make_segments_gdf(
+        ids=["seg1"],
+        geoms_or_coords=[[(0, 0), (1, 1)]],
+        level_rules=[None],
         crs=WGS84_CRS,
     )
 
@@ -573,20 +565,16 @@ def test_process_overture_segments_level_rules_handling() -> None:
 def test_load_and_process_integration() -> None:
     """Test integration between load_overture_data and process_overture_segments."""
     # Create mock data that resembles real Overture data
-    segments_data = {
-        "id": ["seg1", "seg2"],
-        "connectors": [
+    segments_gdf = make_segments_gdf(
+        ids=["seg1", "seg2"],
+        geoms_or_coords=[[(0, 0), (1, 1)], [(1, 1), (2, 2)]],
+        connectors=[
             '[{"connector_id": "conn1", "at": 0.0}]',
             '[{"connector_id": "conn2", "at": 1.0}]',
         ],
-        "level_rules": ["", ""],
-        "geometry": [
-            LineString([(0, 0), (1, 1)]),
-            LineString([(1, 1), (2, 2)]),
-        ],
-    }
-
-    segments_gdf = gpd.GeoDataFrame(segments_data, crs=WGS84_CRS)
+        level_rules="",
+        crs=WGS84_CRS,
+    )
 
     # Process the segments
     result = process_overture_segments(segments_gdf)
@@ -604,13 +592,28 @@ def test_real_world_scenario_simulation(
     mock_exists: Mock,
     mock_read_file: Mock,
     mock_subprocess: Mock,
-    realistic_segments_gdf: gpd.GeoDataFrame,
-    realistic_connectors_gdf: gpd.GeoDataFrame,
     test_bbox: list[float],
 ) -> None:
-    """Test a scenario that simulates real-world usage."""
-    # Mock the file reading to return realistic data
-    mock_read_file.side_effect = [realistic_segments_gdf, realistic_connectors_gdf]
+    """Test a scenario that simulates real-world usage without external fixtures."""
+    # Build local realistic-like GeoDataFrames
+    segments_gdf = make_segments_gdf(
+        ids=["seg1", "seg2"],
+        geoms_or_coords=[[(0, 0), (1, 1)], [(1, 1), (2, 2)]],
+        connectors=[
+            '[{"connector_id": "conn1", "at": 0.25}]',
+            '[{"connector_id": "conn2", "at": 0.75}]',
+        ],
+        level_rules="",
+        crs=WGS84_CRS,
+    )
+    connectors_gdf = make_connectors_gdf(
+        ids=["conn1", "conn2"],
+        coords=[(0.25, 0.25), (1.75, 1.75)],
+        crs=WGS84_CRS,
+    )
+
+    # Mock the file reading to return our local data
+    mock_read_file.side_effect = [segments_gdf, connectors_gdf]
     mock_exists.return_value = True
 
     # Simulate loading data
@@ -620,26 +623,23 @@ def test_real_world_scenario_simulation(
     processed_segments = process_overture_segments(
         data["segment"],
         connectors_gdf=data["connector"],
-    )  # Verify the result
+    )
     assert not processed_segments.empty
     assert "barrier_geometry" in processed_segments.columns
 
     # Verify mocks were called appropriately
-    mock_subprocess.assert_called()  # Should be called for data loading
+    mock_subprocess.assert_called()
     assert "length" in processed_segments.columns
 
 
 # Additional edge case tests for comprehensive coverage
 def test_process_overture_segments_with_non_dict_connector() -> None:
     """Test process_overture_segments with non-dict connector data."""
-    geometries = [LineString([(0, 0), (1, 1)])]
-    segments_gdf = gpd.GeoDataFrame(
-        {
-            "id": ["seg1"],
-            "connectors": ['["not_a_dict"]'],
-            "level_rules": [""],
-            "geometry": geometries,
-        },
+    segments_gdf = make_segments_gdf(
+        ids=["seg1"],
+        geoms_or_coords=[[(0, 0), (1, 1)]],
+        connectors='["not_a_dict"]',
+        level_rules="",
         crs=WGS84_CRS,
     )
 
@@ -650,13 +650,10 @@ def test_process_overture_segments_with_non_dict_connector() -> None:
 
 def test_process_overture_segments_with_non_dict_level_rule() -> None:
     """Test process_overture_segments with non-dict level rule data."""
-    geometries = [LineString([(0, 0), (1, 1)])]
-    segments_gdf = gpd.GeoDataFrame(
-        {
-            "id": ["seg1"],
-            "level_rules": ['["not_a_dict"]'],
-            "geometry": geometries,
-        },
+    segments_gdf = make_segments_gdf(
+        ids=["seg1"],
+        geoms_or_coords=[[(0, 0), (1, 1)]],
+        level_rules='["not_a_dict"]',
         crs=WGS84_CRS,
     )
 
@@ -667,15 +664,11 @@ def test_process_overture_segments_with_non_dict_level_rule() -> None:
 
 def test_process_overture_segments_with_short_between_array() -> None:
     """Test process_overture_segments with short between array in level rules."""
-    geometries = [LineString([(0, 0), (1, 1)])]
     level_rules = '[{"value": 1, "between": [0.5]}]'  # Only one element
-
-    segments_gdf = gpd.GeoDataFrame(
-        {
-            "id": ["seg1"],
-            "level_rules": [level_rules],
-            "geometry": geometries,
-        },
+    segments_gdf = make_segments_gdf(
+        ids=["seg1"],
+        geoms_or_coords=[[(0, 0), (1, 1)]],
+        level_rules=level_rules,
         crs=WGS84_CRS,
     )
 
@@ -688,12 +681,10 @@ def test_process_overture_segments_with_empty_geometry() -> None:
     """Test process_overture_segments with empty geometry."""
     # Create an empty LineString
     empty_geom = LineString()
-    segments_gdf = gpd.GeoDataFrame(
-        {
-            "id": ["seg1"],
-            "level_rules": [""],
-            "geometry": [empty_geom],
-        },
+    segments_gdf = make_segments_gdf(
+        ids=["seg1"],
+        geoms_or_coords=[empty_geom],
+        level_rules="",
         crs=WGS84_CRS,
     )
 
@@ -704,15 +695,11 @@ def test_process_overture_segments_with_empty_geometry() -> None:
 
 def test_process_overture_segments_with_overlapping_barriers() -> None:
     """Test process_overture_segments with overlapping barrier intervals."""
-    geometries = [LineString([(0, 0), (4, 4)])]
     level_rules = '[{"value": 1, "between": [0.1, 0.5]}, {"value": 1, "between": [0.3, 0.7]}]'
-
-    segments_gdf = gpd.GeoDataFrame(
-        {
-            "id": ["seg1"],
-            "level_rules": [level_rules],
-            "geometry": geometries,
-        },
+    segments_gdf = make_segments_gdf(
+        ids=["seg1"],
+        geoms_or_coords=[[(0, 0), (4, 4)]],
+        level_rules=level_rules,
         crs=WGS84_CRS,
     )
 
@@ -723,15 +710,11 @@ def test_process_overture_segments_with_overlapping_barriers() -> None:
 
 def test_process_overture_segments_with_touching_barriers() -> None:
     """Test process_overture_segments with touching barrier intervals."""
-    geometries = [LineString([(0, 0), (4, 4)])]
     level_rules = '[{"value": 1, "between": [0.0, 0.3]}, {"value": 1, "between": [0.3, 0.6]}]'
-
-    segments_gdf = gpd.GeoDataFrame(
-        {
-            "id": ["seg1"],
-            "level_rules": [level_rules],
-            "geometry": geometries,
-        },
+    segments_gdf = make_segments_gdf(
+        ids=["seg1"],
+        geoms_or_coords=[[(0, 0), (4, 4)]],
+        level_rules=level_rules,
         crs=WGS84_CRS,
     )
 
@@ -742,15 +725,11 @@ def test_process_overture_segments_with_touching_barriers() -> None:
 
 def test_process_overture_segments_with_full_coverage_barriers() -> None:
     """Test process_overture_segments with barriers covering full segment."""
-    geometries = [LineString([(0, 0), (4, 4)])]
     level_rules = '[{"value": 1, "between": [0.0, 1.0]}]'
-
-    segments_gdf = gpd.GeoDataFrame(
-        {
-            "id": ["seg1"],
-            "level_rules": [level_rules],
-            "geometry": geometries,
-        },
+    segments_gdf = make_segments_gdf(
+        ids=["seg1"],
+        geoms_or_coords=[[(0, 0), (4, 4)]],
+        level_rules=level_rules,
         crs=WGS84_CRS,
     )
 
@@ -789,27 +768,14 @@ def test_load_overture_data_comprehensive_all_types(
 def test_process_overture_segments_with_non_linestring_endpoints() -> None:
     """Test endpoint clustering with non-LineString geometries."""
     # Mix LineString and Point geometries
-    geometries = [
-        LineString([(0, 0), (1, 1)]),
-        Point(2, 2),  # This should be ignored in endpoint clustering
-    ]
-
-    segments_gdf = gpd.GeoDataFrame(
-        {
-            "id": ["seg1", "seg2"],
-            "level_rules": ["", ""],
-            "geometry": geometries,
-        },
+    segments_gdf = make_segments_gdf(
+        ids=["seg1", "seg2"],
+        geoms_or_coords=[LineString([(0, 0), (1, 1)]), Point(2, 2)],
+        level_rules="",
         crs=WGS84_CRS,
     )
 
-    connectors_gdf = gpd.GeoDataFrame(
-        {
-            "id": ["conn1"],
-            "geometry": [Point(1, 1)],
-        },
-        crs=WGS84_CRS,
-    )
+    connectors_gdf = make_connectors_gdf(ids=["conn1"], coords=[(1, 1)], crs=WGS84_CRS)
 
     result = process_overture_segments(
         segments_gdf,
@@ -825,28 +791,14 @@ def test_process_overture_segments_with_short_linestring() -> None:
     """Test endpoint clustering with LineString having insufficient coordinates."""
     # Create a degenerate LineString (same start and end point)
     invalid_geom = LineString([(0, 0), (0, 0)])  # Degenerate but valid
-
-    geometries = [
-        LineString([(0, 0), (1, 1)]),
-        invalid_geom,
-    ]
-
-    segments_gdf = gpd.GeoDataFrame(
-        {
-            "id": ["seg1", "seg2"],
-            "level_rules": ["", ""],
-            "geometry": geometries,
-        },
+    segments_gdf = make_segments_gdf(
+        ids=["seg1", "seg2"],
+        geoms_or_coords=[LineString([(0, 0), (1, 1)]), invalid_geom],
+        level_rules="",
         crs=WGS84_CRS,
     )
 
-    connectors_gdf = gpd.GeoDataFrame(
-        {
-            "id": ["conn1"],
-            "geometry": [Point(1, 1)],
-        },
-        crs=WGS84_CRS,
-    )
+    connectors_gdf = make_connectors_gdf(ids=["conn1"], coords=[(1, 1)], crs=WGS84_CRS)
 
     result = process_overture_segments(
         segments_gdf,

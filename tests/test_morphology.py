@@ -17,6 +17,8 @@ from city2graph.morphology import morphological_graph
 from city2graph.morphology import private_to_private_graph
 from city2graph.morphology import private_to_public_graph
 from city2graph.morphology import public_to_public_graph
+from tests.helpers import assert_valid_nx_graph
+from tests.helpers import make_grid_polygons_gdf
 
 
 class TestMorphologyBase:
@@ -42,9 +44,8 @@ class TestMorphologyBase:
 
     @staticmethod
     def validate_networkx_output(graph: nx.Graph) -> None:
-        """Validate NetworkX graph output."""
-        assert isinstance(graph, nx.Graph)
-        assert graph.number_of_nodes() >= 0
+        """Validate NetworkX graph output using shared helper."""
+        assert_valid_nx_graph(graph)
 
     @staticmethod
     def validate_empty_output(
@@ -312,11 +313,9 @@ class TestIndividualGraphFunctions(TestMorphologyBase):
 
     def test_private_to_private_single_polygon(self, sample_crs: str) -> None:
         """Test with single polygon (insufficient for adjacency)."""
-        single_poly = gpd.GeoDataFrame(
-            {"private_id": [1]},
-            geometry=[Polygon([(0, 0), (1, 0), (1, 1), (0, 1)])],
-            crs=sample_crs,
-        )
+        # Single square polygon tessellation
+        single_poly = make_grid_polygons_gdf(1, 1, crs=sample_crs)
+        single_poly = single_poly.reset_index().rename(columns={"id": "private_id"})
         nodes, edges = private_to_private_graph(single_poly)
         # Should return empty edges since we need at least 2 polygons for adjacency
         assert edges.empty
@@ -389,11 +388,8 @@ class TestIndividualGraphFunctions(TestMorphologyBase):
     def test_private_to_public_empty_join_result(self, sample_crs: str) -> None:
         """Test case where spatial join produces no results."""
         # Create non-overlapping geometries that won't intersect
-        private_gdf = gpd.GeoDataFrame(
-            {"private_id": [1]},
-            geometry=[Polygon([(0, 0), (1, 0), (1, 1), (0, 1)])],
-            crs=sample_crs,
-        )
+        private_gdf = make_grid_polygons_gdf(1, 1, crs=sample_crs)
+        private_gdf = private_gdf.reset_index().rename(columns={"id": "private_id"})
         public_gdf = gpd.GeoDataFrame(
             {"public_id": [1]},
             geometry=[LineString([(10, 10), (20, 20)])],  # Far away from private geometry

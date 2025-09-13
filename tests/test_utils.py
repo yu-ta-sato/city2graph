@@ -1,4 +1,8 @@
-"""Refactored tests for the utils module - concise and maintainable."""
+"""Tests for the utils module - lean and maintainable.
+
+This file delegates common assertions and helpers to tests/helpers.py to avoid
+duplication and keep a single source of truth for shared logic across tests.
+"""
 
 from __future__ import annotations
 
@@ -15,6 +19,7 @@ from city2graph.utils import GraphConverter
 from city2graph.utils import GraphMetadata
 from city2graph.utils import gdf_to_nx
 from city2graph.utils import nx_to_gdf
+from tests import helpers
 
 # ============================================================================
 # BASE TEST CLASSES WITH SHARED FUNCTIONALITY
@@ -26,21 +31,13 @@ class BaseGraphTest:
 
     @staticmethod
     def assert_valid_gdf(gdf: gpd.GeoDataFrame, expected_empty: bool = False) -> None:
-        """Assert GeoDataFrame is valid with common checks."""
-        assert isinstance(gdf, gpd.GeoDataFrame)
-        if expected_empty:
-            assert gdf.empty
-        else:
-            assert not gdf.empty
-            assert all(gdf.geometry.is_valid)
+        """Delegate to shared helper to ensure consistent checks across tests."""
+        helpers.assert_valid_gdf(gdf, expected_empty)
 
     @staticmethod
     def assert_crs_consistency(*gdfs: gpd.GeoDataFrame) -> None:
-        """Assert all GeoDataFrames have consistent CRS."""
-        non_empty_gdfs = [gdf for gdf in gdfs if not gdf.empty]
-        if len(non_empty_gdfs) > 1:
-            reference_crs = non_empty_gdfs[0].crs
-            assert all(gdf.crs == reference_crs for gdf in non_empty_gdfs[1:])
+        """Delegate to shared helper for CRS consistency checks."""
+        helpers.assert_crs_consistency(*gdfs)
 
 
 class BaseConversionTest(BaseGraphTest):
@@ -53,17 +50,13 @@ class BaseConversionTest(BaseGraphTest):
         converted_nodes: gpd.GeoDataFrame,
         converted_edges: gpd.GeoDataFrame,
     ) -> None:
-        """Assert roundtrip conversion maintains data integrity."""
-        self.assert_crs_consistency(
+        """Delegate to shared helper for roundtrip integrity checks."""
+        helpers.assert_roundtrip_consistency(
             original_nodes,
-            converted_nodes,
             original_edges,
+            converted_nodes,
             converted_edges,
         )
-        assert len(original_nodes) == len(converted_nodes)
-        assert len(original_edges) == len(converted_edges)
-        pd.testing.assert_index_equal(original_nodes.index, converted_nodes.index)
-        pd.testing.assert_index_equal(original_edges.index, converted_edges.index)
 
 
 # ============================================================================
@@ -100,7 +93,7 @@ class TestTessellation(BaseGraphTest):
 
         self.assert_valid_gdf(tessellation, expect_empty)
         if not expect_empty:
-            assert "tess_id" in tessellation.columns
+            helpers.assert_has_columns(tessellation, ["tess_id"])
             assert tessellation.crs == geometry.crs
 
 
@@ -205,7 +198,7 @@ class TestGraphStructures(BaseGraphTest):
 
         if not expect_empty:
             assert nodes_gdf.index.name == "node_id"
-            assert nodes_gdf.geometry.geom_type.isin(["Point"]).all()
+            helpers.assert_geometry_types(nodes_gdf, ["Point"])
             assert isinstance(edges_gdf.index, pd.MultiIndex)
 
             expected_index_names = (
@@ -213,7 +206,7 @@ class TestGraphStructures(BaseGraphTest):
                 if multigraph
                 else ["from_node_id", "to_node_id"]
             )
-            assert edges_gdf.index.names == expected_index_names
+            helpers.assert_index_names(edges_gdf, expected_index_names)
 
     def test_segments_multigraph_duplicate_handling(
         self,
@@ -260,7 +253,7 @@ class TestGraphAnalysis(BaseGraphTest):
         """Test filtering graphs by distance from center points."""
         graph = request.getfixturevalue(graph_fixture)
         center_source = request.getfixturevalue(center_fixture)
-        center_point = center_source.geometry.iloc[0] if as_nx else center_source
+        center_point = helpers.get_center_point(center_source)
 
         filtered = utils.filter_graph_by_distance(graph, center_point, distance=distance)
 
@@ -289,9 +282,7 @@ class TestGraphAnalysis(BaseGraphTest):
         """Test isochrone polygon generation from graphs."""
         graph = request.getfixturevalue(graph_fixture)
         center_source = request.getfixturevalue(center_fixture)
-        center_point = (
-            center_source.geometry.iloc[0] if isinstance(graph, nx.Graph) else center_source
-        )
+        center_point = helpers.get_center_point(center_source)
 
         isochrone = utils.create_isochrone(graph, center_point, distance=distance)
 
