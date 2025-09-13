@@ -10,6 +10,8 @@ Proximity
 
 .. autofunction:: delaunay_graph
 
+.. autofunction:: contiguity_graph
+
 .. autofunction:: gabriel_graph
 
 .. autofunction:: relative_neighborhood_graph
