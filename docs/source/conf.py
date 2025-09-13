@@ -205,6 +205,7 @@ intersphinx_mapping = {
     # Urban analysis libraries
     "momepy": ("http://docs.momepy.org/en/stable/", None),
     "osmnx": ("https://osmnx.readthedocs.io/en/stable/", None),
+    "libpysal": ("https://pysal.org/libpysal/", None),
 }
 
 # Intersphinx timeout in seconds
