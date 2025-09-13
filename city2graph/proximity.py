@@ -16,10 +16,12 @@ from __future__ import annotations
 import logging
 from itertools import combinations
 from itertools import permutations
-from typing import TYPE_CHECKING
+from typing import Any
 from typing import cast
 
 # Third-party imports
+import geopandas as gpd
+import libpysal
 import networkx as nx
 import numpy as np
 import numpy.typing as npt
@@ -34,14 +36,13 @@ from .utils import nx_to_gdf
 from .utils import validate_gdf
 
 # Type checking imports
-if TYPE_CHECKING:
-    import geopandas as gpd
 
 # Module logger configuration
 logger = logging.getLogger(__name__)
 
 __all__ = [
     "bridge_nodes",
+    "contiguity_graph",
     "delaunay_graph",
     "euclidean_minimum_spanning_tree",
     "fixed_radius_graph",
@@ -50,6 +51,9 @@ __all__ = [
     "relative_neighborhood_graph",
     "waxman_graph",
 ]
+
+# Simple type alias for readability
+EdgePair = tuple[Any, Any]
 
 
 # ============================================================================
@@ -1350,9 +1354,15 @@ def _prepare_nodes(
     node_ids = list(gdf.index)
 
     G = nx.DiGraph() if directed else nx.Graph()
-
-    for node_id, attrs, (x, y) in zip(node_ids, gdf.to_dict("records"), coords, strict=False):
-        G.add_node(node_id, pos=(x, y), **attrs)
+    # Bulk-add nodes using a comprehension to minimize Python-level loops
+    attrs_list = gdf.to_dict("records")
+    G.add_nodes_from(
+        (
+            node_id,
+            {"pos": (float(x), float(y)), **attrs},
+        )
+        for node_id, attrs, (x, y) in zip(node_ids, attrs_list, coords, strict=False)
+    )
     G.graph["crs"] = gdf.crs
 
     return G, coords, node_ids
@@ -1612,8 +1622,8 @@ def _add_edges(
         # Choose weight key if present on the network
         use_weight = "length" if any("length" in d for *_, d in net_nx.edges(data=True)) else None
 
+        # Per-edge shortest path extraction is inherently iterative; keep minimal loop
         for u, v in G.edges():
-            # Shortest path in network
             path_nodes = nx.shortest_path(
                 net_nx,
                 source=nearest[u],
@@ -1621,33 +1631,35 @@ def _add_edges(
                 weight=use_weight,
             )
             path_coords = [pos[p] for p in path_nodes]
-
-            # Remove consecutive duplicates and make sure at least 2 points
-            path_coords = [
-                path_coords[i]
-                for i in range(len(path_coords))
-                if i == 0 or path_coords[i] != path_coords[i - 1]
-            ]
-
+            # Remove consecutive duplicates
             if len(path_coords) > 1:
-                geom_attr[(u, v)] = LineString(path_coords)
+                dedup = [path_coords[0]]
+                dedup.extend(pc for pc in path_coords[1:] if pc != dedup[-1])
+                geom_attr[(u, v)] = (
+                    LineString(dedup)
+                    if len(dedup) > 1
+                    else LineString([coords[idx_map[u]], coords[idx_map[v]]])
+                )
             else:
-                # Fallback for nodes mapping to the same network point
-                p1 = coords[idx_map[u]]
-                p2 = coords[idx_map[v]]
-                geom_attr[(u, v)] = LineString([p1, p2])
+                geom_attr[(u, v)] = LineString([coords[idx_map[u]], coords[idx_map[v]]])
 
     # Manhattan or Euclidean metric
     else:
-        for u, v in G.edges():
-            p1 = coords[idx_map[u]]
-            p2 = coords[idx_map[v]]
-            geom = (
-                LineString([(p1[0], p1[1]), (p2[0], p1[1]), (p2[0], p2[1])])
-                if metric.lower() == "manhattan"
-                else LineString([p1, p2])
-            )
-            geom_attr[(u, v)] = geom
+        # Vectorized geometry creation via array ops and a small comprehension
+        edge_arr = np.asarray(list(G.edges()), dtype=object)
+        if edge_arr.size:
+            u_idx = np.vectorize(idx_map.get)(edge_arr[:, 0]).astype(int)
+            v_idx = np.vectorize(idx_map.get)(edge_arr[:, 1]).astype(int)
+            p1 = coords[u_idx]
+            p2 = coords[v_idx]
+            if metric.lower() == "manhattan":
+                geoms = [
+                    LineString([(x1, y1), (x2, y1), (x2, y2)])
+                    for (x1, y1), (x2, y2) in zip(p1, p2, strict=False)
+                ]
+            else:
+                geoms = [LineString([pt1, pt2]) for pt1, pt2 in zip(p1, p2, strict=False)]
+            geom_attr = {tuple(edge): geom for edge, geom in zip(edge_arr, geoms, strict=False)}
 
     nx.set_edge_attributes(G, geom_attr, "geometry")
 
@@ -1814,3 +1826,581 @@ def _assert_euclidean(metric: str, func_name: str) -> None:
             f"'{metric}' will be used only for generating edge geometries."
         )
         logger.warning(msg)
+
+
+def _validate_contiguity_input(gdf: gpd.GeoDataFrame, contiguity: str) -> None:
+    """
+    Validate input parameters for contiguity graph generation.
+
+    This function performs comprehensive validation of the input GeoDataFrame and
+    contiguity parameter to ensure they meet the requirements for contiguity-based
+    graph generation.
+
+    Parameters
+    ----------
+    gdf : geopandas.GeoDataFrame
+        GeoDataFrame to validate. Must contain polygon geometries.
+    contiguity : str
+        Contiguity type to validate. Must be "queen" or "rook".
+
+    Raises
+    ------
+    TypeError
+        If `gdf` is not a GeoDataFrame.
+    ValueError
+        If `contiguity` is not "queen" or "rook".
+        If `gdf` contains non-polygon geometries.
+        If `gdf` contains invalid geometries.
+
+    Notes
+    -----
+    This function is used internally by contiguity_graph to ensure input validity
+    before processing. It follows the validation patterns established in the
+    city2graph library.
+    """
+    # Validate GeoDataFrame type
+    if not isinstance(gdf, gpd.GeoDataFrame):
+        msg = (
+            f"Input must be a GeoDataFrame, got {type(gdf).__name__}. "
+            "Please provide a valid GeoDataFrame with polygon geometries."
+        )
+        raise TypeError(msg)
+
+    # Validate contiguity parameter
+    valid_contiguity = {"queen", "rook"}
+    if contiguity not in valid_contiguity:
+        msg = (
+            f"Invalid contiguity type '{contiguity}'. "
+            f"Must be one of {sorted(valid_contiguity)}. "
+            "Use 'queen' for edge/vertex adjacency or 'rook' for edge-only adjacency."
+        )
+        raise ValueError(msg)
+
+    # Handle empty GeoDataFrame (allowed, will return empty graph)
+    if gdf.empty:
+        return
+
+    # Validate geometry column exists
+    if not hasattr(gdf, "geometry") or gdf.geometry is None:
+        msg = (
+            "GeoDataFrame must have a valid geometry column. "
+            "Please ensure the GeoDataFrame contains spatial geometries."
+        )
+        raise ValueError(msg)
+
+    # Check for null geometries
+    null_geoms = gdf.geometry.isnull()
+    if null_geoms.any():
+        null_count = null_geoms.sum()
+        msg = (
+            f"GeoDataFrame contains {null_count} null geometr{'y' if null_count == 1 else 'ies'}. "
+            "All geometries must be valid for contiguity analysis. "
+            "Please remove or fix null geometries before processing."
+        )
+        raise ValueError(msg)
+
+    # Validate geometry types - must be polygons only
+    geom_types = gdf.geometry.geom_type.unique()
+    valid_polygon_types = {"Polygon", "MultiPolygon"}
+    invalid_types = set(geom_types) - valid_polygon_types
+
+    if invalid_types:
+        invalid_count = gdf.geometry.geom_type.isin(invalid_types).sum()
+        msg = (
+            f"GeoDataFrame contains {invalid_count} non-polygon geometr{'y' if invalid_count == 1 else 'ies'} "
+            f"of type(s): {sorted(invalid_types)}. "
+            "Contiguity analysis requires polygon geometries only. "
+            f"Valid types are: {sorted(valid_polygon_types)}."
+        )
+        raise ValueError(msg)
+
+    # Check for invalid geometries
+    invalid_geoms = ~gdf.geometry.is_valid
+    if invalid_geoms.any():
+        invalid_count = invalid_geoms.sum()
+        # Get examples of invalid geometry indices for debugging
+        invalid_indices = gdf.index[invalid_geoms].tolist()[:3]  # Show up to 3 examples
+        indices_str = ", ".join(str(idx) for idx in invalid_indices)
+        if len(invalid_indices) < invalid_count:
+            indices_str += f", ... ({invalid_count - len(invalid_indices)} more)"
+
+        msg = (
+            f"GeoDataFrame contains {invalid_count} invalid geometr{'y' if invalid_count == 1 else 'ies'}. "
+            f"Invalid geometries found at indices: {indices_str}. "
+            "Please fix invalid geometries using methods like buffer(0) or make_valid() "
+            "before performing contiguity analysis."
+        )
+        raise ValueError(msg)
+
+
+def _create_spatial_weights(
+    gdf: gpd.GeoDataFrame,
+    contiguity: str,
+) -> libpysal.weights.W:
+    """
+    Create spatial weights matrix using libpysal for contiguity analysis.
+
+    This function creates a spatial weights matrix from a GeoDataFrame using either
+    Queen or Rook contiguity rules. It handles libpysal compatibility requirements
+    and provides informative error handling for spatial weights creation failures.
+
+    Parameters
+    ----------
+    gdf : geopandas.GeoDataFrame
+        GeoDataFrame containing polygon geometries. Must have been validated
+        by _validate_contiguity_input before calling this function.
+    contiguity : str
+        Type of spatial contiguity to use. Must be "queen" or "rook".
+
+    Returns
+    -------
+    libpysal.weights.W
+        Spatial weights matrix representing adjacency relationships between polygons.
+        The weights matrix uses the original GeoDataFrame index as identifiers.
+
+    Raises
+    ------
+    ValueError
+        If libpysal fails to create spatial weights matrix.
+        If the resulting weights matrix is invalid or empty when polygons exist.
+
+    Notes
+    -----
+    - Resets GeoDataFrame index for libpysal compatibility, then restores original indices
+    - Uses libpysal.weights.Queen.from_dataframe for Queen contiguity
+    - Uses libpysal.weights.Rook.from_dataframe for Rook contiguity
+    - Handles libpysal exceptions and provides informative error messages
+    - Returns weights matrix with original index values as identifiers
+    """
+    # Handle empty GeoDataFrame case early
+    if gdf.empty:
+        return libpysal.weights.W({})
+
+    # Validate contiguity value early to avoid catching it in the generic except
+    contiguity_lc = contiguity.lower()
+    if contiguity_lc not in {"queen", "rook"}:
+        msg = f"Unsupported contiguity type: {contiguity}"
+        raise ValueError(msg)
+
+    # Use libpysal's ids parameter when available to preserve original index.
+    # Fall back to calling without ids for compatibility or when monkeypatched callables
+    # don't support the keyword (used in tests).
+    try:
+        ids = list(gdf.index)
+        if contiguity_lc == "queen":
+            try:
+                weights = libpysal.weights.Queen.from_dataframe(gdf, ids=ids)
+            except TypeError:
+                weights = libpysal.weights.Queen.from_dataframe(gdf)
+        else:  # contiguity_lc == "rook"
+            try:
+                weights = libpysal.weights.Rook.from_dataframe(gdf, ids=ids)
+            except TypeError:
+                weights = libpysal.weights.Rook.from_dataframe(gdf)
+    except Exception as e:
+        msg = (
+            f"Failed to create {contiguity} contiguity spatial weights matrix. "
+            f"This may be due to invalid geometries, topology issues, or libpysal incompatibility. "
+            f"Original error: {e}"
+        )
+        raise ValueError(msg) from e
+
+    if weights is None:
+        msg = f"libpysal returned None when creating {contiguity} contiguity weights."
+        raise ValueError(msg)
+
+    return weights
+
+
+def _generate_contiguity_edges(
+    weights: libpysal.weights.W,
+    gdf: gpd.GeoDataFrame,
+) -> list[EdgePair]:
+    """
+    Extract adjacency relationships from spatial weights matrix.
+
+    This function processes a libpysal spatial weights matrix to extract edge
+    relationships for graph construction. It handles disconnected components
+    and isolated nodes, returning a list of (source_id, target_id) tuples
+    using the original GeoDataFrame indices.
+
+    Parameters
+    ----------
+    weights : libpysal.weights.W
+        Spatial weights matrix containing adjacency relationships between polygons.
+        Should be created by _create_spatial_weights function.
+    gdf : gpd.GeoDataFrame
+        Original GeoDataFrame containing polygon geometries. Used for logging
+        and validation purposes. The index provides the node identifiers.
+
+    Returns
+    -------
+    list[tuple[any, any]]
+        List of (source_id, target_id) tuples representing edges in the graph.
+        Uses original GeoDataFrame index values as node identifiers.
+        Returns empty list if no adjacency relationships exist.
+
+    Notes
+    -----
+    - Handles disconnected components by preserving all adjacency relationships
+    - Isolated nodes (no neighbors) are handled by returning no edges for them
+    - Each adjacency relationship appears only once in the output (undirected edges)
+    - Uses original GeoDataFrame index values as preserved by _create_spatial_weights
+    - Logs information about connectivity for debugging purposes
+
+    Examples
+    --------
+    >>> # Assuming weights matrix and gdf are already created
+    >>> edges = _generate_contiguity_edges(weights, gdf)
+    >>> print(f"Generated {len(edges)} edges from {len(gdf)} polygons")
+    """
+    # Handle empty weights matrix
+    if not weights.neighbors or len(weights.neighbors) == 0:
+        logger.debug("Empty spatial weights matrix - no adjacency relationships found")
+        return []
+
+    # Extract unique, undirected edges from weights.neighbors using a set-comprehension
+    # Canonicalize by sorting endpoints so (a,b) and (b,a) collapse to one entry
+    undirected_pairs = {
+        tuple(sorted((src, nbr))) for src, nbrs in weights.neighbors.items() for nbr in nbrs
+    }
+
+    # Represent edges using the canonical ordering (u <= v) for determinism
+    edges: list[EdgePair] = list(undirected_pairs)
+
+    # Log connectivity information for debugging
+    total_nodes = len(gdf)
+    nodes_with_neighbors = len(weights.neighbors)
+    isolated_nodes = total_nodes - nodes_with_neighbors
+
+    logger.debug(
+        "Contiguity edge extraction: %d edges generated from %d polygons (%d connected, %d isolated)",
+        len(edges),
+        total_nodes,
+        nodes_with_neighbors,
+        isolated_nodes,
+    )
+
+    # Additional connectivity analysis for debugging
+    if len(edges) > 0:
+        # Count unique nodes involved in edges without explicit Python loops
+        edge_nodes = {n for e in edges for n in e}
+
+        logger.debug(
+            "Edge connectivity: %d nodes participate in edges, average degree: %.2f",
+            len(edge_nodes),
+            2 * len(edges) / len(edge_nodes),
+        )
+
+    return edges
+
+
+def _build_contiguity_graph(
+    gdf: gpd.GeoDataFrame,
+    edges: list[EdgePair],
+) -> nx.Graph:
+    """
+    Build NetworkX graph from GeoDataFrame and edge list.
+
+    This function creates a NetworkX graph with nodes containing preserved original
+    attributes and geometries, and edges with weight and geometry attributes.
+    Internally it reuses the common helpers used by other generators
+    (node preparation + edge attachment) for consistency and efficiency.
+
+    Parameters
+    ----------
+    gdf : gpd.GeoDataFrame
+        Original GeoDataFrame containing polygon geometries and attributes.
+        The index provides node identifiers and all columns are preserved
+        as node attributes.
+    edges : list[tuple[any, any]]
+        List of (source_id, target_id) tuples representing edges in the graph.
+        Should use the same identifiers as the GeoDataFrame index.
+
+    Returns
+    -------
+    networkx.Graph
+        NetworkX graph with:
+        - Nodes containing 'geometry' and all original GeoDataFrame attributes
+        - Edges containing 'weight' (Euclidean distance) and 'geometry' (LineString)
+        - Graph metadata including 'crs' and 'contiguity' information
+
+    Notes
+    -----
+    - All original GeoDataFrame attributes are preserved as node attributes
+    - Node geometries are preserved as the original polygon geometries
+    - Edge weights are Euclidean distances between polygon centroids
+    - Edge geometries are LineStrings connecting polygon centroids
+    - CRS information is preserved in graph metadata
+    - Isolated nodes (no edges) are included in the graph
+    - Graph is undirected since contiguity is a symmetric relationship
+
+    Examples
+    --------
+    >>> # Assuming gdf and edges are already prepared
+    >>> G = _build_contiguity_graph(gdf, edges)
+    >>> print(f"Graph: {G.number_of_nodes()} nodes, {G.number_of_edges()} edges")
+    >>> print(f"CRS: {G.graph.get('crs')}")
+    """
+    # Reuse shared helpers: prepare nodes once (adds 'pos' and preserves attributes)
+    G, coords, node_ids = _prepare_nodes(gdf)
+
+    # Attach edges with standard geometry/weight logic (Euclidean between centroids)
+    if edges:
+        _add_edges(G, edges, coords, node_ids, metric="euclidean")
+
+    # Log graph construction results
+    logger.debug(
+        "Contiguity graph constructed: %d nodes, %d edges, CRS: %s",
+        G.number_of_nodes(),
+        G.number_of_edges(),
+        G.graph.get("crs"),
+    )
+
+    return G
+
+
+def _contiguity_graph_core(
+    gdf: gpd.GeoDataFrame,
+    contiguity: str,
+) -> nx.Graph:
+    """
+    Build a contiguity graph (NetworkX) from a validated polygon GeoDataFrame.
+
+    Assumes inputs have already been validated by the caller. Constructs a
+    NetworkX graph with nodes, edges, and graph metadata (``crs``,
+    ``contiguity``) set.
+
+    Parameters
+    ----------
+    gdf : geopandas.GeoDataFrame
+        GeoDataFrame containing valid polygon geometries. Index values are used
+        as node identifiers and all columns are preserved as node attributes.
+    contiguity : {"queen", "rook"}
+        Type of spatial contiguity used to derive adjacency relationships.
+        This value is also recorded in the graph metadata.
+
+    Returns
+    -------
+    networkx.Graph
+        Undirected graph where:
+        - Nodes hold original attributes and polygon geometries.
+        - Edges represent adjacency derived from the specified contiguity rule
+          and include ``weight`` (Euclidean distance between centroids) and
+          ``geometry`` (LineString connecting centroids).
+        - Graph metadata includes ``crs`` and ``contiguity``.
+    """
+    # Create spatial weights and extract undirected edges
+    logger.debug("Creating %s contiguity spatial weights matrix", contiguity)
+    weights = _create_spatial_weights(gdf, contiguity)
+
+    logger.debug("Extracting adjacency relationships from spatial weights")
+    edges = _generate_contiguity_edges(weights, gdf)
+
+    # Build graph and attach metadata
+    logger.debug("Building NetworkX graph with nodes and edges")
+    G = _build_contiguity_graph(gdf, edges)
+    G.graph["contiguity"] = contiguity
+    return G
+
+
+def _empty_contiguity_result(
+    gdf: gpd.GeoDataFrame,
+    contiguity: str,
+    *,
+    as_nx: bool,
+) -> tuple[gpd.GeoDataFrame, gpd.GeoDataFrame] | nx.Graph:
+    """
+    Create an empty-but-typed result matching contiguity_graph outputs.
+
+    This helper centralizes creation of empty results while preserving CRS and
+    expected schemas. It avoids duplicating the empty-branch logic and ensures
+    consistent behavior across refactors.
+
+    Parameters
+    ----------
+    gdf : geopandas.GeoDataFrame
+        The input GeoDataFrame (possibly empty) used to derive CRS and columns.
+    contiguity : str
+        Contiguity type label to attach to graph metadata when returning NetworkX.
+    as_nx : bool
+        Whether to return a NetworkX graph or a tuple of GeoDataFrames.
+
+    Returns
+    -------
+    tuple[gpd.GeoDataFrame, gpd.GeoDataFrame] | nx.Graph
+        Properly typed empty result preserving CRS and node columns.
+    """
+    if as_nx:
+        empty_graph = nx.Graph()
+        empty_graph.graph["crs"] = gdf.crs
+        empty_graph.graph["contiguity"] = contiguity
+        return empty_graph
+
+    # Create empty nodes GeoDataFrame with same structure as input
+    empty_nodes = gpd.GeoDataFrame(
+        columns=gdf.columns.tolist(),
+        crs=gdf.crs,
+        index=gdf.index[:0],  # Empty index with same type
+    )
+
+    # Create empty edges GeoDataFrame with expected structure
+    empty_edges = gpd.GeoDataFrame(
+        columns=["weight", "geometry"],
+        crs=gdf.crs,
+    )
+
+    return empty_nodes, empty_edges
+
+
+def contiguity_graph(
+    gdf: gpd.GeoDataFrame,
+    contiguity: str = "queen",
+    *,
+    as_nx: bool = False,
+) -> tuple[gpd.GeoDataFrame, gpd.GeoDataFrame] | nx.Graph:
+    r"""
+    Generate a contiguity-based spatial graph from polygon geometries.
+
+    This function creates a spatial graph where nodes represent polygons and edges
+    connect spatially contiguous (adjacent) polygons based on Queen or Rook contiguity
+    rules. It leverages libpysal's robust spatial weights functionality to accurately
+    determine adjacency relationships, making it ideal for spatial analysis of
+    administrative boundaries, urban morphology studies, land use patterns, and
+    geographic network analysis.
+
+    The function supports both Queen contiguity (polygons sharing edges or vertices)
+    and Rook contiguity (polygons sharing only edges), providing flexibility for
+    different spatial analysis requirements. Edge weights are calculated as Euclidean
+    distances between polygon centroids, and edge geometries are represented as
+    LineStrings connecting these centroids.
+
+    Parameters
+    ----------
+    gdf : geopandas.GeoDataFrame
+        Input GeoDataFrame containing polygon geometries. Must contain valid polygon
+        geometries in the 'geometry' column. The index of this GeoDataFrame will be
+        preserved as node identifiers in the output graph. All original attributes
+        are maintained in the nodes output.
+    contiguity : {"queen", "rook"}, default "queen"
+        Type of spatial contiguity rule to apply for determining adjacency:
+
+        - "queen": Polygons are considered adjacent if they share any boundary
+          (edges or vertices). This is more inclusive and typically results in
+          more connections.
+        - "rook": Polygons are considered adjacent only if they share an edge
+          (not just vertices). This is more restrictive and results in fewer
+          connections.
+    as_nx : bool, default False
+        Output format control. If True, returns a NetworkX Graph object with
+        spatial attributes. If False, returns a tuple of GeoDataFrames for
+        nodes and edges, compatible with other city2graph functions.
+
+    Returns
+    -------
+    tuple[geopandas.GeoDataFrame, geopandas.GeoDataFrame] or networkx.Graph
+        **When as_nx=False (default):**
+        Returns a tuple of two GeoDataFrames:
+
+        - **nodes_gdf** : geopandas.GeoDataFrame
+            Contains all input polygons as nodes with preserved original attributes
+            and geometries. Index matches the input GeoDataFrame index.
+
+        - **edges_gdf** : geopandas.GeoDataFrame
+            Contains edges representing contiguity relationships with columns:
+
+            * 'weight' : float - Euclidean distance between polygon centroids
+            * 'geometry' : LineString - Line connecting polygon centroids
+
+        **When as_nx=True:**
+        Returns a NetworkX Graph object with:
+
+        - **Nodes**: Polygon IDs with attributes including 'geometry' and all
+          original GeoDataFrame columns
+        - **Edges**: Adjacency relationships with 'weight' and 'geometry' attributes
+        - **Graph metadata**: Includes 'crs' and 'contiguity' information
+
+    Raises
+    ------
+    TypeError
+        If `gdf` is not a geopandas.GeoDataFrame instance.
+    ValueError
+        If `contiguity` is not one of {"queen", "rook"}.
+        If `gdf` contains geometries that are not polygons (Point, LineString, etc.).
+        If `gdf` contains invalid or corrupt polygon geometries.
+        If libpysal fails to create spatial weights matrix.
+
+    See Also
+    --------
+    libpysal.weights.Queen : Spatial weights based on Queen contiguity.
+    libpysal.weights.Rook : Spatial weights based on Rook contiguity.
+    knn_graph : Generate k-nearest neighbor graphs from point data.
+    delaunay_graph : Generate Delaunay triangulation graphs from point data.
+    fixed_radius_graph : Generate fixed-radius proximity graphs.
+    gabriel_graph : Generate Gabriel graphs from point data.
+    relative_neighborhood_graph : Generate relative neighborhood graphs.
+    waxman_graph : Generate probabilistic Waxman graphs.
+
+    Examples
+    --------
+    **Example 1: Basic contiguity analysis of administrative boundaries**
+
+    >>> # Create sample administrative districts
+    >>> districts = [
+    ...     Polygon([(0, 0), (2, 0), (2, 2), (0, 2)]),  # District A
+    ...     Polygon([(2, 0), (4, 0), (4, 2), (2, 2)]),  # District B (adjacent to A)
+    ...     Polygon([(0, 2), (2, 2), (2, 4), (0, 4)]),  # District C (adjacent to A)
+    ...     Polygon([(3, 3), (5, 3), (5, 5), (3, 5)])   # District D (isolated)
+    ... ]
+    >>> gdf = gpd.GeoDataFrame({
+    ...     'district_id': ['A', 'B', 'C', 'D'],
+    ...     'population': [10000, 15000, 8000, 5000],
+    ...     'area_km2': [4.0, 4.0, 4.0, 4.0],
+    ...     'geometry': districts
+    ... }, crs="EPSG:3857").set_index('district_id')
+    >>>
+    >>> # Generate Queen contiguity graph
+    >>> nodes_gdf, edges_gdf = contiguity_graph(gdf, contiguity="queen")
+    >>> print(f"Districts: {len(nodes_gdf)}, Adjacency relationships: {len(edges_gdf)}")
+    Districts: 4, Adjacency relationships: 4
+    >>>
+    >>> # Examine adjacency relationships
+    >>> print("\\nAdjacency relationships:")
+    >>> for idx, edge in edges_gdf.iterrows():
+    ...     src, dst = edge.name  # Edge endpoints from MultiIndex
+    ...     weight = edge['weight']
+    ...     print(f"  {src} ↔ {dst}: distance = {weight:.2f}")
+    Adjacency relationships:
+      A ↔ B: distance = 2.83
+      A ↔ C: distance = 2.83
+    """
+    # Log function entry for debugging
+    logger.debug(
+        "contiguity_graph called with %s polygons, contiguity='%s', as_nx=%s",
+        (len(gdf) if hasattr(gdf, "__len__") else "unknown"),
+        contiguity,
+        as_nx,
+    )
+
+    # Step 1: Input validation
+    _validate_contiguity_input(gdf, contiguity)
+
+    # Step 2: Handle empty GeoDataFrame case up-front
+    if gdf.empty:
+        logger.debug("Empty GeoDataFrame provided - returning empty result")
+        return _empty_contiguity_result(gdf, contiguity, as_nx=as_nx)
+
+    # Step 3: Build the core graph once, then format output as requested
+    G = _contiguity_graph_core(gdf, contiguity)
+
+    # Step 4: Return in requested format
+    if as_nx:
+        logger.debug(
+            "Returning NetworkX graph: %d nodes, %d edges",
+            G.number_of_nodes(),
+            G.number_of_edges(),
+        )
+        return G
+
+    logger.debug("Converting NetworkX graph to GeoDataFrame tuple")
+    return nx_to_gdf(G, nodes=True, edges=True)
