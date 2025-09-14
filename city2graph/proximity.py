@@ -1813,16 +1813,47 @@ def _directed_graph(
     # Merge nodes into one directed graph (safe: IDs are now unique)
     G = nx.compose(src_G, dst_G)
 
+    # Precompute combined coordinates and ids for weighting/geometry
+    combined_coords = np.vstack([src_coords, dst_coords])
+    combined_ids = unique_src_ids + unique_dst_ids
+    src_n = len(src_ids)
+    dst_n = len(dst_ids)
+
     # Generate directed edges
-    raw_edges: list[tuple[int, int]] = _directed_edges(
-        src_coords,
-        dst_coords,
-        src_ids,
-        dst_ids,
-        metric=distance_metric,
-        k=int(param) if method == "knn" else None,
-        radius=param if method == "radius" else None,
-    )
+    # Special handling for network metric: selection must use network distances,
+    # and resulting weights should be set from the corresponding distance matrix.
+    dm: npt.NDArray[np.floating] | None = None
+    raw_edges: list[tuple[int, int]]
+    if distance_metric.lower() == "network":
+        # Compute network distances for all src+dst points once
+        dm = _distance_matrix(combined_coords, "network", network_gdf, src_gdf.crs)
+        d_sub = dm[:src_n, src_n : src_n + dst_n]
+        finite = np.isfinite(d_sub)
+
+        if method == "knn":
+            k = int(param)
+            # Rank all destinations per source, then pick top-k finite
+            order = np.argsort(d_sub, axis=1)
+            rows = np.arange(src_n)[:, None]
+            ranks = np.empty_like(order)
+            ranks[rows, order] = np.arange(dst_n)[None, :]
+            sel_mask = (ranks < k) & finite
+            i_idx, j_idx = np.where(sel_mask)
+        else:  # radius
+            radius_val = float(param)
+            i_idx, j_idx = np.where(finite & (d_sub <= radius_val))
+
+        raw_edges = list(zip((src_ids[i] for i in i_idx), (dst_ids[j] for j in j_idx), strict=True))
+    else:
+        raw_edges = _directed_edges(
+            src_coords,
+            dst_coords,
+            src_ids,
+            dst_ids,
+            metric=distance_metric,
+            k=int(param) if method == "knn" else None,
+            radius=param if method == "radius" else None,
+        )
 
     # Convert edges to use the unique, namespaced node identifiers
     relabeled_edges: list[tuple[tuple[str, int], tuple[str, int]]] = [
@@ -1830,15 +1861,13 @@ def _directed_graph(
     ]
 
     # Add edges with weights and geometries
-    # Build collision-free mapping for _add_edges
-    combined_coords = np.vstack([src_coords, dst_coords])
-    combined_ids = unique_src_ids + unique_dst_ids
     _add_edges(
         G,
         relabeled_edges,
         combined_coords,
         combined_ids,
         metric=distance_metric,
+        dm=dm,
         network_gdf=network_gdf,
     )
 
