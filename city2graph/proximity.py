@@ -1321,7 +1321,7 @@ def _prepare_nodes(
     gdf: gpd.GeoDataFrame,
     *,
     directed: bool = False,
-) -> tuple[nx.Graph, npt.NDArray[np.floating], list[int]]:
+) -> tuple[nx.Graph, npt.NDArray[np.floating], list[Any]]:
     """
     Return an empty graph with populated nodes plus coord cache.
 
@@ -1344,14 +1344,14 @@ def _prepare_nodes(
             An empty graph with populated nodes.
         - coords : numpy.ndarray
             A 2D NumPy array of node coordinates.
-        - node_ids : list[int]
+        - node_ids : list[Any]
             A list of node IDs.
     """
     validate_gdf(nodes_gdf=gdf)
 
     centroids = gdf.geometry.centroid
     coords = np.column_stack([centroids.x, centroids.y])
-    node_ids = list(gdf.index)
+    node_ids: list[Any] = list(gdf.index)
 
     G = nx.DiGraph() if directed else nx.Graph()
     # Bulk-add nodes using a comprehension to minimize Python-level loops
@@ -1538,9 +1538,9 @@ def _distance_matrix(
 
 def _add_edges(
     G: nx.Graph,
-    edges: list[tuple[int, int]] | set[tuple[int, int]],
+    edges: list[EdgePair] | set[EdgePair],
     coords: npt.NDArray[np.floating],
-    node_ids: list[int],
+    node_ids: list[Any],
     *,
     metric: str,
     dm: npt.NDArray[np.floating] | None = None,
@@ -1578,7 +1578,7 @@ def _add_edges(
     G.add_edges_from(edges)
 
     # Calculate and set edge weights
-    idx_map = {n: i for i, n in enumerate(node_ids)}
+    idx_map: dict[Any, int] = {n: i for i, n in enumerate(node_ids)}
 
     if dm is not None:
         weights = {(u, v): dm[idx_map[u], idx_map[v]] for u, v in G.edges()}
@@ -1601,7 +1601,7 @@ def _add_edges(
     nx.set_edge_attributes(G, weights, "weight")
 
     # Create and set edge geometries
-    geom_attr: dict[tuple[int, int], LineString] = {}
+    geom_attr: dict[tuple[Any, Any], LineString] = {}
 
     # Network metric: trace path on network
     if metric.lower() == "network":
@@ -1646,10 +1646,16 @@ def _add_edges(
     # Manhattan or Euclidean metric
     else:
         # Vectorized geometry creation via array ops and a small comprehension
-        edge_arr = np.asarray(list(G.edges()), dtype=object)
-        if edge_arr.size:
-            u_idx = np.vectorize(idx_map.get)(edge_arr[:, 0]).astype(int)
-            v_idx = np.vectorize(idx_map.get)(edge_arr[:, 1]).astype(int)
+        edge_list = list(G.edges())
+        if edge_list:
+            # Use Python mapping to avoid None from dict.get with object keys under vectorization
+            try:
+                u_idx = np.array([idx_map[u] for u, _ in edge_list], dtype=int)
+                v_idx = np.array([idx_map[v] for _, v in edge_list], dtype=int)
+            except KeyError as e:
+                missing = e.args[0]
+                msg = f"Edge endpoint {missing!r} not found in node id mapping."
+                raise KeyError(msg) from e
             p1 = coords[u_idx]
             p2 = coords[v_idx]
             if metric.lower() == "manhattan":
@@ -1659,7 +1665,7 @@ def _add_edges(
                 ]
             else:
                 geoms = [LineString([pt1, pt2]) for pt1, pt2 in zip(p1, p2, strict=False)]
-            geom_attr = {tuple(edge): geom for edge, geom in zip(edge_arr, geoms, strict=False)}
+            geom_attr = {edge: geom for edge, geom in zip(edge_list, geoms, strict=False)}
 
     nx.set_edge_attributes(G, geom_attr, "geometry")
 
@@ -1775,11 +1781,40 @@ def _directed_graph(
     # Prepare nodes for both source and destination
     src_G, src_coords, src_ids = _prepare_nodes(src_gdf, directed=True)
     dst_G, dst_coords, dst_ids = _prepare_nodes(dst_gdf, directed=True)
-    # Merge nodes into one directed graph
+
+    # Disambiguate node identifiers between source and destination layers.
+    # Use tuple-based namespacing to guarantee collision-free composition:
+    #   ('src', original_id) for sources, ('dst', original_id) for targets
+    unique_src_ids = [("src", sid) for sid in src_ids]
+    unique_dst_ids = [("dst", did) for did in dst_ids]
+
+    src_relabel_map = {old: new for old, new in zip(src_ids, unique_src_ids, strict=False)}
+    dst_relabel_map = {old: new for old, new in zip(dst_ids, unique_dst_ids, strict=False)}
+
+    # Relabel graphs with unique IDs and attach provenance attributes
+    src_G = nx.relabel_nodes(src_G, src_relabel_map, copy=True)
+    dst_G = nx.relabel_nodes(dst_G, dst_relabel_map, copy=True)
+
+    # Attach original index and node_type to enable correct reconstruction later
+    nx.set_node_attributes(
+        src_G,
+        {nid: oid for nid, oid in zip(unique_src_ids, src_ids, strict=False)},
+        "_original_index",
+    )
+    nx.set_node_attributes(src_G, dict.fromkeys(unique_src_ids, "src"), "node_type")
+
+    nx.set_node_attributes(
+        dst_G,
+        {nid: oid for nid, oid in zip(unique_dst_ids, dst_ids, strict=False)},
+        "_original_index",
+    )
+    nx.set_node_attributes(dst_G, dict.fromkeys(unique_dst_ids, "dst"), "node_type")
+
+    # Merge nodes into one directed graph (safe: IDs are now unique)
     G = nx.compose(src_G, dst_G)
 
     # Generate directed edges
-    edges = _directed_edges(
+    raw_edges: list[tuple[int, int]] = _directed_edges(
         src_coords,
         dst_coords,
         src_ids,
@@ -1789,18 +1824,34 @@ def _directed_graph(
         radius=param if method == "radius" else None,
     )
 
+    # Convert edges to use the unique, namespaced node identifiers
+    relabeled_edges: list[tuple[tuple[str, int], tuple[str, int]]] = [
+        (src_relabel_map[u], dst_relabel_map[v]) for (u, v) in raw_edges
+    ]
+
     # Add edges with weights and geometries
-    # src_G was created first - use its coords for weight calc
+    # Build collision-free mapping for _add_edges
     combined_coords = np.vstack([src_coords, dst_coords])
-    combined_ids = src_ids + dst_ids
+    combined_ids = unique_src_ids + unique_dst_ids
     _add_edges(
         G,
-        edges,
+        relabeled_edges,
         combined_coords,
         combined_ids,
         metric=distance_metric,
         network_gdf=network_gdf,
     )
+
+    # Preserve original edge indices for GeoDataFrame reconstruction
+    # so that nx_to_gdf emits (orig_src, orig_dst) even though internal IDs are namespaced
+    orig_edge_index = {
+        (u, v): (
+            G.nodes[u].get("_original_index", u),
+            G.nodes[v].get("_original_index", v),
+        )
+        for u, v in G.edges()
+    }
+    nx.set_edge_attributes(G, orig_edge_index, "_original_edge_index")
 
     return G if as_nx else nx_to_gdf(G, nodes=True, edges=True)
 
