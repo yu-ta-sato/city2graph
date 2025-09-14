@@ -1,12 +1,3 @@
----
-name: Pull Request
-about: Propose a change to city2graph
-title: ""
-labels: ""
-assignees: ""
-
----
-
 ## Description
 
 What is the purpose of this pull request? Please provide a detailed description of the changes, including the problem it solves and the approach taken.
