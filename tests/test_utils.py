@@ -172,6 +172,18 @@ class TestGraphStructures(BaseGraphTest):
             if keep_geom:
                 assert "original_geometry" in dual_nodes.columns
 
+    def test_validate_nx_populates_pos_from_xy(self, sample_crs: str) -> None:
+        """validate_nx should auto-create pos from x/y when missing."""
+        G = nx.Graph()
+        G.add_node(1, x=0.0, y=0.0)
+        G.add_node(2, x=1.0, y=1.0)
+        G.add_edge(1, 2)
+        G.graph = {"crs": sample_crs, "is_hetero": False}
+
+        utils.GeoDataProcessor().validate_nx(G)
+        assert "pos" in G.nodes[1]
+        assert "pos" in G.nodes[2]
+
     @pytest.mark.parametrize(
         ("segments_fixture", "expect_empty", "multigraph"),
         [
