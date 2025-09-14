@@ -176,7 +176,6 @@ If you use city2graph in your research, please cite it as follows:
   year = {2025},
   url = {https://github.com/c2g-dev/city2graph},
   doi = {10.5281/zenodo.15858845},
-  version = {0.1.1}
 }
 ```
 
