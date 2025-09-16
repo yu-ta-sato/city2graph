@@ -118,7 +118,7 @@ Examples
 
 .. code-block:: python
 
-   morphological_graph = city2graph.morphological_graph(
+   morphological_nodes, morphological_edges = city2graph.morphological_graph(
       buildings_gdf,
       segments_gdf,
       center_point,
@@ -152,6 +152,34 @@ Examples
    A travel summary graph of bus transportation between stops in London
 
 >> For details, see :doc:`examples/gtfs`
+
+**Mobility**
+
+.. code-block:: python
+
+   # Load zones (e.g., MSOA boundaries) and OD matrix data
+   od_data = pd.read_csv("od_matrix.csv")
+   zones_gdf = gpd.read_file("zones.gpkg")
+
+   # Convert OD matrix to graph
+   od_nodes, od_edges = city2graph.od_matrix_to_graph(
+       od_data,
+       zones_gdf,
+       source_col="origin",
+       target_col="destination",
+       weight_cols=["flow"],
+       zone_id_col="zone_id",
+       directed=False
+   )
+
+.. figure:: _static/od_matrix_to_graph_uk.png
+   :width: 1000px
+   :alt: An OD matrix graph showing migration flows and degree centrality in England and Wales
+   :align: center
+
+   An OD matrix graph showing migration flows and degree centrality in England and Wales
+
+>> For details, see :doc:`examples/generating_graphs_from_od_matrix`
 
 **Proximity**
 

@@ -9,3 +9,4 @@ This section provides examples of how to use city2graph in various urban analysi
    morphological_graph_from_overturemaps
    gtfs
    generating_graphs_by_proximity
+   generating_graphs_from_od_matrix

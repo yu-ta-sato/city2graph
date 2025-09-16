@@ -10,6 +10,7 @@ This section provides detailed documentation for all modules and functions in th
    graph
    morphology
    transportation
+   mobility
    proximity
    data
    utils

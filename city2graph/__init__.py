@@ -26,6 +26,9 @@ from importlib.metadata import version
 # Import all public APIs from submodules
 from .data import *  # noqa: F403
 from .graph import *  # noqa: F403
+
+# Explicit re-export to preserve typing information for mypy on public API
+from .mobility import *  # noqa: F403
 from .morphology import *  # noqa: F403
 from .proximity import *  # noqa: F403
 from .transportation import *  # noqa: F403
