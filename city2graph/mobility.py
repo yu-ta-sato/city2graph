@@ -33,6 +33,9 @@ import numpy as np
 import pandas as pd
 from shapely.geometry import LineString
 
+# Use city2graph converters for compatibility across the stack
+from .utils import gdf_to_nx
+
 if TYPE_CHECKING:
     from collections.abc import Callable
     from collections.abc import Mapping
@@ -53,7 +56,7 @@ __all__ = ["od_matrix_to_graph"]
 logger = logging.getLogger(__name__)
 
 
-def od_matrix_to_graph(  # noqa: PLR0913, PLR0915 (public API requires many parameters)
+def od_matrix_to_graph(  # noqa: PLR0913 (public API requires many parameters)
     od_data: pd.DataFrame | np.ndarray,
     zones_gdf: gpd.GeoDataFrame,
     zone_id_col: str | None = None,
@@ -66,6 +69,7 @@ def od_matrix_to_graph(  # noqa: PLR0913, PLR0915 (public API requires many para
     threshold_col: str | None = None,
     include_self_loops: bool = False,
     compute_edge_geometry: bool = True,
+    directed: bool = True,
     as_nx: bool = False,
 ) -> tuple[gpd.GeoDataFrame, gpd.GeoDataFrame] | object:
     """
@@ -75,9 +79,13 @@ def od_matrix_to_graph(  # noqa: PLR0913, PLR0915 (public API requires many para
     GeoDataFrame-first design. Supports adjacency matrices (DataFrame or
     ndarray) and edgelists with one or multiple numeric weight columns.
     By default, this function returns a pair of GeoDataFrames representing
-    nodes and edges. Optionally, it can return a NetworkX DiGraph when
-    ``as_nx=True``. Edges are directed and thresholded with the rule
-    weight >= threshold (or, when no threshold provided, strictly > 0).
+    nodes and edges. When ``directed=False``, the output is undirected: for
+    each unordered pair {u, v}, the edge weight equals the sum of directed
+    weights in both directions (u->v plus v->u). When a threshold is provided
+    in undirected mode, it is applied after this summation. By default edges
+    are directed and thresholded with the rule weight >= threshold (or, when
+    no threshold provided, strictly > 0). Optionally, it can return a NetworkX
+    graph when ``as_nx=True``.
 
     Parameters
     ----------
@@ -110,22 +118,26 @@ def od_matrix_to_graph(  # noqa: PLR0913, PLR0915 (public API requires many para
         Keep flows where origin == destination (defaults drop when False).
     compute_edge_geometry : bool, default True
         Whether to build LineString geometries from zone centroids.
+    directed : bool, default True
+        Whether to build a directed graph. If False, reciprocal edges are
+        merged by summing their weights (and all provided weight columns).
     as_nx : bool, default False
-        If True, final output will be an ``nx.DiGraph``.
+        If True, final output will be an NetworkX graph (``nx.DiGraph`` when
+        ``directed=True``; otherwise ``nx.Graph``).
 
     Returns
     -------
     tuple of (geopandas.GeoDataFrame, geopandas.GeoDataFrame)
-        The nodes and edges GeoDataFrames.
+        The nodes and edges GeoDataFrames. The nodes GeoDataFrame index is
+        aligned with the zone identifier (``zone_id_col`` when provided, else
+        the original ``zones_gdf.index``). The edges GeoDataFrame uses a
+        pandas MultiIndex on (source_id, target_id) and does not carry
+        separate 'source'/'target' columns, to comply with gdf_to_nx/gdf_to_pyg.
     networkx.DiGraph
         When ``as_nx=True``, a directed graph with node and edge attributes.
-
-    Notes
-    -----
-                * Always directed; no flow symmetrization is performed by default.
-                * Multiple weight columns are supported for edgelists via ``weight_cols``;
-                    the column used for thresholding and canonical 'weight' is selected by
-                    ``threshold_col`` (or implicitly the sole weight column).
+    networkx.Graph
+        When ``as_nx=True`` and ``directed=False``, an undirected graph with
+        node and edge attributes.
     """
     # --- Validation (Task 2) ------------------------------------------------
     _validate_zones_gdf(zones_gdf, zone_id_col)
@@ -151,28 +163,23 @@ def od_matrix_to_graph(  # noqa: PLR0913, PLR0915 (public API requires many para
         weight_cols=weight_cols,
     )
     if matrix_type == "edgelist":
-        if not isinstance(od_data, pd.DataFrame):
-            # Defensive: mypy narrowing + runtime safety
-            msg = "For matrix_type='edgelist', od_data must be a pandas DataFrame"
-            raise TypeError(msg)
+        # Edgelist specifics: validate primary/threshold relationships
         _validate_weights_threshold(
-            od_data, weight_cols=weight_cols, _threshold=threshold, threshold_col=threshold_col
+            cast("pd.DataFrame", od_data),
+            weight_cols=weight_cols,
+            _threshold=threshold,
+            threshold_col=threshold_col,
         )
 
     # --- Conversion to canonical edgelist (Tasks 3-4) ----------------------
-    # Establish non-optional zone_id after validation for type checkers
-    assert zone_id_col is not None
-    zone_id = zone_id_col
+    # Establish the zone identifier policy (column when provided, else index)
 
     if matrix_type == "edgelist":
-        if not isinstance(od_data, pd.DataFrame):
-            msg = "For matrix_type='edgelist', od_data must be a pandas DataFrame"
-            raise TypeError(msg)
         # Filter to zones and aggregate duplicates first
         aligned = _align_edgelist_zones(
-            od_data,
+            cast("pd.DataFrame", od_data),
             zones_gdf=zones_gdf,
-            zone_id_col=zone_id,
+            zone_id_col=zone_id_col,
             source_col=source_col,
             target_col=target_col,
         )
@@ -182,7 +189,8 @@ def od_matrix_to_graph(  # noqa: PLR0913, PLR0915 (public API requires many para
             source_col=source_col,
             target_col=target_col,
             weight_cols=weight_cols if weight_cols is not None else [],
-            threshold=threshold,
+            # In undirected mode, postpone threshold to apply after summation
+            threshold=None if not directed else threshold,
             threshold_col=threshold_col,
             include_self_loops=include_self_loops,
         )
@@ -191,45 +199,79 @@ def od_matrix_to_graph(  # noqa: PLR0913, PLR0915 (public API requires many para
         adj = _align_adjacency_zones(
             od_data,
             zones_gdf=zones_gdf,
-            zone_id_col=zone_id,
+            zone_id_col=zone_id_col,
         )
         edge_df = _adjacency_to_edgelist(
             adj,
             include_self_loops=include_self_loops,
-            threshold=threshold,
+            # In undirected mode, postpone threshold to apply after summation
+            threshold=None if not directed else threshold,
         )
     elif matrix_type == "adjacency" and isinstance(od_data, np.ndarray):
         zone_ids = _align_numpy_array_zones(
             od_data,
             zones_gdf=zones_gdf,
-            zone_id_col=zone_id,
+            zone_id_col=zone_id_col,
         )
         edge_df = _adjacency_to_edgelist(
             od_data,
             zone_ids,
             include_self_loops=include_self_loops,
-            threshold=threshold,
+            # In undirected mode, postpone threshold to apply after summation
+            threshold=None if not directed else threshold,
         )
 
     # Ensure canonical columns exist even if empty result
     if edge_df.empty:
-        cols = (
-            ["source", "target", "weight", *weight_cols]
-            if matrix_type == "edgelist" and weight_cols
-            else ["source", "target", "weight"]
+        edge_df = _empty_edgeframe(
+            include_extra_weights=(matrix_type == "edgelist" and bool(weight_cols)),
+            extra_weights=(weight_cols or []),
         )
-        edge_df = pd.DataFrame(columns=cols)
+
+    # If undirected, symmetrize by merging reciprocal edges and summing weights
+    if not directed and not edge_df.empty:
+        # Sum canonical 'weight' and any provided additional weight columns
+        sum_cols = ["weight"]
+        if matrix_type == "edgelist" and weight_cols:
+            # Ensure we sum the explicitly requested weight columns as well
+            # (they are already present in edge_df)
+            for c in weight_cols:
+                if c not in sum_cols:
+                    sum_cols.append(c)
+
+        edge_df = _symmetrize_edges(edge_df, sum_cols=sum_cols)
+
+        # Apply threshold after summation when requested
+        if threshold is not None:
+            edge_df = edge_df.loc[_apply_threshold(edge_df["weight"], threshold=threshold)]
 
     # --- Spatial assembly (Task 5) -----------------------------------------
-    nodes_gdf = zones_gdf.copy()
+    # Nodes: set index aligned with zone identifier (column or original index)
+    nodes_gdf = (
+        zones_gdf.set_index(zone_id_col, drop=False).copy()
+        if zone_id_col is not None
+        else zones_gdf.copy()
+    )
+
+    # Edges: create geometry, then convert to MultiIndex (source,target)
     edges_gdf = _create_edge_geometries(
         edge_df,
         zones_gdf,
-        zone_id_col=zone_id,
+        zone_id_col=zone_id_col,
         source_col="source",
         target_col="target",
         compute_edge_geometry=compute_edge_geometry,
     )
+
+    # Convert to MultiIndex using the node identifiers and drop source/target columns
+    if not edges_gdf.empty:
+        mi = pd.MultiIndex.from_arrays(
+            [edges_gdf["source"].to_numpy(), edges_gdf["target"].to_numpy()],
+            names=["source", "target"],
+        )
+        edges_gdf = edges_gdf.drop(columns=["source", "target"])  # keep canonical weight/attrs
+        edges_gdf.index = mi
+        # Ensure CRS preserved (GeoPandas keeps it on GeoDataFrame)
 
     # --- Output selection (Task 6) -----------------------------------------
     if not as_nx:
@@ -237,30 +279,9 @@ def od_matrix_to_graph(  # noqa: PLR0913, PLR0915 (public API requires many para
         logger.info("Created graph with %d nodes and %d edges", len(nodes_gdf), len(edges_gdf))
         return nodes_gdf, edges_gdf
 
-    # Build NetworkX graph with attributes
-    if nx is None:
-        msg = (
-            "NetworkX is required when as_nx=True. Please install 'networkx' to enable this option."
-        )
-        raise ImportError(msg)
-    G = nx.DiGraph()
-    # Add nodes with all attributes; node key equals zone_id
-    for _, row in nodes_gdf.iterrows():
-        node_id = row[zone_id]
-        attrs = row.drop(labels=[zone_id]).to_dict()  # keep geometry and other attrs
-        G.add_node(node_id, **attrs)
-
-    # Add edges with attributes; include geometry only when computed
-    edge_attr_cols = [c for c in edges_gdf.columns if c not in ("source", "target")]
-    for _, row in edges_gdf.iterrows():
-        u = row["source"]
-        v = row["target"]
-        attrs = {k: row[k] for k in edge_attr_cols}
-        if not compute_edge_geometry and "geometry" in attrs:
-            # Do not attach geometry attribute when geometry computation is disabled
-            attrs.pop("geometry", None)
-        G.add_edge(u, v, **attrs)
-
+    G = gdf_to_nx(
+        nodes=nodes_gdf, edges=edges_gdf, keep_geom=compute_edge_geometry, directed=directed
+    )
     logger.info(
         "Created graph with %d nodes and %d edges", G.number_of_nodes(), G.number_of_edges()
     )
@@ -294,15 +315,14 @@ def _validate_zones_gdf(zones_gdf: gpd.GeoDataFrame, zone_id_col: str | None) ->
         msg = "zones_gdf must be a GeoDataFrame"
         raise TypeError(msg)
 
-    if zone_id_col is None:
-        msg = "zone_id_col must be provided"
-        raise ValueError(msg)
-
-    if zone_id_col not in zones_gdf.columns:
-        msg = f"zone_id_col '{zone_id_col}' not found in zones_gdf columns"
-        raise ValueError(msg)
-
-    ids = zones_gdf[zone_id_col]
+    # Accept either an explicit zone id column or the DataFrame index
+    if zone_id_col is not None:
+        if zone_id_col not in zones_gdf.columns:
+            msg = f"zone_id_col '{zone_id_col}' not found in zones_gdf columns"
+            raise ValueError(msg)
+        ids = zones_gdf[zone_id_col]
+    else:
+        ids = zones_gdf.index
     if ids.isna().any():
         msg = "zone_id_col contains null values"
         raise ValueError(msg)
@@ -444,6 +464,35 @@ def _apply_threshold(series: pd.Series, *, threshold: float | None) -> pd.Series
         Boolean mask indicating which values pass the threshold.
     """
     return series > 0 if threshold is None else series >= threshold
+
+
+def _empty_edgeframe(*, include_extra_weights: bool, extra_weights: list[str]) -> pd.DataFrame:
+    """
+    Construct a canonical empty edge DataFrame with appropriate columns.
+
+    This helper is used when upstream processing yields no edges (for example,
+    after thresholding or when no valid zone pairs remain). It guarantees a
+    consistent schema for downstream consumers by returning the expected
+    columns even in the absence of data.
+
+    Parameters
+    ----------
+    include_extra_weights : bool
+        Whether to include additional weight columns beyond the canonical
+        'weight'.
+    extra_weights : list[str]
+        Names of the extra weight columns to include when requested.
+
+    Returns
+    -------
+    pandas.DataFrame
+        Empty DataFrame with columns ['source','target','weight',*extra_weights].
+    """
+    cols = ["source", "target", "weight"]
+    if include_extra_weights:
+        # Preserve provided order
+        cols.extend(extra_weights)
+    return pd.DataFrame(columns=cols)
 
 
 def _adjacency_to_edgelist(
@@ -863,7 +912,7 @@ def _align_adjacency_zones(
     adjacency_df: pd.DataFrame,
     *,
     zones_gdf: gpd.GeoDataFrame,
-    zone_id_col: str,
+    zone_id_col: str | None,
 ) -> pd.DataFrame:
     """
     Align an adjacency DataFrame to the provided zones.
@@ -887,7 +936,9 @@ def _align_adjacency_zones(
     """
     matrix_ids = pd.Index(adjacency_df.index)
 
-    zones_ids = pd.Index(zones_gdf[zone_id_col])
+    zones_ids = (
+        pd.Index(zones_gdf[zone_id_col]) if zone_id_col is not None else pd.Index(zones_gdf.index)
+    )
     common = matrix_ids.intersection(zones_ids)
     if common.empty:
         msg = "No overlapping zone IDs between adjacency matrix and zones_gdf"
@@ -917,7 +968,7 @@ def _align_numpy_array_zones(
     adjacency_array: np.ndarray,
     *,
     zones_gdf: gpd.GeoDataFrame,
-    zone_id_col: str,
+    zone_id_col: str | None,
 ) -> pd.Index:
     """
     Validate ndarray size and return zone ids in ``zones_gdf`` order.
@@ -944,14 +995,16 @@ def _align_numpy_array_zones(
         msg = "Adjacency ndarray size must match number of zones in zones_gdf"
         raise ValueError(msg)
 
-    return cast("pd.Index", pd.Index(zones_gdf[zone_id_col]))
+    return cast(
+        "pd.Index", pd.Index(zones_gdf[zone_id_col] if zone_id_col is not None else zones_gdf.index)
+    )
 
 
 def _align_edgelist_zones(
     edgelist_df: pd.DataFrame,
     *,
     zones_gdf: gpd.GeoDataFrame,
-    zone_id_col: str,
+    zone_id_col: str | None,
     source_col: str,
     target_col: str,
 ) -> pd.DataFrame:
@@ -978,7 +1031,9 @@ def _align_edgelist_zones(
         Filtered edgelist containing only valid zone IDs. Duplicate
         ``(source, target)`` rows are preserved here and handled downstream.
     """
-    valid_ids = set(zones_gdf[zone_id_col].tolist())
+    valid_ids = set(
+        (zones_gdf[zone_id_col] if zone_id_col is not None else zones_gdf.index).tolist()
+    )
     before = len(edgelist_df)
     mask_valid = edgelist_df[source_col].isin(valid_ids) & edgelist_df[target_col].isin(valid_ids)
     filtered = edgelist_df.loc[mask_valid].copy()
@@ -1064,7 +1119,7 @@ def _create_edge_geometries(
     edges_df: pd.DataFrame,
     zones_gdf: gpd.GeoDataFrame,
     *,
-    zone_id_col: str,
+    zone_id_col: str | None,
     source_col: str = "source",
     target_col: str = "target",
     compute_edge_geometry: bool = True,
@@ -1081,8 +1136,9 @@ def _create_edge_geometries(
         Canonical edgelist with ``source``, ``target`` and weight columns.
     zones_gdf : geopandas.GeoDataFrame
         Zones GeoDataFrame providing geometry and CRS.
-    zone_id_col : str
-        Column name holding unique zone identifiers in ``zones_gdf``.
+    zone_id_col : str | None
+        Column name holding unique zone identifiers in ``zones_gdf``. If None,
+        the index of ``zones_gdf`` is used as the identifier domain.
     source_col, target_col : str, default 'source', 'target'
         Column names in ``edges_df`` to map to zone centroids.
     compute_edge_geometry : bool, default True
@@ -1105,8 +1161,9 @@ def _create_edge_geometries(
 
     # Build centroid lookup once (vectorized via reindex below)
     centroids = _compute_centroids(zones_gdf)
-    # Reindex centroids by zone_id values to allow direct .reindex with source/target IDs
-    centroids.index = pd.Index(zones_gdf[zone_id_col])
+    # Reindex centroids by chosen identifier (either provided column or index)
+    if zone_id_col is not None:
+        centroids.index = pd.Index(zones_gdf[zone_id_col])
 
     # Vectorized mapping of endpoints -> centroids using reindex (preserves order)
     src_pts = centroids.reindex(e[source_col].values)
@@ -1134,7 +1191,61 @@ def _create_edge_geometries(
 
     # Create LineStrings; use numpy.frompyfunc to avoid explicit Python loop semantics
     make_line = lambda a, b: LineString([a, b])  # noqa: E731
+
     # frompyfunc returns object dtype array; it's acceptable for geometry construction
     lines = np.frompyfunc(make_line, 2, 1)(src_pts.values, tgt_pts.values)
     geom = gpd.GeoSeries(lines.tolist(), crs=zones_gdf.crs)
     return gpd.GeoDataFrame(e.reset_index(drop=True), geometry=geom, crs=zones_gdf.crs)
+
+
+def _symmetrize_edges(edges: pd.DataFrame, *, sum_cols: list[str]) -> pd.DataFrame:
+    """
+    Merge reciprocal directed edges into undirected edges by summing weights.
+
+    For each unordered pair {u, v}, produce a single edge with ``source`` <= ``target``
+    (based on string representation ordering) and sum the provided ``sum_cols`` across
+    both directions. Self-loops (u == v) are preserved and included as-is.
+
+    Parameters
+    ----------
+    edges : pandas.DataFrame
+        Canonical directed edgelist containing 'source', 'target', and sum_cols.
+    sum_cols : list[str]
+        Columns to sum when merging reciprocal edges. Must include 'weight'.
+
+    Returns
+    -------
+    pandas.DataFrame
+        Undirected edgelist with merged weights and canonical columns.
+    """
+    if edges.empty:
+        return edges
+
+    edges_work = edges.copy()
+
+    # Normalize (u, v) ordering deterministically; keep self-loops unchanged
+    # Use astype(str) to ensure consistent comparison across dtypes
+    s_str = edges_work["source"].astype(str)
+    t_str = edges_work["target"].astype(str)
+
+    # mask where source string is lexicographically <= target string
+    keep = s_str <= t_str
+    src_norm = edges_work["source"].where(keep, edges_work["target"])  # swap when needed
+    tgt_norm = edges_work["target"].where(keep, edges_work["source"])  # swap when needed
+    edges_work["_u"] = src_norm
+    edges_work["_v"] = tgt_norm
+
+    # Group by normalized unordered pair and sum all requested columns
+    group_cols = ["_u", "_v"]
+    agg = edges_work.groupby(group_cols, as_index=False)[sum_cols].sum()
+
+    # Rename normalized cols back to canonical names
+    agg = agg.rename(columns={"_u": "source", "_v": "target"})
+
+    # Ensure column order: source, target, weight, then any others in sum_cols order
+    other_cols = [c for c in sum_cols if c != "weight"]
+    ordered_cols = ["source", "target", "weight", *other_cols]
+
+    # Preserve any remaining non-summed columns (if present) by left-joining original
+    # But to keep the function focused and deterministic, we return only canonical columns
+    return agg.loc[:, ordered_cols]
