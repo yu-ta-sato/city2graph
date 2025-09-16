@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.1.4 (2024-09-16)
+
+### Added
+- Added `od_matrix_to_graph`
+
+### Changed
+- N/A
+
+### Fixed
+- N/A
+
+### Documentation
+- Added examples of `od_matrix_to_graph` in https://city2graph.net/examples/generating_graphs_from_od_matrix.ipynb
+
 ## 0.1.3 (2025-09-14)
 
 ### Added
