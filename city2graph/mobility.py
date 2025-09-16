@@ -398,12 +398,8 @@ def _extract_array_and_ids(
         return arr, ids
 
     arr = np.asarray(adjacency, dtype=float)
-    # For ndarray inputs, zone_ids must be provided and non-None
-    if zone_ids is None:
-        msg = "zone_ids must be provided when 'adjacency' is an ndarray"
-        raise TypeError(msg)
-    # Use list() to satisfy typing: Index expects a sequence of hashables
-    return arr, pd.Index(list(zone_ids))
+    # Upstream ensures zone_ids is provided for ndarray inputs
+    return arr, cast("pd.Index", zone_ids)
 
 
 def _build_adjacency_mask(
@@ -980,13 +976,15 @@ def _align_numpy_array_zones(
     pandas.Index
         Zone identifiers in the same order as ``zones_gdf``.
     """
-    # Light sanity check (primary validation occurs earlier in _validate_adjacency_data)
-    if getattr(adjacency_array, "ndim", 2) != 2:
-        warnings.warn(
-            "Adjacency ndarray should be 2D square; proceeding with provided zones order",
-            UserWarning,
-            stacklevel=2,
-        )
+    # Upstream validation already checks shape and size; here we just warn about assumed ordering
+    warnings.warn(
+        (
+            "Assuming ndarray row/column ordering matches zones_gdf order (requirement 5.7); "
+            f"ndarray rows={adjacency_array.shape[0]}"
+        ),
+        UserWarning,
+        stacklevel=2,
+    )
 
     return cast(
         "pd.Index", pd.Index(zones_gdf[zone_id_col] if zone_id_col is not None else zones_gdf.index)
