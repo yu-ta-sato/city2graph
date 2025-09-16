@@ -25,7 +25,7 @@ import logging
 import numbers
 import warnings
 from typing import TYPE_CHECKING
-from typing import Any
+from typing import Literal
 from typing import cast
 
 import geopandas as gpd
@@ -43,13 +43,6 @@ if TYPE_CHECKING:
     import networkx as nx
     from numpy.typing import NDArray
 
-# Optional runtime import: keep ruff happy (top-level import), but tolerate
-# environments without NetworkX installed. Type checking is covered above.
-try:  # pragma: no cover - trivial import shim
-    import networkx as nx
-except Exception:  # noqa: BLE001 - broad by design to keep optional dep truly optional
-    nx = cast("Any", None)
-
 __all__ = ["od_matrix_to_graph"]
 
 # Logger for informational summaries and errors (warnings used for data quality)
@@ -61,7 +54,7 @@ def od_matrix_to_graph(  # noqa: PLR0913 (public API requires many parameters)
     zones_gdf: gpd.GeoDataFrame,
     zone_id_col: str | None = None,
     *,
-    matrix_type: str = "edgelist",
+    matrix_type: Literal["edgelist", "adjacency"] = "edgelist",
     source_col: str = "source",
     target_col: str = "target",
     weight_cols: list[str] | None = None,
@@ -71,7 +64,7 @@ def od_matrix_to_graph(  # noqa: PLR0913 (public API requires many parameters)
     compute_edge_geometry: bool = True,
     directed: bool = True,
     as_nx: bool = False,
-) -> tuple[gpd.GeoDataFrame, gpd.GeoDataFrame] | object:
+) -> tuple[gpd.GeoDataFrame, gpd.GeoDataFrame] | nx.Graph | nx.DiGraph:
     """
     Convert OD data (edge list or adjacency matrix) into graph structures.
 
@@ -164,6 +157,8 @@ def od_matrix_to_graph(  # noqa: PLR0913 (public API requires many parameters)
     )
     if matrix_type == "edgelist":
         # Edgelist specifics: validate primary/threshold relationships
+        # weight_cols is required for edgelist inputs (validated above)
+        assert weight_cols is not None
         _validate_weights_threshold(
             cast("pd.DataFrame", od_data),
             weight_cols=weight_cols,
@@ -286,7 +281,7 @@ def od_matrix_to_graph(  # noqa: PLR0913 (public API requires many parameters)
     logger.info(
         "Created graph with %d nodes and %d edges", G.number_of_nodes(), G.number_of_edges()
     )
-    return cast("object", G)
+    return G
 
 
 # ---------------------------------------------------------------------------
@@ -312,6 +307,7 @@ def _validate_zones_gdf(zones_gdf: gpd.GeoDataFrame, zone_id_col: str | None) ->
     None
         This function validates input and raises on failure.
     """
+    # Ensure zones_gdf is a GeoDataFrame (public API contracts/tests)
     if not isinstance(zones_gdf, gpd.GeoDataFrame):
         msg = "zones_gdf must be a GeoDataFrame"
         raise TypeError(msg)
@@ -402,10 +398,12 @@ def _extract_array_and_ids(
         return arr, ids
 
     arr = np.asarray(adjacency, dtype=float)
+    # For ndarray inputs, zone_ids must be provided and non-None
     if zone_ids is None:
-        msg = "zone_ids must be provided when adjacency is an ndarray"
-        raise ValueError(msg)
-    return arr, pd.Index(zone_ids)
+        msg = "zone_ids must be provided when 'adjacency' is an ndarray"
+        raise TypeError(msg)
+    # Use list() to satisfy typing: Index expects a sequence of hashables
+    return arr, pd.Index(list(zone_ids))
 
 
 def _build_adjacency_mask(
@@ -535,19 +533,12 @@ def _adjacency_to_edgelist(
     """
     arr, ids = _extract_array_and_ids(adjacency, zone_ids)
 
-    # Defensive shape check (validated earlier but keep cheap sanity check)
-    if arr.ndim != 2 or arr.shape[0] != arr.shape[1]:
-        msg = "Adjacency must be a square matrix"
-        raise ValueError(msg)
-
     # Clean and build mask
     arr = _warn_and_clean_adjacency(arr)
     mask = _build_adjacency_mask(arr, include_self_loops=include_self_loops, threshold=threshold)
 
     # Vectorized extraction of (i,j,weight)
     i, j = np.where(mask)
-    if i.size == 0:
-        return pd.DataFrame(columns=["source", "target", "weight"])  # empty result
 
     return pd.DataFrame(
         {
@@ -666,12 +657,10 @@ def _resolve_primary(weight_cols: list[str], threshold_col: str | None) -> str:
     str
         The selected primary weight column name.
     """
+    # Upstream validator ensures either single weight or a valid threshold_col
     if len(weight_cols) == 1:
         return weight_cols[0]
-    if threshold_col and threshold_col in weight_cols:
-        return threshold_col
-    msg = "When multiple weight_cols are provided, a valid threshold_col must be specified"
-    raise ValueError(msg)
+    return cast("str", threshold_col)
 
 
 def _normalize_edgelist(
@@ -717,10 +706,6 @@ def _normalize_edgelist(
         Canonical edge list with columns ['source', 'target', 'weight', ...],
         where 'weight' mirrors the chosen primary weight column.
     """
-    if not weight_cols:
-        msg = "weight_cols must be provided for edgelist normalization"
-        raise ValueError(msg)
-
     # Coerce and aggregate in focused helpers
     coerced = _coerce_weight_columns(edgelist_df, weight_cols)
     agg_df = _aggregate_edgelist(
@@ -755,7 +740,7 @@ def _validate_adjacency_data(
     od_data: pd.DataFrame | np.ndarray,
     *,
     zones_gdf: gpd.GeoDataFrame,
-    **_: object,
+    **kwargs: object,
 ) -> None:
     """
     Validate adjacency style OD data (square, labels/order).
@@ -777,9 +762,10 @@ def _validate_adjacency_data(
 
     Other Parameters
     ----------------
-    **_ : object
+    **kwargs : object
         Additional keyword arguments ignored by this validator.
     """
+    _ = kwargs  # ignore extra keyword arguments intentionally
     if isinstance(od_data, pd.DataFrame):
         checks = [
             (od_data.shape[0] == od_data.shape[1], "Adjacency DataFrame must be square"),
@@ -822,7 +808,7 @@ def _validate_edgelist_data(
     source_col: str,
     target_col: str,
     weight_cols: list[str] | None,
-    **_: object,
+    **kwargs: object,
 ) -> None:
     """
     Validate edgelist structural requirements (required cols, weights present).
@@ -846,9 +832,10 @@ def _validate_edgelist_data(
 
     Other Parameters
     ----------------
-    **_ : object
+    **kwargs : object
         Additional keyword arguments ignored by this validator.
     """
+    _ = kwargs  # ignore extra keyword arguments intentionally
     if not isinstance(od_data, pd.DataFrame):
         msg = "For matrix_type='edgelist', od_data must be a pandas DataFrame"
         raise TypeError(msg)
@@ -871,7 +858,7 @@ def _validate_edgelist_data(
 def _validate_weights_threshold(
     _od_edgelist: pd.DataFrame,
     *,
-    weight_cols: list[str] | None,
+    weight_cols: list[str],
     _threshold: float | None,
     threshold_col: str | None,
 ) -> None:
@@ -897,9 +884,6 @@ def _validate_weights_threshold(
     None
         This function validates input and raises on failure.
     """
-    if weight_cols is None:
-        return  # already enforced earlier, defensive
-
     # Validate threshold_col selection and unify coercion using shared helper
     if len(weight_cols) > 1 and (threshold_col is None or threshold_col not in weight_cols):
         msg = "When multiple weight_cols are provided a valid threshold_col must be specified"
@@ -996,10 +980,13 @@ def _align_numpy_array_zones(
     pandas.Index
         Zone identifiers in the same order as ``zones_gdf``.
     """
-    n = len(zones_gdf)
-    if adjacency_array.shape[0] != n:
-        msg = "Adjacency ndarray size must match number of zones in zones_gdf"
-        raise ValueError(msg)
+    # Light sanity check (primary validation occurs earlier in _validate_adjacency_data)
+    if getattr(adjacency_array, "ndim", 2) != 2:
+        warnings.warn(
+            "Adjacency ndarray should be 2D square; proceeding with provided zones order",
+            UserWarning,
+            stacklevel=2,
+        )
 
     return cast(
         "pd.Index", pd.Index(zones_gdf[zone_id_col] if zone_id_col is not None else zones_gdf.index)
@@ -1222,9 +1209,6 @@ def _symmetrize_edges(edges: pd.DataFrame, *, sum_cols: list[str]) -> pd.DataFra
     pandas.DataFrame
         Undirected edgelist with merged weights and canonical columns.
     """
-    if edges.empty:
-        return edges
-
     edges_work = edges.copy()
 
     # Normalize (u, v) ordering deterministically; keep self-loops unchanged

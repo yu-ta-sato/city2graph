@@ -68,6 +68,23 @@ requires_torch = pytest.mark.skipif(
 )
 
 
+@pytest.fixture
+def od_zones_gdf() -> gpd.GeoDataFrame:
+    """Small zones GeoDataFrame for OD/mobility tests.
+
+    Provides three point-like zones with ids 'A','B','C' in WGS84, matching
+    the previous local helper used in mobility tests.
+    """
+    return gpd.GeoDataFrame(
+        {
+            "zone_id": ["A", "B", "C"],
+            "value": [1, 2, 3],
+            "geometry": [Point(0, 0), Point(1, 0), Point(1, 1)],
+        },
+        crs=WGS84_CRS,
+    )
+
+
 @pytest.fixture(scope="session")
 def sample_crs() -> str:
     """Coordinate Reference System fixture."""
