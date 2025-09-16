@@ -171,8 +171,9 @@ def od_matrix_to_graph(  # noqa: PLR0913 (public API requires many parameters)
             threshold_col=threshold_col,
         )
 
-    # --- Conversion to canonical edgelist (Tasks 3-4) ----------------------
-    # Establish the zone identifier policy (column when provided, else index)
+    # --- Conversion to canonical edgelist ----------------------------------
+    # For undirected mode, postpone thresholding until after symmetrization
+    post_sum_threshold = threshold if not directed else None
 
     if matrix_type == "edgelist":
         # Filter to zones and aggregate duplicates first
@@ -189,7 +190,7 @@ def od_matrix_to_graph(  # noqa: PLR0913 (public API requires many parameters)
             source_col=source_col,
             target_col=target_col,
             weight_cols=weight_cols if weight_cols is not None else [],
-            # In undirected mode, postpone threshold to apply after summation
+            # In undirected mode, thresholding is applied later
             threshold=None if not directed else threshold,
             threshold_col=threshold_col,
             include_self_loops=include_self_loops,
@@ -204,7 +205,7 @@ def od_matrix_to_graph(  # noqa: PLR0913 (public API requires many parameters)
         edge_df = _adjacency_to_edgelist(
             adj,
             include_self_loops=include_self_loops,
-            # In undirected mode, postpone threshold to apply after summation
+            # In undirected mode, thresholding is applied later
             threshold=None if not directed else threshold,
         )
     elif matrix_type == "adjacency" and isinstance(od_data, np.ndarray):
@@ -217,7 +218,7 @@ def od_matrix_to_graph(  # noqa: PLR0913 (public API requires many parameters)
             od_data,
             zone_ids,
             include_self_loops=include_self_loops,
-            # In undirected mode, postpone threshold to apply after summation
+            # In undirected mode, thresholding is applied later
             threshold=None if not directed else threshold,
         )
 
@@ -242,8 +243,8 @@ def od_matrix_to_graph(  # noqa: PLR0913 (public API requires many parameters)
         edge_df = _symmetrize_edges(edge_df, sum_cols=sum_cols)
 
         # Apply threshold after summation when requested
-        if threshold is not None:
-            edge_df = edge_df.loc[_apply_threshold(edge_df["weight"], threshold=threshold)]
+        if post_sum_threshold is not None:
+            edge_df = edge_df.loc[_apply_threshold(edge_df["weight"], threshold=post_sum_threshold)]
 
     # --- Spatial assembly (Task 5) -----------------------------------------
     # Nodes: set index aligned with zone identifier (column or original index)
@@ -414,33 +415,38 @@ def _build_adjacency_mask(
     threshold: float | None,
 ) -> NDArray[np.bool_]:
     """
-    Create a boolean mask for edges based on threshold and self-loop policy.
+    Build a boolean mask selecting matrix entries to keep.
 
-    The mask flags retained (i, j) pairs according to the threshold rule and
-    whether diagonal entries should be included.
+    The mask encodes the default thresholding semantics used throughout the
+    module: when ``threshold`` is ``None`` entries strictly greater than 0 are
+    selected, otherwise entries greater than or equal to the provided
+    ``threshold`` are selected. When ``include_self_loops`` is ``False``, the
+    diagonal is set to ``False`` to drop self-loops.
 
     Parameters
     ----------
     arr : numpy.ndarray
-        Adjacency array.
+        Square adjacency matrix of weights to be filtered.
     include_self_loops : bool
-        Whether to include diagonal entries in the mask.
-    threshold : float | None
-        If provided, keep values ``>= threshold``; else keep values ``> 0``.
+        Whether to keep diagonal entries (self-loops). When ``False``, the
+        diagonal is removed from the mask.
+    threshold : float or None
+        Inclusive minimum value to retain. If ``None``, values must be
+        strictly greater than 0 to be kept.
 
     Returns
     -------
-    numpy.ndarray
-        Boolean mask of shape ``arr.shape``.
+    numpy.ndarray of bool
+        Boolean mask with the same shape as ``arr`` indicating entries that
+        pass the thresholding and self-loop policy.
     """
-    mask: NDArray[np.bool_] = ((arr > 0) if threshold is None else (arr >= threshold)).astype(
-        bool, copy=False
-    )
+    mask: NDArray[np.bool_] = (arr > 0) if threshold is None else (arr >= threshold)
     if include_self_loops:
-        return mask
-    n = arr.shape[0]
-    result: NDArray[np.bool_] = np.logical_and(mask, ~np.eye(n, dtype=bool))
-    return result
+        return mask.astype(bool, copy=False)
+    # Drop diagonal in-place for clarity
+    mask = mask.astype(bool, copy=False)
+    np.fill_diagonal(mask, val=False)
+    return mask
 
 
 def _apply_threshold(series: pd.Series, *, threshold: float | None) -> pd.Series:
@@ -1125,54 +1131,56 @@ def _create_edge_geometries(
     compute_edge_geometry: bool = True,
 ) -> gpd.GeoDataFrame:
     """
-    Create edge geometries as LineStrings between zone centroids.
+    Create LineString geometries connecting zone centroids for each edge.
 
-    Builds straight-line connections between centroid coordinates for each
-    edge; optionally returns an empty geometry when disabled.
+    For each row in ``edges_df`` the function looks up the centroid of the
+    origin and destination zones and constructs a ``shapely.geometry.LineString``
+    between them. If ``compute_edge_geometry`` is ``False`` or the input is
+    empty, a GeoDataFrame is returned with a ``geometry`` column containing
+    ``None`` for each row. Edges with unknown zone IDs or missing centroids are
+    dropped with a warning.
 
     Parameters
     ----------
     edges_df : pandas.DataFrame
-        Canonical edgelist with ``source``, ``target`` and weight columns.
+        Canonical edgelist containing at least ``source_col`` and
+        ``target_col`` columns, and optionally weight attributes.
     zones_gdf : geopandas.GeoDataFrame
-        Zones GeoDataFrame providing geometry and CRS.
-    zone_id_col : str | None
-        Column name holding unique zone identifiers in ``zones_gdf``. If None,
-        the index of ``zones_gdf`` is used as the identifier domain.
-    source_col, target_col : str, default 'source', 'target'
-        Column names in ``edges_df`` to map to zone centroids.
+        GeoDataFrame of zone geometries used to compute centroids.
+    zone_id_col : str or None
+        Name of the identifier column in ``zones_gdf``. If ``None``, the index
+        of ``zones_gdf`` is used as the identifier space.
+    source_col : str, default 'source'
+        Column name in ``edges_df`` holding origin zone identifiers.
+    target_col : str, default 'target'
+        Column name in ``edges_df`` holding destination zone identifiers.
     compute_edge_geometry : bool, default True
-        Whether to construct LineString geometries.
+        Whether to compute LineString geometries. When ``False``, no geometry
+        is computed and ``None`` is stored in the geometry column.
 
     Returns
     -------
     geopandas.GeoDataFrame
-        Edge GeoDataFrame with a ``geometry`` column (possibly ``None`` values
-        when ``compute_edge_geometry`` is False) and CRS preserved from zones.
+        GeoDataFrame with the same non-geometry columns as ``edges_df`` and a
+        ``geometry`` column containing LineStrings connecting origin and
+        destination centroids. The CRS is inherited from ``zones_gdf``.
     """
-    # Use input edges directly; upstream alignment ensures valid IDs for edgelists.
-    # For adjacency-derived edges or edge cases, missing IDs/centroids are handled below.
     e = edges_df.copy()
-
-    # Fast-path: skip centroid computation when geometry is disabled or there are no edges
     if not compute_edge_geometry or e.empty:
         geom = gpd.GeoSeries([None] * len(e), crs=zones_gdf.crs)
         return gpd.GeoDataFrame(e, geometry=geom, crs=zones_gdf.crs)
 
-    # Build centroid lookup once (vectorized via reindex below)
+    # Centroid lookup by ID
     centroids = _compute_centroids(zones_gdf)
-    # Reindex centroids by chosen identifier (either provided column or index)
     if zone_id_col is not None:
         centroids.index = pd.Index(zones_gdf[zone_id_col])
 
-    # Vectorized mapping of endpoints -> centroids using reindex (preserves order)
-    src_pts = centroids.reindex(e[source_col].values)
-    tgt_pts = centroids.reindex(e[target_col].values)
+    # Map ids -> centroids via dict for clarity
+    lookup = centroids.to_dict()
+    src_pts = e[source_col].map(lookup)
+    tgt_pts = e[target_col].map(lookup)
 
-    # Some ids might still be missing (unknown IDs or missing centroids); drop such rows with warning
-    missing_src = src_pts.isna()
-    missing_tgt = tgt_pts.isna()
-    missing_any = missing_src | missing_tgt
+    missing_any = src_pts.isna() | tgt_pts.isna()
     n_missing = int(missing_any.sum())
     if n_missing:
         warnings.warn(
@@ -1180,21 +1188,17 @@ def _create_edge_geometries(
             UserWarning,
             stacklevel=2,
         )
-        if n_missing == len(e):
-            # All missing; return empty GeoDataFrame with CRS
-            return gpd.GeoDataFrame(
-                e.iloc[0:0], geometry=gpd.GeoSeries([], crs=zones_gdf.crs), crs=zones_gdf.crs
-            )
         e = e.loc[~missing_any].copy()
         src_pts = src_pts.loc[~missing_any]
         tgt_pts = tgt_pts.loc[~missing_any]
 
-    # Create LineStrings; use numpy.frompyfunc to avoid explicit Python loop semantics
-    make_line = lambda a, b: LineString([a, b])  # noqa: E731
+    if e.empty:
+        return gpd.GeoDataFrame(e, geometry=gpd.GeoSeries([], crs=zones_gdf.crs), crs=zones_gdf.crs)
 
-    # frompyfunc returns object dtype array; it's acceptable for geometry construction
-    lines = np.frompyfunc(make_line, 2, 1)(src_pts.values, tgt_pts.values)
-    geom = gpd.GeoSeries(lines.tolist(), crs=zones_gdf.crs)
+    lines = [
+        LineString([a, b]) for a, b in zip(src_pts.to_numpy(), tgt_pts.to_numpy(), strict=True)
+    ]
+    geom = gpd.GeoSeries(lines, crs=zones_gdf.crs)
     return gpd.GeoDataFrame(e.reset_index(drop=True), geometry=geom, crs=zones_gdf.crs)
 
 
