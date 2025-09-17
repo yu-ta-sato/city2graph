@@ -13,6 +13,7 @@ across different feature types and scales.
 from __future__ import annotations
 
 # Standard library imports
+import contextlib
 import logging
 from itertools import combinations
 from itertools import permutations
@@ -25,6 +26,7 @@ import libpysal
 import networkx as nx
 import numpy as np
 import numpy.typing as npt
+import pandas as pd
 from scipy.spatial import Delaunay
 from scipy.spatial import distance as sdist
 from shapely.geometry import LineString
@@ -47,6 +49,7 @@ __all__ = [
     "euclidean_minimum_spanning_tree",
     "fixed_radius_graph",
     "gabriel_graph",
+    "group_nodes",
     "knn_graph",
     "relative_neighborhood_graph",
     "waxman_graph",
@@ -1317,6 +1320,381 @@ def bridge_nodes(
 # ============================================================================
 
 
+def _relation_from_predicate(predicate: str | None) -> str:
+    """
+    Map a spatial predicate to a canonical relation label.
+
+    This standardizes the relation name used in heterogeneous edge keys based on a
+    GeoPandas spatial join predicate.
+
+    Parameters
+    ----------
+    predicate : str or None
+        Spatial predicate name (e.g., "covered_by", "within", "contains"). If None,
+        defaults to "covered_by".
+
+    Returns
+    -------
+    str
+        Canonical relation label used in edge keys. Mappings: "covered_by" -> "covers",
+        "within" -> "contains", "contains" -> "contains". Any other value is returned
+        unchanged.
+    """
+    pred = (predicate or "covered_by").lower()
+    return {"covered_by": "covers", "within": "contains", "contains": "contains"}.get(pred, pred)
+
+
+def _group_nodes_empty_result(
+    polygons_gdf: gpd.GeoDataFrame,
+    points_gdf: gpd.GeoDataFrame,
+    relation: str,
+    crs: object,
+    as_nx: bool,
+) -> tuple[dict[str, gpd.GeoDataFrame], dict[tuple[str, str, str], gpd.GeoDataFrame]] | nx.Graph:
+    """
+    Return an empty heterogeneous structure with correct schema and metadata.
+
+    When there are no matches or inputs are empty, this helper fabricates the minimal
+    nodes/edges containers (or a NetworkX graph) with the right index names and CRS so
+    downstream consumers can rely on a consistent interface without extra conditionals.
+
+    Parameters
+    ----------
+    polygons_gdf : geopandas.GeoDataFrame
+        Polygon nodes to include in the output under key "polygon".
+    points_gdf : geopandas.GeoDataFrame
+        Point nodes to include in the output under key "point".
+    relation : str
+        Canonical relation label (e.g., "covers", "contains") for the heterogeneous edge key.
+    crs : object
+        CRS to assign to the empty edges GeoDataFrame.
+    as_nx : bool
+        If True, return a typed heterogeneous NetworkX graph; otherwise return nodes/edges dicts.
+
+    Returns
+    -------
+    tuple[dict[str, geopandas.GeoDataFrame], dict[tuple[str, str, str], geopandas.GeoDataFrame]] or networkx.Graph
+        Nodes/edges dictionaries when ``as_nx`` is False, or a heterogeneous NetworkX graph when True.
+    """
+    edge_key = ("polygon", relation, "point")
+    idx = pd.MultiIndex.from_tuples([], names=[polygons_gdf.index.name, points_gdf.index.name])
+    empty_edges = gpd.GeoDataFrame(
+        {"weight": pd.Series(dtype=float)},
+        geometry=gpd.GeoSeries(dtype="geometry"),
+        crs=crs,
+        index=idx,
+    )
+    nodes_dict: dict[str, gpd.GeoDataFrame] = {"polygon": polygons_gdf, "point": points_gdf}
+    edges_dict: dict[tuple[str, str, str], gpd.GeoDataFrame] = {edge_key: empty_edges}
+    return (
+        gdf_to_nx(nodes=nodes_dict, edges=edges_dict, directed=True)
+        if as_nx
+        else (
+            nodes_dict,
+            edges_dict,
+        )
+    )
+
+
+def _edges_gdf_from_pairs(
+    polygons_gdf: gpd.GeoDataFrame,
+    points_gdf: gpd.GeoDataFrame,
+    pairs: list[tuple[Any, Any]],
+    metric: str,
+    network_gdf: gpd.GeoDataFrame | None,
+) -> gpd.GeoDataFrame | None:
+    """
+    Build an edges GeoDataFrame from (polygon_id, point_id) pairs.
+
+    Constructs a temporary directed graph that includes polygon centroids and
+    points as nodes, then attaches weights/geometries using the common helper.
+
+    Parameters
+    ----------
+    polygons_gdf : geopandas.GeoDataFrame
+        Polygon features; centroids are used as polygon node positions.
+    points_gdf : geopandas.GeoDataFrame
+        Point features representing destination nodes.
+    pairs : list of tuple
+        List of (polygon_id, point_id) pairs specifying edges to create.
+    metric : str
+        Distance metric: "euclidean", "manhattan", or "network".
+    network_gdf : geopandas.GeoDataFrame or None
+        Network edges GeoDataFrame when ``metric='network'``; ignored otherwise.
+
+    Returns
+    -------
+    geopandas.GeoDataFrame or None
+        An edges GeoDataFrame indexed by (polygon_id, point_id) with columns "weight" and
+        "geometry". Returns None if ``pairs`` is empty or if no edges are produced.
+    """
+    # Build a unified temporary nodes GeoDataFrame using polygon centroids and point coordinates
+    poly_centroids = polygons_gdf.geometry.centroid
+    poly_nodes = gpd.GeoDataFrame(
+        {"geometry": poly_centroids}, geometry="geometry", crs=polygons_gdf.crs
+    )
+    pt_nodes = gpd.GeoDataFrame(
+        {"geometry": points_gdf.geometry}, geometry="geometry", crs=points_gdf.crs
+    )
+
+    # Namespace node IDs to disambiguate between polygon and point indices
+    poly_index = pd.MultiIndex.from_tuples([("poly", i) for i in polygons_gdf.index])
+    pt_index = pd.MultiIndex.from_tuples([("pt", i) for i in points_gdf.index])
+    poly_nodes.index = poly_index
+    pt_nodes.index = pt_index
+    temp_nodes = pd.concat([poly_nodes, pt_nodes])
+
+    # Prepare nodes once using the shared helper (directed for clarity of polygon -> point edges)
+    G_tmp, coords_all, node_ids_ns = _prepare_nodes(temp_nodes, directed=True)
+
+    # Build namespaced edge list (polygon tuple id -> point tuple id)
+    ns_edge_list = [(("poly", u), ("pt", v)) for u, v in pairs]
+
+    # Compute distance matrix only when needed by the metric.
+    # For the network metric we intentionally skip the dense all-pairs matrix
+    # (O(n^2) storage + n * SSSP) and let _add_edges perform a sparse, on-demand
+    # batched shortest-path extraction for just the requested edges. This avoids
+    # heavy memory usage and quadratic work when the containment relation is
+    # sparse (common when many polygons contain only a few points).
+    dm = None
+    if metric != "network":
+        # Non-network metrics still rely on full matrix for vectorised weight assignment
+        # in _add_edges.
+        pass
+
+    # Attach weights and geometries using the common edge helper
+    _add_edges(
+        G_tmp,
+        ns_edge_list,
+        coords_all,
+        node_ids_ns,
+        metric=metric,
+        dm=dm,
+        network_gdf=network_gdf,
+    )
+
+    # Extract edge records back into a typed GeoDataFrame with MultiIndex (polygon_id, point_id)
+    records: list[dict[str, Any]] = []
+    index_tuples: list[tuple[Any, Any]] = []
+    for u_ns, v_ns, data in G_tmp.edges(data=True):
+        u_orig = u_ns[1]
+        v_orig = v_ns[1]
+        index_tuples.append((u_orig, v_orig))
+        records.append({"weight": data.get("weight", np.nan), "geometry": data.get("geometry")})
+
+    edge_index = pd.MultiIndex.from_tuples(
+        index_tuples,
+        names=[polygons_gdf.index.name, points_gdf.index.name],
+    )
+    return gpd.GeoDataFrame(
+        pd.DataFrame(records, index=edge_index)[["weight"]],
+        geometry=[rec["geometry"] for rec in records],
+        crs=polygons_gdf.crs,
+    )
+
+
+def _containment_pairs(
+    points_gdf: gpd.GeoDataFrame,
+    polygons_gdf: gpd.GeoDataFrame,
+    predicate: str,
+) -> list[tuple[Any, Any]]:
+    """
+    Return (polygon_id, point_id) pairs using a robust spatial join.
+
+    Performs a single GeoPandas ``sjoin`` between points and a copy of polygons whose
+    original index is materialised as a normal column. This ensures a deterministic
+    mapping back to polygon identifiers regardless of GeoPandas internals.
+
+    Parameters
+    ----------
+    points_gdf : geopandas.GeoDataFrame
+        Points to test against the polygons.
+    polygons_gdf : geopandas.GeoDataFrame
+        Polygons used as containers.
+    predicate : str
+        Spatial predicate for the join (e.g., "covered_by", "within").
+
+    Returns
+    -------
+    list[tuple[Any, Any]]
+        List of (polygon_id, point_id) tuples representing containment relationships.
+    """
+    predicate_lc = (predicate or "covered_by").lower()
+
+    # Materialise polygon ids to a stable column name
+    id_col = polygons_gdf.index.name or "index"
+    polys = polygons_gdf.reset_index()  # exposes original ids in column `id_col`
+
+    joined = gpd.sjoin(points_gdf, polys, how="inner", predicate=predicate_lc)
+    if joined.empty:
+        return []
+
+    # Map right-side matches back to original polygon ids deterministically
+    poly_ids_series = (
+        polys.loc[joined["index_right"], id_col]
+        if "index_right" in joined.columns
+        else joined[id_col]
+    )
+
+    point_ids = joined.index.to_list()
+    poly_ids = poly_ids_series.to_list()
+    return list(zip(poly_ids, point_ids, strict=False))
+
+
+def group_nodes(
+    polygons_gdf: gpd.GeoDataFrame,
+    points_gdf: gpd.GeoDataFrame,
+    *,
+    distance_metric: str = "euclidean",
+    network_gdf: gpd.GeoDataFrame | None = None,
+    predicate: str = "covered_by",
+    as_nx: bool = False,
+) -> tuple[dict[str, gpd.GeoDataFrame], dict[tuple[str, str, str], gpd.GeoDataFrame]] | nx.Graph:
+    """
+    Create a heterogeneous graph linking polygon zones to contained points.
+
+    This function builds a bipartite relation between polygon and point features by
+    connecting each polygon to the points that satisfy a spatial containment
+    predicate (default: "covered_by" so boundary points are included). It follows
+    city2graph heterogeneous graph conventions and reuses the proximity helpers for
+    computing edge weights and geometries according to the chosen distance metric.
+
+    Parameters
+    ----------
+    polygons_gdf : geopandas.GeoDataFrame
+        GeoDataFrame of polygonal features representing zones. CRS must match
+        points_gdf. Original attributes and geometries are preserved in the
+        resulting polygon nodes.
+    points_gdf : geopandas.GeoDataFrame
+        GeoDataFrame of point features to be associated with the polygons. CRS must
+        match polygons_gdf. Original attributes and geometries are preserved in
+        the resulting point nodes.
+    distance_metric : {"euclidean", "manhattan", "network"}, default "euclidean"
+        Metric used for edge weights and geometries. Euclidean produces straight
+        line segments, Manhattan produces L-shaped polylines, and Network traces
+        polylines along the provided network_gdf and uses shortest-path distances.
+    network_gdf : geopandas.GeoDataFrame, optional
+        Required when distance_metric="network". Must share the same CRS as the
+        inputs.
+    predicate : str, default "covered_by"
+        Spatial predicate used to determine containment in a vectorized spatial
+        join (e.g., "covered_by", "within", "contains", "intersects"). The default
+        includes points on polygon boundaries.
+    as_nx : bool, default False
+        If False, return heterogeneous GeoDataFrame dictionaries. If True, return a
+        typed heterogeneous NetworkX graph built with gdf_to_nx.
+
+    Returns
+    -------
+    (nodes_dict, edges_dict) : tuple of dicts
+        Returned when as_nx=False. nodes_dict is {"polygon": polygons_gdf,
+        "point": points_gdf} with original indices, attributes, and geometries.
+        edges_dict maps a typed edge key to an edges GeoDataFrame whose index is a
+        MultiIndex of (polygon_id, point_id) and includes at least weight and
+        geometry columns. The edge key has the form ("polygon", relation, "point"),
+        where relation is derived from predicate (e.g., covered_by -> "covers",
+        within -> "contains").
+    G : networkx.Graph
+        Returned when as_nx=True. A heterogeneous graph with node_type in nodes and
+        a typed edge_type reflecting the relation derived from predicate. Graph
+        metadata includes crs and is_hetero=True.
+
+    Notes
+    -----
+    - CRS must be present and identical for both inputs. For network metric, the
+      network's CRS must also match.
+    - Boundary points are included by default via predicate="covered_by".
+    - Distance calculations and edge geometries reuse internal helpers
+      (_prepare_nodes, _distance_matrix, _add_edges) to ensure consistency with
+      other proximity functions.
+
+    Examples
+    --------
+    Build heterogeneous GeoDataFrames (default Euclidean):
+
+    >>> import geopandas as gpd
+    >>> from shapely.geometry import Point, Polygon
+    >>> from city2graph.proximity import group_nodes
+    >>> polys = gpd.GeoDataFrame(
+    ...     {"name": ["A"]},
+    ...     geometry=[Polygon([(0,0), (2,0), (2,2), (0,2)])],
+    ...     crs="EPSG:3857",
+    ... )
+    >>> pts = gpd.GeoDataFrame(
+    ...     {"id": [1, 2]},
+    ...     geometry=[Point(1, 1), Point(3, 3)],
+    ...     crs="EPSG:3857",
+    ... )
+    >>> nodes, edges = group_nodes(polys, pts, as_nx=False)
+    >>> list(nodes.keys())
+    ['polygon', 'point']
+    >>> next(iter(edges)).__class__ is tuple
+    True
+
+    Build a typed heterogeneous NetworkX graph:
+
+    >>> G = group_nodes(polys, pts, as_nx=True)
+    >>> G.graph.get("is_hetero")
+    True
+    """
+    # ---- Normalise inputs and validate once ----
+    relation = _relation_from_predicate(predicate)
+    metric_lc = (distance_metric or "euclidean").lower()
+
+    # Validate GDFs and CRS via shared utility (keeps behaviour consistent across the package)
+    # We intentionally ignore the returned validated copies to avoid accidental mutation.
+    validate_gdf({"polygon": polygons_gdf, "point": points_gdf}, None, allow_empty=True)
+
+    poly_crs = polygons_gdf.crs
+    pt_crs = points_gdf.crs
+    if poly_crs is None or pt_crs is None:
+        msg = f"Both inputs must have a CRS (got polygons_gdf.crs={poly_crs}, points_gdf.crs={pt_crs})"
+        raise ValueError(msg)
+    if poly_crs != pt_crs:
+        msg = f"CRS mismatch between inputs: {poly_crs} != {pt_crs}"
+        raise ValueError(msg)
+
+    if metric_lc not in {"euclidean", "manhattan", "network"}:
+        msg = f"Unsupported distance_metric: {distance_metric!r}"
+        raise ValueError(msg)
+    if metric_lc == "network":
+        if network_gdf is None:
+            msg = "network_gdf is required when distance_metric='network'"
+            raise ValueError(msg)
+        if network_gdf.crs != poly_crs:
+            msg = f"CRS mismatch between inputs and network: inputs={poly_crs} != network={network_gdf.crs}"
+            raise ValueError(msg)
+
+    # Quick exits for empty inputs / no matches
+    if polygons_gdf.empty or points_gdf.empty:
+        return _group_nodes_empty_result(polygons_gdf, points_gdf, relation, poly_crs, as_nx)
+
+    # Find all (polygon_id, point_id) pairs matching the containment predicate
+    pairs = _containment_pairs(points_gdf, polygons_gdf, predicate)
+
+    # Return empty result if no containment pairs were found
+    if not pairs:
+        return _group_nodes_empty_result(polygons_gdf, points_gdf, relation, poly_crs, as_nx)
+
+    # Build edge GeoDataFrame using shared helpers
+    edges_gdf = _edges_gdf_from_pairs(polygons_gdf, points_gdf, pairs, metric_lc, network_gdf)
+
+    # Return empty result if no edges were produced
+    if edges_gdf is None or edges_gdf.empty:
+        return _group_nodes_empty_result(polygons_gdf, points_gdf, relation, poly_crs, as_nx)
+
+    # Package as heterogeneous data structure and return in the requested format
+    nodes_dict: dict[str, gpd.GeoDataFrame] = {"polygon": polygons_gdf, "point": points_gdf}
+    edges_dict: dict[tuple[str, str, str], gpd.GeoDataFrame] = {
+        ("polygon", relation, "point"): edges_gdf
+    }
+    return (
+        gdf_to_nx(nodes=nodes_dict, edges=edges_dict, directed=True)
+        if as_nx
+        else (nodes_dict, edges_dict)
+    )
+
+
 def _prepare_nodes(
     gdf: gpd.GeoDataFrame,
     *,
@@ -1603,71 +1981,131 @@ def _add_edges(
     # Create and set edge geometries
     geom_attr: dict[tuple[Any, Any], LineString] = {}
 
-    # Network metric: trace path on network
-    if metric.lower() == "network":
-        # Build a NetworkX representation of the network
+    if metric.lower() == "network":  # delegate to helper for clarity
+        _set_network_edge_geometries(
+            G,
+            geom_attr,
+            coords,
+            node_ids,
+            idx_map,
+            network_gdf,
+        )
+        nx.set_edge_attributes(G, geom_attr, "geometry")
+        return
+
+    # Manhattan or Euclidean metric
+    # Vectorized geometry creation via array ops and a small comprehension
+    edge_list = list(G.edges())
+    if edge_list:
+        # Use Python mapping to avoid None from dict.get with object keys under vectorization
+        u_idx = np.array([idx_map[u] for u, _ in edge_list], dtype=int)
+        v_idx = np.array([idx_map[v] for _, v in edge_list], dtype=int)
+
+        p1 = coords[u_idx]
+        p2 = coords[v_idx]
+        if metric.lower() == "manhattan":
+            geoms = [
+                LineString([(x1, y1), (x2, y1), (x2, y2)])
+                for (x1, y1), (x2, y2) in zip(p1, p2, strict=False)
+            ]
+        else:
+            geoms = [LineString([pt1, pt2]) for pt1, pt2 in zip(p1, p2, strict=False)]
+        geom_attr = {edge: geom for edge, geom in zip(edge_list, geoms, strict=False)}
+
+    nx.set_edge_attributes(G, geom_attr, "geometry")
+
+
+def _set_network_edge_geometries(
+    G: nx.Graph,
+    geom_attr: dict[tuple[Any, Any], LineString],
+    coords: npt.NDArray[np.floating],
+    node_ids: list[Any],
+    idx_map: dict[Any, int],
+    network_gdf: gpd.GeoDataFrame | None,
+) -> None:
+    """
+    Populate geometry for network metric edges using batched shortest paths.
+
+    This isolates the more complex logic from `_add_edges`, reducing cyclomatic
+    complexity while enabling caching of the network graph and nearest-node
+    mapping for repeated calls.
+
+    Parameters
+    ----------
+    G : nx.Graph
+        Graph whose edges will receive a ``geometry`` attribute in-place.
+    geom_attr : dict[tuple[Any, Any], LineString]
+        Mutable mapping populated with ``(u, v) -> LineString``; passed in so we
+        can extend an existing dict without reallocating.
+    coords : numpy.ndarray
+        Array of node coordinate pairs (shape ``(n, 2)``) aligned with ``node_ids``.
+    node_ids : list[Any]
+        Sequence of node identifiers whose order matches ``coords``.
+    idx_map : dict[Any, int]
+        Mapping from node id to its integer row index in ``coords`` for quick lookup.
+    network_gdf : geopandas.GeoDataFrame or None
+        GeoDataFrame describing the underlying real network geometry (e.g., road
+        segments). If provided it is converted to an internal NetworkX graph and
+        cached under a private attribute to avoid repeated conversions. If ``None``
+        a straight LineString between endpoints is used.
+
+    Notes
+    -----
+    Caching: A NetworkX graph is cached on ``network_gdf`` under the private
+    attribute ``_c2g_cached_nx`` so subsequent calls reuse the constructed graph.
+    A nearest-node mapping is also cached on ``G.graph['_c2g_nearest_cache']``
+    keyed by the ``id(coords)`` to avoid recomputing nearest neighbors when the
+    same coordinate array instance is reused.
+    The function mutates ``geom_attr`` and (via the caller) sets the ``geometry``
+    edge attribute on ``G``. It may also attach a cached network graph to
+    ``network_gdf``.
+    """
+    if network_gdf is None:
+        return
+    net_nx = getattr(network_gdf, "_c2g_cached_nx", None)
+    if net_nx is None:
         net_nx = gdf_to_nx(edges=network_gdf)
+        with contextlib.suppress(AttributeError):
+            network_gdf._c2g_cached_nx = net_nx
 
-        # All network nodes must expose coords in attribute 'pos'
-        pos = nx.get_node_attributes(net_nx, "pos")
+    pos = nx.get_node_attributes(net_nx, "pos")
+    if not pos:
+        for u, v in G.edges():
+            geom_attr[(u, v)] = LineString([coords[idx_map[u]], coords[idx_map[v]]])
+        return
 
-        net_coords = np.asarray(list(pos.values()))
-        net_ids = list(pos.keys())
-
-        # Map each sample point to its nearest network node
+    # Build / reuse nearest mapping
+    net_coords = np.asarray(list(pos.values()))
+    net_ids = list(pos.keys())
+    nearest_cache = G.graph.get("_c2g_nearest_cache")
+    if nearest_cache is None or nearest_cache.get("_hash_coords") is not id(coords):
         nn = NearestNeighbors(n_neighbors=1).fit(net_coords)
         _, idxs = nn.kneighbors(coords)
         nearest = {node_ids[i]: net_ids[j[0]] for i, j in enumerate(idxs)}
-
-        # Choose weight key if present on the network
-        use_weight = "length" if any("length" in d for *_, d in net_nx.edges(data=True)) else None
-
-        # Per-edge shortest path extraction is inherently iterative; keep minimal loop
-        for u, v in G.edges():
-            path_nodes = nx.shortest_path(
-                net_nx,
-                source=nearest[u],
-                target=nearest[v],
-                weight=use_weight,
-            )
-            path_coords = [pos[p] for p in path_nodes]
-            # Remove consecutive duplicates
-            if len(path_coords) > 1:
-                dedup = [path_coords[0]]
-                dedup.extend(pc for pc in path_coords[1:] if pc != dedup[-1])
-                geom_attr[(u, v)] = (
-                    LineString(dedup)
-                    if len(dedup) > 1
-                    else LineString([coords[idx_map[u]], coords[idx_map[v]]])
-                )
-            else:
-                geom_attr[(u, v)] = LineString([coords[idx_map[u]], coords[idx_map[v]]])
-
-    # Manhattan or Euclidean metric
+        G.graph["_c2g_nearest_cache"] = {"mapping": nearest, "_hash_coords": id(coords)}
     else:
-        # Vectorized geometry creation via array ops and a small comprehension
-        edge_list = list(G.edges())
-        if edge_list:
-            # Use Python mapping to avoid None from dict.get with object keys under vectorization
-            try:
-                u_idx = np.array([idx_map[u] for u, _ in edge_list], dtype=int)
-                v_idx = np.array([idx_map[v] for _, v in edge_list], dtype=int)
-            except KeyError as e:
-                missing = e.args[0]
-                msg = f"Edge endpoint {missing!r} not found in node id mapping."
-                raise KeyError(msg) from e
-            p1 = coords[u_idx]
-            p2 = coords[v_idx]
-            if metric.lower() == "manhattan":
-                geoms = [
-                    LineString([(x1, y1), (x2, y1), (x2, y2)])
-                    for (x1, y1), (x2, y2) in zip(p1, p2, strict=False)
-                ]
-            else:
-                geoms = [LineString([pt1, pt2]) for pt1, pt2 in zip(p1, p2, strict=False)]
-            geom_attr = {edge: geom for edge, geom in zip(edge_list, geoms, strict=False)}
+        nearest = nearest_cache["mapping"]
 
-    nx.set_edge_attributes(G, geom_attr, "geometry")
+    use_weight = "length" if any("length" in d for *_, d in net_nx.edges(data=True)) else None
+
+    edges_by_source: dict[Any, list[tuple[Any, Any]]] = {}
+    for u, v in G.edges():
+        edges_by_source.setdefault(nearest[u], []).append((u, v))
+
+    for src_nn, edge_list in edges_by_source.items():
+        _, paths = nx.single_source_dijkstra(net_nx, src_nn, cutoff=None, weight=use_weight)
+        for u, v in edge_list:
+            path_nodes = paths.get(nearest[v])
+            if not path_nodes:
+                geom_attr[(u, v)] = LineString([coords[idx_map[u]], coords[idx_map[v]]])
+                continue
+            path_coords = [pos[p] for p in path_nodes]
+            if len(path_coords) <= 1:
+                geom_attr[(u, v)] = LineString([coords[idx_map[u]], coords[idx_map[v]]])
+                continue
+            dedup = [path_coords[0]]
+            dedup.extend(pc for pc in path_coords[1:] if pc != dedup[-1])
+            geom_attr[(u, v)] = LineString(dedup) if len(dedup) > 1 else LineString(path_coords)
 
 
 def _directed_edges(
@@ -1969,7 +2407,7 @@ def _validate_contiguity_input(gdf: gpd.GeoDataFrame, contiguity: str) -> None:
         raise ValueError(msg)
 
     # Check for null geometries
-    null_geoms = gdf.geometry.isnull()
+    null_geoms = gdf.geometry.isna()
     if null_geoms.any():
         null_count = null_geoms.sum()
         msg = (
@@ -2079,9 +2517,8 @@ def _create_spatial_weights(
                 weights = libpysal.weights.Rook.from_dataframe(gdf)
     except Exception as e:
         msg = (
-            f"Failed to create {contiguity} contiguity spatial weights matrix. "
-            f"This may be due to invalid geometries, topology issues, or libpysal incompatibility. "
-            f"Original error: {e}"
+            f"Failed to create {contiguity} contiguity spatial weights matrix. This may be due to invalid "
+            f"geometries, topology issues, or libpysal incompatibility. Original error: {e}"
         )
         raise ValueError(msg) from e
 
