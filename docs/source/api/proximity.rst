@@ -22,4 +22,6 @@ Proximity
 
 .. autofunction:: bridge_nodes
 
+.. autofunction:: group_nodes
+
 .. autofunction:: contiguity_graph

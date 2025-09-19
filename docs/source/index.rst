@@ -240,6 +240,45 @@ Examples
    :alt: Bridge nodes connecting different layers of POIs
    :align: center
 
+.. code-block:: python
+
+   # Build a contiguity graph (Queen or Rook) from polygonal zones
+   wn_q_nodes, wn_q_edges = city2graph.contiguity_graph(
+       wards_gdf,
+       contiguity="queen",        # or "rook"
+       distance_metric="euclidean" # or "manhattan", "network"
+   )
+
+.. code-block:: python
+
+   # Link point features (e.g., POIs, stops) to containing polygons (e.g., wards)
+   nodes_dict, edges_dict = city2graph.group_nodes(
+       polygons_gdf=wards_gdf,
+       points_gdf=poi_gdf,
+       predicate="covered_by"      # include boundary points; alternatives: "within", "contains"
+   )
+
+.. code-block:: python
+
+   # Combine contiguity edges and grouped edges into a single heterogeneous graph
+   combined_nodes = {
+       "wards": wn_q_nodes,
+       "poi": nodes_dict["poi"]
+   }
+
+   combined_edges = {
+       ("wards", "is_contiguous_with", "wards"): wn_q_edges[("wards", "is_contiguous_with", "wards")],
+       ("wards", "covers", "poi"): edges_dict[("wards", "covers", "poi")]
+   }
+
+   # Convert to PyG HeteroData
+   hetero_graph = city2graph.gdf_to_pyg(combined_nodes, combined_edges)
+
+.. figure:: _static/contiguity_graph.png
+   :width: 1000px
+   :alt: Contiguity graph of wards (MSOA) with grouped connections of bus stations in London
+   :align: center
+
 >> For details, see :doc:`examples/generating_graphs_by_proximity`
 
 Citation
