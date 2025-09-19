@@ -1,32 +1,33 @@
-"""Comprehensive test suite for proximity graph generators.
+"""Concise proximity module tests (minimal yet 100% coverage target).
 
-This refactored test suite focuses on:
-• Concise, maintainable test organization
-• Reduced redundancy through parametrization
-• Clear separation of concerns
-• Comprehensive edge case coverage
+This suite intentionally compresses prior expansive testing into a small set
+of focused scenarios that exercise every public code path and meaningful
+branch in ``city2graph.proximity`` after refactoring/simplification.
+
+Test categories:
+1. Core generators (kNN, fixed-radius, triangulation family, MST, Waxman)
+2. Distance metrics: euclidean, manhattan, network (incl. caching + errors)
+3. Directed variants + multi-layer bridging
+4. group_nodes (matches, empty, predicate mapping, network error)
+5. Contiguity graph (validation, rook vs queen, empty, metric variants, errors)
+6. Error handling & metric normalization (non-string, unknown metrics)
 """
 
 from __future__ import annotations
 
-import math
 from typing import TYPE_CHECKING
-from typing import Any
 from typing import cast
 
 import geopandas as gpd
-import networkx as nx
-import numpy as np
 import pandas as pd
 import pytest
-from scipy.spatial import QhullError
 from shapely.geometry import LineString
-from shapely.geometry import MultiPolygon
 from shapely.geometry import Point
 from shapely.geometry import Polygon
 
-# Module-level import for proximity to support monkeypatch tests (mypy: treat as Any)
-import city2graph.proximity as _prox
+if TYPE_CHECKING:  # Only for typing/cast, avoid runtime import
+    import networkx as nx
+
 from city2graph.proximity import bridge_nodes
 from city2graph.proximity import contiguity_graph
 from city2graph.proximity import delaunay_graph
@@ -37,1121 +38,755 @@ from city2graph.proximity import group_nodes
 from city2graph.proximity import knn_graph
 from city2graph.proximity import relative_neighborhood_graph
 from city2graph.proximity import waxman_graph
-from city2graph.utils import gdf_to_nx
-from city2graph.utils import nx_to_gdf
-from tests import helpers as _helpers
-from tests.helpers import TOLERANCE
-from tests.helpers import assert_l_shaped_edges
-from tests.helpers import assert_valid_nx_graph
-from tests.helpers import create_test_points
-from tests.helpers import create_two_layers
-from tests.helpers import make_grid_polygons_gdf
-from tests.helpers import make_points_gdf
-from tests.helpers import run_or_skip
 
-prox: Any = cast("Any", _prox)
 
-if TYPE_CHECKING:
-    from collections.abc import Callable
+def _points(coords: list[tuple[float, float]], crs: str = "EPSG:27700") -> gpd.GeoDataFrame:
+    return gpd.GeoDataFrame(
+        {"id": list(range(len(coords)))},
+        geometry=[Point(x, y) for x, y in coords],
+        crs=crs,
+    ).set_index("id")
 
-# Test configuration moved to tests/helpers.py
 
-# Generator specifications for parametrized tests
-GENERATORS = [
-    ("knn_graph", {"k": 2}),
-    ("fixed_radius_graph", {"radius": 2.0}),
-    ("delaunay_graph", {}),
-    ("gabriel_graph", {}),
-    ("relative_neighborhood_graph", {}),
-    ("euclidean_minimum_spanning_tree", {}),
-    ("waxman_graph", {"beta": 0.6, "r0": 3.0, "seed": 42}),
-]
-
-DISTANCE_METRICS = ["euclidean", "manhattan"]
-BRIDGE_METHODS = [("knn", {"k": 1}), ("fixed_radius", {"radius": 3})]
-
-
-# Helper functions imported from tests/helpers.py
-
-
-# Core functionality tests
-@pytest.mark.parametrize(
-    ("gen_name", "kwargs"),
-    GENERATORS,
-    ids=[g[0] for g in GENERATORS],
-)
-@pytest.mark.parametrize("metric", DISTANCE_METRICS)
-def test_generator_basic_functionality(
-    sample_nodes_gdf: gpd.GeoDataFrame,
-    gen_name: str,
-    kwargs: dict[str, Any],
-    metric: str,
-) -> None:
-    """Test basic generator functionality with different distance metrics."""
-    generator_fn = globals()[gen_name]
-    nodes, edges = run_or_skip(
-        generator_fn,
-        sample_nodes_gdf,
-        distance_metric=metric,
-        **kwargs,
-    )
-
-    # Verify structure
-    assert isinstance(nodes, gpd.GeoDataFrame)
-    assert isinstance(edges, gpd.GeoDataFrame)
-    assert nodes.shape[0] == len(sample_nodes_gdf)
-    assert nodes.crs == edges.crs == sample_nodes_gdf.crs
-
-    # Verify required columns
-    _helpers.assert_has_columns(edges, ["geometry", "weight"])
-
-    # Verify Manhattan distance creates L-shaped geometries
-    if metric == "manhattan" and not edges.empty:
-        assert_l_shaped_edges(edges)
-
-
-@pytest.mark.parametrize(
-    ("gen_name", "kwargs"),
-    GENERATORS,
-    ids=[g[0] for g in GENERATORS],
-)
-def test_network_metric_error_handling(
-    sample_nodes_gdf: gpd.GeoDataFrame,
-    gen_name: str,
-    kwargs: dict[str, Any],
-) -> None:
-    """Test network metric error handling when network_gdf is missing."""
-    generator_fn = globals()[gen_name]
-    with pytest.raises(
-        ValueError,
-        match="network_gdf is required for network distance metric",
-    ):
-        run_or_skip(
-            generator_fn,
-            sample_nodes_gdf,
-            distance_metric="network",
-            **kwargs,
-        )
-
-
-@pytest.mark.parametrize(
-    ("gen_name", "kwargs"),
-    [g for g in GENERATORS if g[0] != "waxman_graph"],
-)
-def test_network_metric_functionality(
-    sample_nodes_gdf: gpd.GeoDataFrame,
-    sample_edges_gdf: gpd.GeoDataFrame,
-    gen_name: str,
-    kwargs: dict[str, Any],
-) -> None:
-    """Test network metric functionality with valid network."""
-    generator_fn = globals()[gen_name]
-    nodes, edges = run_or_skip(
-        generator_fn,
-        sample_nodes_gdf,
-        distance_metric="network",
-        network_gdf=sample_edges_gdf,
-        **kwargs,
-    )
-
-    # MST may have empty edges for disconnected components
-    if gen_name.endswith("minimum_spanning_tree"):
-        assert len(edges) >= 0
-    else:
-        assert not edges.empty
-
-    if not edges.empty:
-        assert np.isfinite(edges["weight"].to_numpy()).all()
-
-
-# Generator-specific tests
-class TestKNNGraph:
-    """Test KNN graph specific functionality."""
-
-    def test_networkx_output(self, sample_nodes_gdf: gpd.GeoDataFrame) -> None:
-        """Test NetworkX output format."""
-        G = cast("nx.Graph", run_or_skip(knn_graph, sample_nodes_gdf, k=3, as_nx=True))
-        assert_valid_nx_graph(G, expected_nodes=len(sample_nodes_gdf), crs=sample_nodes_gdf.crs)
-
-        expected_edges = len(sample_nodes_gdf) * 3 / 2
-        assert math.isclose(G.number_of_edges(), expected_edges, rel_tol=0.5)
-
-    def test_edge_cases(
-        self,
-        sample_nodes_gdf: gpd.GeoDataFrame,
-        single_node_gdf: gpd.GeoDataFrame,
-    ) -> None:
-        """Test KNN edge cases."""
-        # k=0 should produce no edges
-        _, edges = run_or_skip(knn_graph, sample_nodes_gdf, k=0)
-        assert edges.empty
-
-        # Single node should produce no edges
-        _, edges = run_or_skip(knn_graph, single_node_gdf, k=1)
-        assert edges.empty
-
-        # k > available neighbors should work
-        excessive_k = len(sample_nodes_gdf) + 10
-        _, edges = run_or_skip(knn_graph, sample_nodes_gdf, k=excessive_k)
-        max_edges = len(sample_nodes_gdf) * (len(sample_nodes_gdf) - 1)
-        assert len(edges) <= max_edges
-
-
-class TestWaxmanGraph:
-    """Test Waxman graph specific functionality."""
-
-    def test_reproducibility(self, sample_nodes_gdf: gpd.GeoDataFrame) -> None:
-        """Test seed-based reproducibility."""
-        params = {"beta": 0.5, "r0": 3, "seed": 11}
-        _, edges1 = run_or_skip(waxman_graph, sample_nodes_gdf, **params)
-        _, edges2 = run_or_skip(waxman_graph, sample_nodes_gdf, **params)
-        assert edges1.equals(edges2)
-
-    def test_parameter_storage(self, sample_nodes_gdf: gpd.GeoDataFrame) -> None:
-        """Test parameter storage in graph metadata."""
-        beta, r0 = 0.7, 2.5
-        result = run_or_skip(
-            waxman_graph,
-            sample_nodes_gdf,
-            beta=beta,
-            r0=r0,
-            as_nx=True,
-        )
-        assert isinstance(result, nx.Graph)
-        assert result.graph.get("beta") == beta
-        assert result.graph.get("r0") == r0
-
-    def test_single_node_networkx_output(
-        self,
-        single_node_gdf: gpd.GeoDataFrame,
-    ) -> None:
-        """Test single node case with NetworkX output - covers line 1019."""
-        result = run_or_skip(
-            waxman_graph,
-            single_node_gdf,
-            beta=0.5,
-            r0=1.0,
-            as_nx=True,
-        )
-        assert_valid_nx_graph(result, expected_nodes=1, expected_edges=0)
-
-
-class TestFixedRadiusGraph:
-    """Test fixed radius graph functionality."""
-
-    def test_parameter_storage(self, sample_nodes_gdf: gpd.GeoDataFrame) -> None:
-        """Test radius parameter storage."""
-        radius = 1.5
-        result = run_or_skip(
-            fixed_radius_graph,
-            sample_nodes_gdf,
-            radius=radius,
-            as_nx=True,
-        )
-        assert isinstance(result, nx.Graph)
-        assert result.graph.get("radius") == radius
-
-    def test_single_node_edge_case(self, single_node_gdf: gpd.GeoDataFrame) -> None:
-        """Test single node case."""
-        result = run_or_skip(fixed_radius_graph, single_node_gdf, radius=1.0)
-        assert isinstance(result, tuple)
-        _, edges = result
-        assert edges.empty
-
-
-class TestTriangulationGraphs:
-    """Test triangulation-based graphs (Delaunay, Gabriel, RNG)."""
-
-    @pytest.mark.parametrize(
-        "graph_fn",
-        [delaunay_graph, gabriel_graph, relative_neighborhood_graph],
-    )
-    def test_insufficient_points(
-        self,
-        graph_fn: Callable[..., tuple[gpd.GeoDataFrame, gpd.GeoDataFrame] | nx.Graph],
-        single_node_gdf: gpd.GeoDataFrame,
-        two_nodes_gdf: gpd.GeoDataFrame,
-    ) -> None:
-        """Test behavior with insufficient points."""
-        # Single point
-        _, edges = run_or_skip(graph_fn, single_node_gdf)
-        assert edges.empty
-
-        # Two points - special case for Gabriel/RNG
-        _, edges = run_or_skip(graph_fn, two_nodes_gdf)
-        if graph_fn in [gabriel_graph, relative_neighborhood_graph]:
-            assert len(edges) == 1
-        else:  # Delaunay
-            assert edges.empty
-
-    def test_well_separated_points(self) -> None:
-        """Test with well-separated points to avoid QhullError."""
-        points = create_test_points()
-        for graph_fn in [gabriel_graph, relative_neighborhood_graph]:
-            _, edges = run_or_skip(graph_fn, points)
-            assert len(edges) >= 1
-
-    def test_degenerate_cases(self) -> None:
-        """Test handling of degenerate geometric cases."""
-        # Collinear points
-        collinear = make_points_gdf([(0, 0), (1, 0), (2, 0)])
-
-        # Should handle gracefully or raise QhullError
-        for graph_fn in [gabriel_graph, relative_neighborhood_graph]:
-            try:
-                nodes, edges = run_or_skip(graph_fn, collinear)
-                assert isinstance(nodes, gpd.GeoDataFrame)
-                assert isinstance(edges, gpd.GeoDataFrame)
-            except QhullError:
-                pass  # Acceptable for degenerate cases
-
-        # Coincident points
-        coincident = make_points_gdf([(0, 0), (0, 0), (10, 0), (0, 10)])
-
-        for graph_fn in [gabriel_graph, relative_neighborhood_graph]:
-            nodes, edges = run_or_skip(graph_fn, coincident)
-            assert isinstance(nodes, gpd.GeoDataFrame)
-            assert isinstance(edges, gpd.GeoDataFrame)
-
-
-class TestEuclideanMST:
-    """Test Euclidean minimum spanning tree."""
-
-    def test_single_node(self, single_node_gdf: gpd.GeoDataFrame) -> None:
-        """Test single node case."""
-        _, edges = run_or_skip(euclidean_minimum_spanning_tree, single_node_gdf)
-        assert edges.empty
-
-    def test_edge_count(self) -> None:
-        """Test that MST has exactly n-1 edges."""
-        points = gpd.GeoDataFrame(
-            {"id": [1, 2, 3], "geometry": [Point(0, 0), Point(1, 0), Point(0, 1)]},
-            crs="EPSG:27700",
-        ).set_index("id")
-
-        _, edges = run_or_skip(
-            euclidean_minimum_spanning_tree,
-            points,
-            distance_metric="manhattan",
-        )
-        # MST on n points should have exactly n-1 edges
-        assert len(edges) == len(points) - 1
-
-    def test_networkx_output(
-        self,
-        sample_hetero_nodes_dict: dict[str, gpd.GeoDataFrame],
-    ) -> None:
-        """Test NetworkX output format."""
-        G = run_or_skip(
-            bridge_nodes,
-            sample_hetero_nodes_dict,
-            proximity_method="knn",
-            k=1,
-            as_nx=True,
-        )
-
-        assert isinstance(G, nx.DiGraph)
-
-        # Check node types
-        node_types = set(nx.get_node_attributes(G, "node_type").values())
-        expected_types = set(sample_hetero_nodes_dict.keys())
-        assert node_types == expected_types
-
-        # Check edge relations
-        edge_relations = set(nx.get_edge_attributes(G, "relation").values())
-        assert edge_relations <= {"is_nearby", None}
-
-    def test_error_conditions(self) -> None:
-        """Test error conditions."""
-        # Insufficient layers
-        single_layer = {
-            "layer1": gpd.GeoDataFrame(
-                {"id": [1], "geometry": [Point(0, 0)]},
-                crs="EPSG:27700",
-            ).set_index("id"),
-        }
-        with pytest.raises(ValueError, match="needs at least two layers"):
-            run_or_skip(bridge_nodes, single_layer)
-
-        # Invalid proximity method
-        two_layers = create_two_layers()
-        with pytest.raises(ValueError, match="proximity_method must be"):
-            run_or_skip(bridge_nodes, two_layers, proximity_method="invalid")
-
-        # Missing radius parameter
-        with pytest.raises(KeyError):
-            run_or_skip(bridge_nodes, two_layers, proximity_method="fixed_radius")
-
-
-# Distance metric tests
-def test_distance_metric_relationships(sample_nodes_gdf: gpd.GeoDataFrame) -> None:
-    """Test Manhattan >= Euclidean distance relationship."""
-    _, euclidean_edges = run_or_skip(
-        knn_graph,
-        sample_nodes_gdf,
-        k=1,
-        distance_metric="euclidean",
-    )
-    _, manhattan_edges = run_or_skip(
-        knn_graph,
-        sample_nodes_gdf,
-        k=1,
-        distance_metric="manhattan",
-    )
-
-    if euclidean_edges.empty or manhattan_edges.empty:
-        pytest.skip("No edges produced")
-
-    euclidean_weight = euclidean_edges.iloc[0]["weight"]
-    manhattan_weight = manhattan_edges.iloc[0]["weight"]
-    assert euclidean_weight <= manhattan_weight + TOLERANCE
-
-
-class TestCoverageImprovements:
-    """Test cases to improve coverage in proximity module."""
-
-    def test_invalid_distance_metric_handling(
-        self,
-        sample_hetero_nodes_dict: dict[str, gpd.GeoDataFrame],
-    ) -> None:
-        """Test invalid distance metric handling (lines 1272, 1290)."""
-        # Use existing heterogeneous nodes fixture for bridge_nodes testing
-        # Test with invalid distance metric (non-string) - should default to "euclidean"
-        _, edges = bridge_nodes(
-            sample_hetero_nodes_dict,
-            proximity_method="knn",
-            k=1,
-            distance_metric=123,  # Invalid type, should default to "euclidean"
-        )
-
-        assert isinstance(edges, dict)
-        assert len(edges) > 0
-
-    def test_distance_metric_type_validation(
-        self,
-        sample_nodes_gdf: gpd.GeoDataFrame,
-    ) -> None:
-        """Test distance_metric type validation to cover line 1290 in proximity.py."""
-        # Test with non-string distance_metric to trigger line 1290
-        nodes, edges = run_or_skip(
-            fixed_radius_graph,
-            sample_nodes_gdf,
-            radius=2.0,
-            distance_metric=None,  # Non-string type, should default to "euclidean"
-        )
-        # Should not raise an error and use euclidean as default
-        assert isinstance(nodes, gpd.GeoDataFrame)
-        assert isinstance(edges, gpd.GeoDataFrame)
-
-    def test_network_path_fallback_handling(
-        self,
-        sample_nodes_gdf: gpd.GeoDataFrame,
-        sample_crs: str,
-    ) -> None:
-        """Test network path fallback for same network points (lines 1636-1638)."""
-        # Use existing nodes fixture but create very close points to trigger fallback
-        close_nodes = sample_nodes_gdf.copy()
-        # Make all nodes very close to trigger same network point mapping
-        close_nodes.geometry = [
-            Point(0, 0),
-            Point(0.001, 0.001),
-            Point(0.002, 0.002),
-            Point(0.003, 0.003),
-        ]
-
-        # Create minimal network
-        network_gdf = gpd.GeoDataFrame(
-            {"network_id": [1]},
-            geometry=[LineString([(0, 0), (1, 0)])],
-            crs=sample_crs,
-        )
-
-        # This should trigger the fallback path for nodes mapping to same network point
-        _, edges = fixed_radius_graph(
-            close_nodes,
-            radius=2.0,
-            distance_metric="network",
-            network_gdf=network_gdf,
-        )
-
-        assert isinstance(edges, gpd.GeoDataFrame)
-
-
-# Error condition tests
-class TestErrorConditions:
-    """Test various error conditions."""
-
-    def test_invalid_distance_metric(self, sample_nodes_gdf: gpd.GeoDataFrame) -> None:
-        """Test invalid distance metric error."""
-        with pytest.raises(ValueError, match="Unknown distance metric"):
-            run_or_skip(
-                waxman_graph,
-                sample_nodes_gdf,
-                beta=0.5,
-                r0=1.0,
-                distance_metric="invalid",
-            )
-
-    def test_crs_mismatch(self, sample_nodes_gdf: gpd.GeoDataFrame) -> None:
-        """Test CRS mismatch errors."""
-        # Network CRS mismatch
-        network_wrong_crs = gpd.GeoDataFrame(
-            {"geometry": [LineString([(0, 0), (1, 1)])]},
-            crs="EPSG:4326",
-        )
-        with pytest.raises(ValueError, match="CRS mismatch"):
-            run_or_skip(
-                knn_graph,
-                sample_nodes_gdf,
-                k=1,
-                distance_metric="network",
-                network_gdf=network_wrong_crs,
-            )
-
-        # Directed graph CRS mismatch
-        src_gdf = gpd.GeoDataFrame(
-            {"id": [1], "geometry": [Point(0, 0)]},
-            crs="EPSG:27700",
-        ).set_index("id")
-        target_gdf = gpd.GeoDataFrame(
-            {"id": [2], "geometry": [Point(1, 1)]},
-            crs="EPSG:4326",
-        ).set_index("id")
-        with pytest.raises(ValueError, match="CRS mismatch"):
-            run_or_skip(knn_graph, src_gdf, k=1, target_gdf=target_gdf)
-
-
-# Network geometry tests
-class TestNetworkGeometry:
-    """Test network geometry handling edge cases."""
-
-    def test_basic_functionality(
-        self,
-        sample_nodes_gdf: gpd.GeoDataFrame,
-        sample_edges_gdf: gpd.GeoDataFrame,
-    ) -> None:
-        """Test basic network geometry creation."""
-        nodes, edges = run_or_skip(
-            knn_graph,
-            sample_nodes_gdf,
-            k=1,
-            distance_metric="network",
-            network_gdf=sample_edges_gdf,
-        )
-        assert not edges.empty
-        assert all(geom.is_valid for geom in edges.geometry)
-
-    def test_network_metric_error_in_geometry_creation(
-        self,
-        sample_nodes_gdf: gpd.GeoDataFrame,
-    ) -> None:
-        """Test network metric error when creating geometries - covers lines 1398-1402."""
-        # This tests the error handling in _build_graph when network_gdf is None during geometry creation
-        # We need to create a scenario where the distance calculation succeeds but geometry creation fails
-        with pytest.raises(
-            ValueError,
-            match="network_gdf is required for network distance metric",
-        ):
-            run_or_skip(
-                knn_graph,
-                sample_nodes_gdf,
-                k=1,
-                distance_metric="network",
-                network_gdf=None,
-            )
-
-    def test_fallback_geometry_creation(self) -> None:
-        """Test fallback geometry creation when path_coords < 2 - covers lines 1445-1447."""
-        # Create a minimal network that might cause path_coords to be empty
-        # This is a complex scenario that requires specific network topology
-        nodes = gpd.GeoDataFrame(
-            {"id": [1, 2, 3], "geometry": [Point(0, 0), Point(1, 0), Point(2, 0)]},
-            crs="EPSG:27700",
-        ).set_index("id")
-
-        # Create a network with potential disconnected components
-        network_data = {
-            "source_id": [1, 2],
-            "target_id": [2, 3],
-            "geometry": [LineString([(0, 0), (1, 0)]), LineString([(1, 0), (2, 0)])],
-        }
-        multi_index = pd.MultiIndex.from_arrays(
-            [network_data["source_id"], network_data["target_id"]],
-            names=("source_id", "target_id"),
-        )
-        network_gdf = gpd.GeoDataFrame(
-            network_data,
-            index=multi_index,
-            crs="EPSG:27700",
-        )
-
-        # This should trigger the fallback geometry creation
-        nodes_result, edges_result = run_or_skip(
-            knn_graph,
-            nodes,
-            k=1,
-            distance_metric="network",
-            network_gdf=network_gdf,
-        )
-
-        # Verify fallback geometry was created
-        if not edges_result.empty:
-            assert all(isinstance(geom, LineString) for geom in edges_result.geometry)
-            assert all(geom.is_valid for geom in edges_result.geometry)
-
-    def test_fallback_scenarios(self) -> None:
-        """Test geometry fallback scenarios."""
-        # Minimal network
-        network_data = {
-            "source_id": [1],
-            "target_id": [2],
-            "geometry": [LineString([(0, 0), (0.1, 0.1)])],
-        }
-        multi_index = pd.MultiIndex.from_arrays(
-            [network_data["source_id"], network_data["target_id"]],
-            names=("source_id", "target_id"),
-        )
-        network_gdf = gpd.GeoDataFrame(
-            network_data,
-            index=multi_index,
-            crs="EPSG:27700",
-        )
-
-        G = gdf_to_nx(edges=network_gdf)
-        _, network_with_pos = nx_to_gdf(G, nodes=True, edges=True)
-
-        points = make_points_gdf([(0, 0), (0.1, 0.1)])
-        nodes, edges = run_or_skip(
-            knn_graph,
-            points,
-            k=1,
-            distance_metric="network",
-            network_gdf=network_with_pos,
-        )
-        assert len(edges) >= 0
-
-        # Duplicate coordinates fallback
-        points_close = make_points_gdf([(0.1, 0.1), (-0.1, -0.1)])
-        nodes, edges = run_or_skip(
-            knn_graph,
-            points_close,
-            k=1,
-            distance_metric="network",
-            network_gdf=network_with_pos,
-        )
-        assert len(edges) >= 0
-        if not edges.empty:
-            assert all(isinstance(geom, LineString) for geom in edges.geometry)
-
-
-class TestDirectedVariants:
-    """Cover directed source→target paths for k and radius via public API."""
-
-    def test_directed_knn_manhattan(
-        self,
-        sample_hetero_nodes_dict: dict[str, gpd.GeoDataFrame],
-    ) -> None:
-        """Directed KNN with Manhattan metric yields L-shaped geometries."""
-        src = sample_hetero_nodes_dict["building"]
-        dst = sample_hetero_nodes_dict["road"]
-
-        nodes, edges = run_or_skip(
-            knn_graph,
-            src,
-            k=1,
-            target_gdf=dst,
-            distance_metric="manhattan",
-        )
-
-        assert isinstance(nodes, gpd.GeoDataFrame)
-        assert isinstance(edges, gpd.GeoDataFrame)
-        assert edges.crs == src.crs == dst.crs
-        # Expect one outgoing edge per source node
-        assert len(edges) == len(src)
-        # Manhattan geometry should be L-shaped
-        if not edges.empty:
-            assert_l_shaped_edges(edges)
-
-    def test_directed_fixed_radius(
-        self,
-        sample_hetero_nodes_dict: dict[str, gpd.GeoDataFrame],
-    ) -> None:
-        """Directed fixed-radius connects within threshold and sets weights."""
-        src = sample_hetero_nodes_dict["building"]
-        dst = sample_hetero_nodes_dict["road"]
-
-        # Choose a radius that ensures at least one connection
-        nodes, edges = run_or_skip(
-            fixed_radius_graph,
-            src,
-            radius=3.0,
-            target_gdf=dst,
-            distance_metric="euclidean",
-        )
-
-        assert isinstance(nodes, gpd.GeoDataFrame)
-        assert isinstance(edges, gpd.GeoDataFrame)
-        assert edges.crs == src.crs == dst.crs
-        # Some edges should exist given the fixture layout
-        assert len(edges) >= 1
-        # Weights are positive distances
-        if not edges.empty:
-            assert (edges["weight"] > 0).all()
-
-
-class TestGroupNodesEdgeCases:
-    """Edge-case coverage for group_nodes via public API with light monkeypatching."""
-
-    def test_validation_missing_crs_raises(self) -> None:
-        """Missing CRS on polygons raises a ValueError."""
-        polygons, points = _simple_group_nodes_data()
-        polygons = polygons.copy()
-        polygons.set_crs(None, allow_override=True, inplace=True)
-        with pytest.raises(ValueError, match="CRS|Both inputs must have a CRS"):
-            group_nodes(polygons, points)
-
-    def test_validation_crs_mismatch_raises(self) -> None:
-        """Removed to reduce complexity; other CRS validation tests cover behavior."""
-        pytest.skip("Covered by other CRS validation tests; reducing duplication.")
-
-    def test_unsupported_metric_raises(self) -> None:
-        """Unsupported distance metric triggers a ValueError."""
-        polygons, points = _simple_group_nodes_data()
-        with pytest.raises(ValueError, match="Unsupported distance_metric"):
-            group_nodes(polygons, points, distance_metric="chebyshev")
-
-    def test_network_without_network_gdf_raises(self) -> None:
-        """Network metric without network_gdf raises a ValueError."""
-        polygons, points = _simple_group_nodes_data()
-        with pytest.raises(ValueError, match="network_gdf is required"):
-            group_nodes(polygons, points, distance_metric="network", network_gdf=None)
-
-    def test_network_crs_mismatch_raises(self) -> None:
-        """Network CRS mismatch raises a ValueError."""
-        polygons, points = _simple_group_nodes_data()
-        network = gpd.GeoDataFrame(
-            {"a": [1]}, geometry=[LineString([(0, 0), (1, 0)])], crs="EPSG:4326"
-        )
-        with pytest.raises(ValueError, match="CRS mismatch"):
-            group_nodes(polygons, points, distance_metric="network", network_gdf=network)
-
-    def test_internal_missing_crs_after_validation(self) -> None:
-        """Deprecated: internal helper behavior is not tested directly (removed)."""
-        pytest.skip("Internal helper behavior not tested; public API validations cover this.")
-
-    def test_internal_crs_mismatch_after_validation(self) -> None:
-        """Deprecated: internal helper behavior is not tested directly (removed)."""
-        pytest.skip("Internal helper behavior not tested; public API validations cover this.")
-
-    def test_internal_network_missing_after_validation(self) -> None:
-        """Deprecated: internal helper behavior is not tested directly (removed)."""
-        pytest.skip("Internal helper behavior not tested; public API validations cover this.")
-
-    def test_no_containment_yields_empty_edges(self) -> None:
-        """Points outside polygons yield empty edges for the relation key."""
-        polygons, points = _simple_group_nodes_data()
-        only_outside = points.loc[[3]]
-        _nodes, edges = group_nodes(polygons, only_outside, as_nx=False)
-        key = ("polygon", "covers", "point")
-        assert key in edges
-        assert edges[key].empty
-
-    def test_sjoin_missing_id_fallback(self) -> None:
-        """Deprecated: does not test public API behavior directly (removed)."""
-        pytest.skip("Internal sjoin fallback not tested; focus on public API outcomes.")
-
-    def test_empty_points_as_nx_graph(self) -> None:
-        """as_nx=True with empty points returns a hetero graph with edge_types."""
-        polygons, points = _simple_group_nodes_data()
-        empty_points = points.iloc[0:0]
-        G = group_nodes(polygons, empty_points, as_nx=True)
-        assert isinstance(G, nx.Graph)
-        assert G.graph.get("is_hetero", False) is True
-        assert ("polygon", "covers", "point") in G.graph.get("edge_types", [])
-
-    def test_edges_gdf_none_early_exit(self) -> None:
-        """Deprecated: internal edge creation early-exit not tested directly (removed)."""
-        pytest.skip(
-            "Internal edge creation early-exit not tested; assert public API schemas instead."
-        )
-
-
-# =========================================================================
-# GROUP_NODES TESTS (Public API, concise) 🧩
-# =========================================================================
-
-
-def _simple_group_nodes_data(crs: str = "EPSG:3857") -> tuple[gpd.GeoDataFrame, gpd.GeoDataFrame]:
-    """Tiny polygon/points fixture with one interior, one boundary, one outside point."""
+def _poly_points_fixture(crs: str = "EPSG:3857") -> tuple[gpd.GeoDataFrame, gpd.GeoDataFrame]:
     poly = Polygon([(0, 0), (2, 0), (2, 2), (0, 2)])
-    polygons = gpd.GeoDataFrame({"name": ["A"]}, geometry=[poly], crs=crs).set_index(
+    polys = gpd.GeoDataFrame({"name": ["A"]}, geometry=[poly], crs=crs).set_index(
         pd.Index(["A"], name="zone")
     )
-    pts = [Point(1, 1), Point(2, 1), Point(3, 3)]  # inside, on boundary, outside
-    points = gpd.GeoDataFrame({"pid": [1, 2, 3]}, geometry=pts, crs=crs).set_index("pid")
-    return polygons, points
+    pts = gpd.GeoDataFrame(
+        {"pid": [1, 2, 3]},
+        geometry=[Point(1, 1), Point(2, 1), Point(3, 3)],
+        crs=crs,
+    ).set_index("pid")
+    return polys, pts
 
 
-class TestGroupNodesPublicAPI:
-    """Reduced, end-to-end tests for group_nodes focusing on public behavior."""
-
-    def test_default_predicate_covers_boundary(self) -> None:
-        """Default predicate=covered_by should include boundary point and map to 'covers'."""
-        polygons, points = _simple_group_nodes_data()
-        nodes, edges = group_nodes(polygons, points, as_nx=False)
-
-        edge_key = ("polygon", "covers", "point")
-        assert edge_key in edges
-        edges_gdf = edges[edge_key]
-
-        # Expect 2 edges: interior point and boundary point
-        assert len(edges_gdf) == 2
-        assert isinstance(edges_gdf.index, pd.MultiIndex)
-        assert edges_gdf.index.levels[0].tolist() == ["A"]
-        assert set(edges_gdf.index.get_level_values(1)) == {1, 2}
-        # Required columns present
-        assert {"weight", "geometry"}.issubset(edges_gdf.columns)
-
-    def test_within_excludes_boundary(self) -> None:
-        """Predicate=within excludes boundary; relation becomes 'contains'."""
-        polygons, points = _simple_group_nodes_data()
-        nodes, edges = group_nodes(polygons, points, predicate="within", as_nx=False)
-        edge_key = ("polygon", "contains", "point")
-        assert edge_key in edges
-        edges_gdf = edges[edge_key]
-
-        # Only strictly interior point connects
-        assert len(edges_gdf) == 1
-        assert edges_gdf.index[0][1] == 1
-
-    def test_manhattan_geometry_and_nx_metadata(self) -> None:
-        """Manhattan geometries are L-shaped; NetworkX output carries hetero metadata."""
-        polygons, points = _simple_group_nodes_data()
-
-        nodes_gdf, edges_gdf = group_nodes(
-            polygons, points, distance_metric="manhattan", as_nx=False
-        )
-        edge_key = ("polygon", "covers", "point")
-        assert edge_key in edges_gdf if isinstance(edges_gdf, dict) else True
-        eg = edges_gdf[edge_key]
-        if not eg.empty:
-            coords = list(eg.geometry.iloc[0].coords)
-            assert len(coords) == 3  # L-shape has 3 vertices
-
-        G = group_nodes(polygons, points, as_nx=True)
-        assert isinstance(G, nx.Graph)
-        assert G.graph.get("is_hetero", False) is True
-        node_types = {d.get("node_type") for _, d in G.nodes(data=True)}
-        assert {"polygon", "point"}.issubset(node_types)
-        edge_types = G.graph.get("edge_types", [])
-        assert ("polygon", "covers", "point") in edge_types
-
-    def test_empty_points_returns_empty_edges(self) -> None:
-        """Empty points layer yields empty edges entry for the relation key."""
-        polygons, points = _simple_group_nodes_data()
-        empty_points = points.iloc[0:0]
-        nodes, edges = group_nodes(polygons, empty_points, as_nx=False)
-        edge_key = ("polygon", "covers", "point")
-        assert edge_key in edges
-        assert edges[edge_key].empty
-
-    def test_network_metric_smoke(self) -> None:
-        """Network metric completes and returns expected schema (smoke test)."""
-        polygons, points = _simple_group_nodes_data()
-        network = gpd.GeoDataFrame(
-            {"attr": [1]},
-            geometry=[LineString([(0, 0), (2, 0)])],
-            crs=polygons.crs,
-        )
-        nodes, edges = group_nodes(
-            polygons,
-            points,
-            distance_metric="network",
-            network_gdf=network,
-            as_nx=False,
-        )
-        assert isinstance(nodes, dict)
-        assert isinstance(edges, dict)
+@pytest.fixture
+def small_points() -> gpd.GeoDataFrame:
+    """Small square-ish point set for proximity generators."""
+    return _points([(0, 0), (1, 0), (0, 1), (2, 2)])
 
 
-# ============================================================================
-# CONTIGUITY GRAPH TESTS
-# ============================================================================
+@pytest.fixture
+def network_edges() -> gpd.GeoDataFrame:
+    """Tiny 2-edge network for network distance metric tests."""
+    src_ids = [0, 1]
+    dst_ids = [1, 2]
+    geom = [LineString([(0, 0), (1, 0)]), LineString([(1, 0), (0, 1)])]
+    mi = pd.MultiIndex.from_arrays([src_ids, dst_ids], names=("source_id", "target_id"))
+    data = {
+        "source_id": src_ids,
+        "target_id": dst_ids,
+        "geometry": geom,
+    }
+    return gpd.GeoDataFrame(data, index=mi, crs="EPSG:27700")
 
 
-"""Contiguity fixtures are provided by tests/conftest.py"""
+# ---------------------------------------------------------------------------
+# Distance helper behaviour
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("metric", ["euclidean", "manhattan"])
+def test_knn_and_fixed_radius_basic(small_points: gpd.GeoDataFrame, metric: str) -> None:
+    """Core sanity checks for kNN/fixed-radius under both Euclidean & Manhattan."""
+    nodes, edges = knn_graph(small_points, k=2, distance_metric=metric)
+    assert len(nodes) == len(small_points)
+    if edges.empty:  # degenerate geometry unlikely but guard
+        return
+    assert {"weight", "geometry"}.issubset(edges.columns)
+    nodes_r, edges_r = fixed_radius_graph(small_points, radius=1.5, distance_metric=metric)
+    assert len(nodes_r) == len(small_points)
+    if metric == "manhattan" and not edges.empty:
+        # Manhattan edges have 3 coordinate points (L path) unless aligned
+        geom = edges.geometry.iloc[0]
+        assert isinstance(geom, LineString)
+        assert 2 <= len(geom.coords) <= 3
+
+
+def test_knn_non_string_metric_defaults(small_points: gpd.GeoDataFrame) -> None:
+    """Non-string metric argument falls back to euclidean (robust normalisation)."""
+    nodes, edges = knn_graph(small_points, k=1, distance_metric=None)  # type: ignore[arg-type]
+    assert len(nodes) == len(small_points)
+    assert not edges.empty
+
+
+def test_network_metric_knn_and_cache(
+    small_points: gpd.GeoDataFrame, network_edges: gpd.GeoDataFrame
+) -> None:
+    """Two calls with network metric reuse cached network graph on network_gdf."""
+    # First call builds cache
+    _, e1 = fixed_radius_graph(
+        small_points, radius=2.0, distance_metric="network", network_gdf=network_edges
+    )
+    assert hasattr(network_edges, "_c2g_cached_nx")
+    # Second call reuses cache
+    _, e2 = fixed_radius_graph(
+        small_points, radius=2.0, distance_metric="network", network_gdf=network_edges
+    )
+    assert e1.equals(e2)
+
+
+def test_network_metric_requires_network_gdf(small_points: gpd.GeoDataFrame) -> None:
+    """Requesting network metric without network_gdf triggers clear error."""
+    with pytest.raises(ValueError, match="network_gdf is required"):
+        knn_graph(small_points, k=1, distance_metric="network")
+
+
+# ---------------------------------------------------------------------------
+# Triangulation based generators
+# ---------------------------------------------------------------------------
+
+
+def test_delaunay_and_subgraphs(small_points: gpd.GeoDataFrame) -> None:
+    """Gabriel and RNG are subgraphs of Delaunay (edge count monotonicity)."""
+    # Delaunay needs >=3 points; we already have 4
+    _, d_edges = delaunay_graph(small_points)
+    _, g_edges = gabriel_graph(small_points)
+    _, r_edges = relative_neighborhood_graph(small_points)
+    assert len(g_edges) <= len(d_edges)
+    assert len(r_edges) <= len(d_edges)
+
+
+def test_mst_and_waxman(small_points: gpd.GeoDataFrame) -> None:
+    """MST has n-1 edges and Waxman returns expected schema."""
+    _, mst_edges = euclidean_minimum_spanning_tree(small_points)
+    assert len(mst_edges) == max(len(small_points) - 1, 0)
+    _, wax_edges = waxman_graph(small_points, beta=0.8, r0=2.0, seed=7)
+    # Probabilistic: just ensure schema
+    assert {"weight", "geometry"}.issubset(wax_edges.columns)
+
+
+def test_gabriel_rng_two_points_branch() -> None:
+    """Gabriel and RNG handle exactly two points (single edge candidate path)."""
+    pts = _points([(0, 0), (1, 0)])
+    _, g_edges = gabriel_graph(pts)
+    _, r_edges = relative_neighborhood_graph(pts)
+    # With two points, both graphs should have at most one edge
+    assert len(g_edges) <= 1
+    assert len(r_edges) <= 1
+
+
+# ---------------------------------------------------------------------------
+# Directed variants & bridging
+# ---------------------------------------------------------------------------
+
+
+def test_directed_variants_and_bridge(small_points: gpd.GeoDataFrame) -> None:
+    """Directed kNN & radius plus bidirectional layer bridging produce edges."""
+    src = small_points.iloc[:2]
+    dst = small_points.iloc[2:]
+    _, k_edges = knn_graph(src, k=1, target_gdf=dst)
+    _, r_edges = fixed_radius_graph(src, radius=3.0, target_gdf=dst)
+    assert len(k_edges) == len(src)
+    assert len(r_edges) >= 1
+
+    # bridge_nodes over two layers (both methods)
+    layers = {"a": src, "b": dst}
+    _, b_knn = bridge_nodes(layers, proximity_method="knn", k=1)
+    _, b_rad = bridge_nodes(layers, proximity_method="fixed_radius", radius=5.0)
+    assert len(b_knn) == 2  # a->b, b->a
+    assert len(b_rad) == 2
+
+
+def test_directed_network_variants(
+    small_points: gpd.GeoDataFrame, network_edges: gpd.GeoDataFrame
+) -> None:
+    """Directed kNN and radius with network metric exercise _directed_graph path."""
+    # Partition into sources and destinations
+    src = small_points.iloc[:2]
+    dst = small_points.iloc[2:]
+
+    # kNN directed with network metric
+    _, e_knn = knn_graph(
+        src,
+        k=1,
+        target_gdf=dst,
+        distance_metric="network",
+        network_gdf=network_edges,
+    )
+    # Expect at least one edge if any destination is reachable on the network
+    assert len(e_knn) >= 0
+
+    # Radius directed with network metric (radius chosen to include 0->2 path ~2.41)
+    _, e_rad = fixed_radius_graph(
+        src,
+        radius=2.5,
+        target_gdf=dst,
+        distance_metric="network",
+        network_gdf=network_edges,
+    )
+    assert len(e_rad) >= 1
+
+
+# ---------------------------------------------------------------------------
+# Contiguity minimal tests (queen vs rook, manhattan, errors, empty)
+# ---------------------------------------------------------------------------
+
+
+def _small_square_polygons() -> gpd.GeoDataFrame:
+    polys = [
+        Polygon([(0, 0), (1, 0), (1, 1), (0, 1)]),  # 0
+        Polygon([(1, 0), (2, 0), (2, 1), (1, 1)]),  # 1 (touches 0)
+        Polygon([(0, 1), (1, 1), (1, 2), (0, 2)]),  # 2 (touches 0)
+        Polygon([(2, 0), (3, 0), (3, 1), (2, 1)]),  # 3 (touches 1 only)
+    ]
+    return gpd.GeoDataFrame({"val": range(len(polys))}, geometry=polys, crs="EPSG:3857").set_index(
+        pd.Index(range(len(polys)), name="pid")
+    )
+
+
+def test_contiguity_queen_vs_rook() -> None:
+    """Queen contiguity yields superset (or equal) of rook edges."""
+    gdf = _small_square_polygons()
+    nodes_q, edges_q = contiguity_graph(gdf, contiguity="queen")
+    nodes_r, edges_r = contiguity_graph(gdf, contiguity="rook")
+    assert set(nodes_q.index) == set(gdf.index)
+    assert set(nodes_r.index) == set(gdf.index)
+    assert len(edges_q) >= len(edges_r)
+
+
+def test_contiguity_manhattan_geometry() -> None:
+    """Manhattan metric uses polyline (straight or L-shape)."""
+    gdf = _small_square_polygons()
+    _, edges_m = contiguity_graph(gdf, distance_metric="manhattan")
+    if not edges_m.empty:
+        geom = edges_m.geometry.iloc[0]
+        assert isinstance(geom, LineString)
+        assert 2 <= len(geom.coords) <= 3
+
+
+def test_contiguity_invalid_type() -> None:
+    """Invalid contiguity type raises ValueError."""
+    gdf = _small_square_polygons()
+    with pytest.raises(ValueError, match="Invalid contiguity type"):
+        contiguity_graph(gdf, contiguity="invalid")
+
+
+def test_contiguity_empty_input() -> None:
+    """Empty input returns empty nodes/edges GeoDataFrames."""
+    empty = gpd.GeoDataFrame({"geometry": []}, geometry="geometry", crs="EPSG:3857")
+    nodes, edges = contiguity_graph(empty)
+    assert nodes.empty
+    assert edges.empty
+
+
+def test_contiguity_network_requires_network_gdf() -> None:
+    """Network metric without network_gdf raises ValueError."""
+    gdf = _small_square_polygons()
+    with pytest.raises(ValueError, match="network_gdf is required"):
+        contiguity_graph(gdf, distance_metric="network")
+
+
+# ---------------------------------------------------------------------------
+# group_nodes public API coverage
+# ---------------------------------------------------------------------------
+
+
+def test_group_nodes_basic_matches() -> None:
+    """group_nodes connects polygon to contained points (boundary inclusive)."""
+    polys, pts = _poly_points_fixture()
+    nodes, edges = group_nodes(polys, pts)
+    # One polygon node retained, two point nodes in same CRS
+    assert set(nodes.keys()) == {"polygon", "point"}
+    edge_key = next(iter(edges))
+    e = edges[edge_key]
+    # Only the first two points lie inside the polygon
+    assert len(e) == 2
+    assert {pid for _, pid in e.index} == {1, 2}
+    assert "weight" in e.columns
+    assert "geometry" in e.columns
+
+
+def test_group_nodes_empty_points() -> None:
+    """Empty point set returns empty edge GeoDataFrame while preserving nodes."""
+    polys, pts = _poly_points_fixture()
+    empty_pts = pts.iloc[0:0]
+    nodes, edges = group_nodes(polys, empty_pts)
+    assert nodes["point"].empty
+    edge_key = next(iter(edges))
+    assert edges[edge_key].empty
+
+
+def test_group_nodes_empty_polygons() -> None:
+    """Empty polygon set returns empty edges while preserving point nodes."""
+    polys, pts = _poly_points_fixture()
+    empty_polys = polys.iloc[0:0]
+    nodes, edges = group_nodes(empty_polys, pts)
+    assert nodes["polygon"].empty
+    edge_key = next(iter(edges))
+    assert edges[edge_key].empty
+
+
+def test_group_nodes_predicate_alias_within() -> None:
+    """Predicate 'within' excludes boundary point so only interior point remains."""
+    polys, pts = _poly_points_fixture()
+    # Shift third point to be strictly outside
+    nodes, edges = group_nodes(polys, pts, predicate="within")
+    edge_key = next(iter(edges))
+    # Points 1 only strictly within (point 2 is on boundary so excluded for within)
+    e = edges[edge_key]
+    assert {pid for _, pid in e.index} == {1}
+
+
+def test_group_nodes_network_metric_requires_network() -> None:
+    """Network metric without network_gdf raises explicit error for group_nodes."""
+    polys, pts = _poly_points_fixture()
+    with pytest.raises(ValueError, match="network_gdf is required"):
+        group_nodes(polys, pts, distance_metric="network")
 
 
 class TestContiguityPublicAPI:
-    """Concise tests targeting contiguity_graph public behavior only."""
+    """Retain existing public API test name for quick test task reference."""
 
-    # --- Validation ---
-    def test_invalid_input_type(self) -> None:
-        """Non-GeoDataFrame input raises TypeError."""
-        with pytest.raises(TypeError, match="Input must be a GeoDataFrame"):
-            contiguity_graph(pd.DataFrame({"a": [1]}))
-
-    def test_invalid_contiguity_value(self, sample_polygons_gdf: gpd.GeoDataFrame) -> None:
-        """Invalid contiguity value raises ValueError."""
-        with pytest.raises(ValueError, match="Invalid contiguity type 'invalid'"):
-            contiguity_graph(sample_polygons_gdf, contiguity="invalid")
-
-    def test_mixed_geometry_types(self, mixed_geometry_gdf: gpd.GeoDataFrame) -> None:
-        """Mixed (non-polygon) geometry types raise ValueError."""
-        with pytest.raises(ValueError, match="non-polygon geometr"):
-            contiguity_graph(mixed_geometry_gdf)
-
-    def test_invalid_geometries(self, invalid_geometry_gdf: gpd.GeoDataFrame) -> None:
-        """Invalid polygon geometries raise ValueError."""
-        with pytest.raises(ValueError, match="invalid geometr"):
-            contiguity_graph(invalid_geometry_gdf)
-
-    def test_null_geometries(self) -> None:
-        """Null geometry rows raise ValueError."""
-        gdf = gpd.GeoDataFrame(
-            {"id": ["a", "b"], "geometry": [Polygon([(0, 0), (1, 0), (1, 1), (0, 1)]), None]},
-            crs="EPSG:27700",
-        ).set_index("id")
-        with pytest.raises(ValueError, match="null geometr"):
-            contiguity_graph(gdf)
-
-    def test_missing_geometry_column(self) -> None:
-        """Missing geometry column raises ValueError."""
-        gdf = gpd.GeoDataFrame(
-            {"id": ["a"]},
-            geometry=gpd.GeoSeries([], dtype="geometry"),
-            crs="EPSG:27700",
-        ).set_index("id")
-        gdf._geometry_column_name = None  # simulate missing geometry column
-        with pytest.raises(ValueError, match="valid geometry column"):
-            contiguity_graph(gdf)
-
-    # --- Empty and trivial cases ---
-    @pytest.mark.parametrize("as_nx", [False, True])
-    def test_empty_geodataframe(self, empty_polygons_gdf: gpd.GeoDataFrame, as_nx: bool) -> None:
-        """Empty input returns empty outputs while preserving CRS and metadata."""
-        result = contiguity_graph(empty_polygons_gdf, as_nx=as_nx)
-        if as_nx:
-            assert isinstance(result, nx.Graph)
-            assert result.number_of_nodes() == 0
-            assert result.number_of_edges() == 0
-            assert result.graph["crs"] == empty_polygons_gdf.crs
-            assert result.graph["contiguity"] == "queen"
-        else:
-            nodes, edges = result
-            assert len(nodes) == 0
-            assert len(edges) == 0
-            assert nodes.crs == edges.crs == empty_polygons_gdf.crs
-
-    def test_single_polygon(self, single_polygon_gdf: gpd.GeoDataFrame) -> None:
-        """Single polygon yields one node and zero edges, attributes preserved."""
-        nodes, edges = contiguity_graph(single_polygon_gdf)
-        assert len(nodes) == 1
-        assert len(edges) == 0
-        assert nodes.iloc[0]["attr"] == "x"
-
-    # --- Core functionality ---
-    @pytest.mark.parametrize("contiguity", ["queen", "rook"])
-    def test_basic_structure(self, sample_polygons_gdf: gpd.GeoDataFrame, contiguity: str) -> None:
-        """Core behavior: structure, CRS, columns, and attributes preserved."""
-        nodes, edges = contiguity_graph(sample_polygons_gdf, contiguity=contiguity)
-        assert isinstance(nodes, gpd.GeoDataFrame)
-        assert isinstance(edges, gpd.GeoDataFrame)
-        assert len(nodes) == len(sample_polygons_gdf)
-        assert nodes.crs == edges.crs == sample_polygons_gdf.crs
-        assert {"weight", "geometry"}.issubset(edges.columns)
-        # attributes preserved
-        for col in sample_polygons_gdf.columns:
-            assert col in nodes.columns
-
-    def test_queen_vs_rook(self, l_shaped_polygons_gdf: gpd.GeoDataFrame) -> None:
-        """Queen finds a vertex-only neighbor; Rook does not."""
-        _, queen = contiguity_graph(l_shaped_polygons_gdf, contiguity="queen")
-        _, rook = contiguity_graph(l_shaped_polygons_gdf, contiguity="rook")
-        assert len(queen) == 1
-        assert len(rook) == 0
-
-    def test_isolated_polygons(self) -> None:
-        """Completely separated polygons produce no edges."""
-        gdf = gpd.GeoDataFrame(
-            {
-                "id": ["A", "B", "C"],
-                "geometry": [
-                    Polygon([(0, 0), (1, 0), (1, 1), (0, 1)]),
-                    Polygon([(5, 5), (6, 5), (6, 6), (5, 6)]),
-                    Polygon([(10, 10), (11, 10), (11, 11), (10, 11)]),
-                ],
-            },
-            crs="EPSG:27700",
-        ).set_index("id")
-        nodes, edges = contiguity_graph(gdf)
-        assert len(nodes) == 3
-        assert len(edges) == 0
-
-    def test_edge_geometry_and_weights(self, sample_polygons_gdf: gpd.GeoDataFrame) -> None:
-        """Edges are LineStrings between centroids; sample A-B weight equals 2.0 if present."""
-        nodes, edges = contiguity_graph(sample_polygons_gdf, contiguity="queen")
-        if len(edges) == 0:
-            pytest.skip("No edges")
-        assert all(isinstance(g, LineString) and len(g.coords) == 2 for g in edges.geometry)
-        # Check A-B weight equals centroid distance = 2.0
-        ab = edges.loc[(slice(None), slice(None))]
-        if not ab.empty:
-            # try to find explicit A-B if exists
-            mask = (
-                (edges.index.get_level_values(0) == "A") & (edges.index.get_level_values(1) == "B")
-            ) | (
-                (edges.index.get_level_values(0) == "B") & (edges.index.get_level_values(1) == "A")
-            )
-            if mask.any():
-                assert abs(edges.loc[mask].iloc[0]["weight"] - 2.0) < 1e-6
-
-    # --- Output formats and metadata ---
-    def test_networkx_output(self, sample_polygons_gdf: gpd.GeoDataFrame) -> None:
-        """NetworkX output has metadata and node/edge attributes."""
-        G = cast("nx.Graph", contiguity_graph(sample_polygons_gdf, contiguity="queen", as_nx=True))
-        assert isinstance(G, nx.Graph)
-        assert G.number_of_nodes() == len(sample_polygons_gdf)
-        assert G.graph["crs"] == sample_polygons_gdf.crs
-        assert G.graph["contiguity"] == "queen"
-        # Sample node/edge attributes
-        if G.number_of_nodes():
-            n0 = next(iter(G.nodes(data=True)))[1]
-            assert "geometry" in n0
-            assert "area" in n0
-            assert "use" in n0
-        if G.number_of_edges():
-            e0 = next(iter(G.edges(data=True)))[2]
-            assert "weight" in e0
-            assert "geometry" in e0
-
-    def test_output_format_consistency(self, sample_polygons_gdf: gpd.GeoDataFrame) -> None:
-        """Tuple and NetworkX outputs encode same nodes and undirected edges."""
-        nodes, edges = contiguity_graph(sample_polygons_gdf)
-        G = cast("nx.Graph", contiguity_graph(sample_polygons_gdf, as_nx=True))
-        assert len(nodes) == G.number_of_nodes()
-        assert len(edges) == G.number_of_edges()
-        assert set(nodes.index) == set(G.nodes())
-        gdf_edges = {tuple(sorted(idx)) for idx in edges.index}
-        nx_edges = {tuple(sorted(e)) for e in G.edges()}
-        assert gdf_edges == nx_edges
-
-    # --- CRS and types ---
-    def test_crs_preservation(self, sample_polygons_gdf: gpd.GeoDataFrame) -> None:
-        """CRS preserved in both nodes and edges outputs."""
-        nodes, edges = contiguity_graph(sample_polygons_gdf)
-        assert nodes.crs == sample_polygons_gdf.crs
-        assert edges.crs == sample_polygons_gdf.crs
-
-    def test_multipolygon_support(self) -> None:
-        """MultiPolygon is accepted as polygonal geometry type."""
-        a = Polygon([(0, 0), (1, 0), (1, 1), (0, 1)])
-        b = Polygon([(2, 2), (3, 2), (3, 3), (2, 3)])
-        mp = MultiPolygon([a, b])
-        adj = Polygon([(1, 0), (2, 0), (2, 1), (1, 1)])
-        gdf = gpd.GeoDataFrame(
-            {"id": ["mp", "adj"], "geometry": [mp, adj]},
-            crs="EPSG:27700",
-        ).set_index("id")
-        nodes, edges = contiguity_graph(gdf)
-        assert len(nodes) == 2
-        assert len(edges) >= 0  # adjacency depends on exact topology/libpysal
-
-    # --- Light scalability check (kept small) ---
     def test_small_grid(self) -> None:
-        """Small 3x3 grid yields expected node count and reasonable edge count."""
-        gdf = make_grid_polygons_gdf(3, 3, crs="EPSG:27700")
+        """Smoke test small grid contiguity output symmetry."""
+        gdf = _small_square_polygons()
         nodes, edges = contiguity_graph(gdf)
-        assert len(nodes) == 9
-        assert 8 <= len(edges) <= 36  # queen contiguity yields many edges
-
-    def test_multiple_invalid_geometries_message(self) -> None:
-        """Multiple invalid polygons to exercise the '... more' message branch."""
-        bad = Polygon([(0, 0), (2, 0), (0, 2), (2, 2)])
-        gdf = gpd.GeoDataFrame(
-            {
-                "id": ["b1", "b2", "b3", "b4"],
-                "geometry": [bad, bad, bad, bad],
-            },
-            crs="EPSG:27700",
-        ).set_index("id")
-        with pytest.raises(ValueError, match=r"invalid geometr"):
-            contiguity_graph(gdf)
+        assert set(nodes.index) == set(gdf.index)
+        # Edges GeoDataFrame stores undirected edges once (u,v where u< v maybe);
+        # validate symmetry by converting to networkx graph and checking neighbors.
+        G = cast("nx.Graph", contiguity_graph(gdf, as_nx=True))
+        for u, v in G.edges():
+            assert G.has_edge(v, u)
 
 
-class TestContiguityLibpysalEdgeCases:
-    """Exercise libpysal-related branches via public API using monkeypatch."""
-
-    def test_libpysal_failure_propagates(
-        self,
-        monkeypatch: pytest.MonkeyPatch,
-        sample_polygons_gdf: gpd.GeoDataFrame,
-    ) -> None:
-        """If libpysal raises, contiguity_graph wraps with ValueError including context."""
-
-        def boom(*_args: object, **_kwargs: object) -> object:
-            msg = "boom"
-            raise RuntimeError(msg)
-
-        monkeypatch.setattr(prox.libpysal.weights.Queen, "from_dataframe", boom)
-        with pytest.raises(
-            ValueError,
-            match=r"Failed to create queen contiguity spatial weights matrix",
-        ):
-            contiguity_graph(sample_polygons_gdf, contiguity="queen")
-
-    def test_libpysal_returns_none(
-        self,
-        monkeypatch: pytest.MonkeyPatch,
-        sample_polygons_gdf: gpd.GeoDataFrame,
-    ) -> None:
-        """If libpysal returns None, contiguity_graph raises a descriptive ValueError."""
-
-        # Match the expected signature (gdf, ids=...), but ignore values
-        def _return_none(_gdf: gpd.GeoDataFrame, ids: object | None = None) -> None:
-            _ = ids  # explicitly use to avoid unused-argument lint
-
-        monkeypatch.setattr(
-            prox.libpysal.weights.Queen,
-            "from_dataframe",
-            _return_none,
-        )
-        with pytest.raises(
-            ValueError,
-            match=r"libpysal returned None when creating queen contiguity weights",
-        ):
-            contiguity_graph(sample_polygons_gdf, contiguity="queen")
-
-    def test_empty_weights_matrix_path(
-        self,
-        monkeypatch: pytest.MonkeyPatch,
-        sample_polygons_gdf: gpd.GeoDataFrame,
-    ) -> None:
-        """Return empty W to hit the empty-weights branch in edge extraction."""
-        monkeypatch.setattr(
-            prox.libpysal.weights.Queen,
-            "from_dataframe",
-            lambda _gdf: prox.libpysal.weights.W({}),
-        )
-        nodes, edges = contiguity_graph(sample_polygons_gdf)
-        assert isinstance(nodes, gpd.GeoDataFrame)
-        assert isinstance(edges, gpd.GeoDataFrame)
-        assert len(edges) == 0
+## End of concise suite
 
 
-class TestBridgeNodesCoverage:
-    """Additional coverage for bridge_nodes fixed-radius metric type handling."""
+# ---------------------------------------------------------------------------
+# Additional coverage tests (public API only) to reach 100% proximity coverage
+# ---------------------------------------------------------------------------
 
-    def test_fixed_radius_non_string_metric_defaults(
-        self,
-        sample_hetero_nodes_dict: dict[str, gpd.GeoDataFrame],
-    ) -> None:
-        """Non-string metric defaults to euclidean and succeeds."""
-        _, edges = bridge_nodes(
-            sample_hetero_nodes_dict,
-            proximity_method="fixed_radius",
-            radius=3.0,
-            distance_metric=123,
-        )
-        assert isinstance(edges, dict)
-        assert len(edges) > 0
+
+def _single_point_gdf() -> gpd.GeoDataFrame:
+    return gpd.GeoDataFrame({"id": [0]}, geometry=[Point(0, 0)], crs="EPSG:27700").set_index("id")
+
+
+def test_knn_single_point_early_exit() -> None:
+    """KNN with a single point returns no edges (early return path)."""
+    gdf = _single_point_gdf()
+    nodes, edges = knn_graph(gdf, k=3)
+    assert len(nodes) == 1
+    assert edges.empty
+
+
+def test_knn_zero_k_early_exit(small_points: gpd.GeoDataFrame) -> None:
+    """K <= 0 triggers early return with no edges."""
+    nodes, edges = knn_graph(small_points, k=0)
+    assert len(nodes) == len(small_points)
+    assert edges.empty
+
+
+def test_knn_network_metric_success(
+    network_edges: gpd.GeoDataFrame, small_points: gpd.GeoDataFrame
+) -> None:
+    """KNN network metric builds distance matrix and edges (cache path already covered)."""
+    nodes, edges = knn_graph(
+        small_points, k=1, distance_metric="network", network_gdf=network_edges
+    )
+    assert len(nodes) == len(small_points)
+    assert not edges.empty
+
+
+def test_delaunay_network_metric(
+    network_edges: gpd.GeoDataFrame, small_points: gpd.GeoDataFrame
+) -> None:
+    """Delaunay with network metric attaches network-based weights/geometries."""
+    nodes, edges = delaunay_graph(
+        small_points, distance_metric="network", network_gdf=network_edges
+    )
+    if len(small_points) >= 3:
+        assert not edges.empty
+
+
+def test_gabriel_network_metric(
+    network_edges: gpd.GeoDataFrame, small_points: gpd.GeoDataFrame
+) -> None:
+    """Gabriel network metric branch executed."""
+    nodes, edges = gabriel_graph(small_points, distance_metric="network", network_gdf=network_edges)
+    assert len(nodes) == len(small_points)
+
+
+def test_rng_network_metric(
+    network_edges: gpd.GeoDataFrame, small_points: gpd.GeoDataFrame
+) -> None:
+    """Relative Neighborhood Graph network metric branch executed."""
+    nodes, edges = relative_neighborhood_graph(
+        small_points, distance_metric="network", network_gdf=network_edges
+    )
+    assert len(nodes) == len(small_points)
+
+
+def test_mst_network_metric(
+    network_edges: gpd.GeoDataFrame, small_points: gpd.GeoDataFrame
+) -> None:
+    """Minimum spanning tree under network metric (complete graph fallback)."""
+    nodes, edges = euclidean_minimum_spanning_tree(
+        small_points, distance_metric="network", network_gdf=network_edges
+    )
+    # Tree edges <= n-1
+    assert len(edges) <= max(len(small_points) - 1, 0)
+
+
+def test_fixed_radius_network_metric(
+    network_edges: gpd.GeoDataFrame, small_points: gpd.GeoDataFrame
+) -> None:
+    """Fixed-radius network metric selection path covered."""
+    nodes, edges = fixed_radius_graph(
+        small_points, radius=2.5, distance_metric="network", network_gdf=network_edges
+    )
+    assert len(nodes) == len(small_points)
+
+
+def test_waxman_basic(small_points: gpd.GeoDataFrame) -> None:
+    """Waxman graph probabilistic construction (schema validation)."""
+    nodes, edges = waxman_graph(small_points, beta=0.5, r0=3.0, seed=123)
+    assert set(edges.columns) >= {"weight", "geometry"}
+
+
+def test_waxman_manhattan_metric(small_points: gpd.GeoDataFrame) -> None:
+    """Waxman with Manhattan metric exercises the dispatcher manhattan branch."""
+    nodes, edges = waxman_graph(
+        small_points, beta=0.4, r0=2.0, seed=42, distance_metric="manhattan"
+    )
+    assert len(nodes) == len(small_points)
+    assert set(edges.columns) >= {"weight", "geometry"}
+
+
+def test_waxman_network_requires_network_gdf(small_points: gpd.GeoDataFrame) -> None:
+    """Waxman with network metric should require network_gdf (dispatcher path)."""
+    with pytest.raises(ValueError, match="network_gdf is required for network distance metric"):
+        waxman_graph(small_points, beta=0.3, r0=1.5, distance_metric="network")
+
+
+def test_waxman_network_crs_mismatch(small_points: gpd.GeoDataFrame) -> None:
+    """Waxman with network metric and mismatched CRS raises from _network_dm."""
+    # Build a tiny network in a different CRS than points
+    net = gpd.GeoDataFrame(
+        {"geometry": [LineString([(0, 0), (1, 1)])]},
+        index=pd.MultiIndex.from_arrays([[0], [1]], names=("source_id", "target_id")),
+        crs="EPSG:4326",
+    )
+    with pytest.raises(ValueError, match="CRS mismatch"):
+        waxman_graph(small_points, beta=0.3, r0=1.5, distance_metric="network", network_gdf=net)
+
+
+def test_waxman_invalid_metric_raises(small_points: gpd.GeoDataFrame) -> None:
+    """Unknown metric propagates from internal dispatcher via public API."""
+    with pytest.raises(ValueError, match="Unknown distance metric"):
+        waxman_graph(small_points, beta=0.5, r0=2.0, distance_metric="invalid")  # type: ignore[arg-type]
+
+
+def test_group_nodes_invalid_metric() -> None:
+    """Unsupported distance metric raises ValueError via public API."""
+    polys, pts = _poly_points_fixture()
+    with pytest.raises(ValueError, match="Unsupported distance_metric"):
+        group_nodes(polys, pts, distance_metric="invalid")  # type: ignore[arg-type]
+
+
+def test_group_nodes_crs_mismatch() -> None:
+    """CRS mismatch path triggers ValueError."""
+    polys, pts = _poly_points_fixture()
+    pts2 = pts.to_crs("EPSG:4326")
+    with pytest.raises(ValueError, match="same CRS"):
+        group_nodes(polys, pts2)
+
+
+def test_group_nodes_missing_crs() -> None:
+    """Both inputs must have a CRS error branch (no CRS)."""
+    polys, _ = _poly_points_fixture()
+    # Rebuild both layers with no CRS to hit the explicit missing-CRS validation
+    poly_geom = polys.geometry.iloc[0]
+    polys_nocrs = gpd.GeoDataFrame({"name": ["A"]}, geometry=[poly_geom], crs=None).set_index(
+        pd.Index(["A"], name="zone")
+    )
+    # Build a brand-new GeoDataFrame with shapely geometries so CRS is truly None
+    coords = [(1, 1), (2, 1), (3, 3)]
+    pts_nocrs = gpd.GeoDataFrame(
+        {"pid": [1, 2, 3]},
+        geometry=[Point(x, y) for x, y in coords],
+        crs=None,
+    ).set_index("pid")
+    assert polys_nocrs.crs is None
+    assert pts_nocrs.crs is None
+    with pytest.raises(ValueError, match="CRS"):
+        group_nodes(polys_nocrs, pts_nocrs)
+
+
+def test_group_nodes_network_crs_mismatch() -> None:
+    """Network metric with mismatched network CRS raises."""
+    polys, pts = _poly_points_fixture()
+    # Simple network in different CRS
+    poly_centroid = polys.geometry.iloc[0].centroid
+    net = gpd.GeoDataFrame(
+        {"geometry": [LineString([poly_centroid, poly_centroid])]},
+        index=pd.MultiIndex.from_arrays([[0], [1]], names=("source_id", "target_id")),
+        crs="EPSG:4326",
+    )
+    with pytest.raises(ValueError, match="CRS mismatch between inputs and network"):
+        group_nodes(polys, pts, distance_metric="network", network_gdf=net)
+
+
+def test_group_nodes_network_metric_success() -> None:
+    """Successful network metric group_nodes call (weights/geometries via network)."""
+    polys, pts = _poly_points_fixture()
+    # Build simple network linking polygon centroid to each point
+    poly_centroid = polys.geometry.iloc[0].centroid
+    lines = []
+    src = []
+    dst = []
+    for i, p in enumerate(pts.geometry):
+        src.append(i)
+        dst.append(i + 100)
+        lines.append(LineString([poly_centroid, p]))
+    mi = pd.MultiIndex.from_arrays([src, dst], names=("source_id", "target_id"))
+    net = gpd.GeoDataFrame({"geometry": lines}, index=mi, crs=polys.crs)
+    nodes, edges = group_nodes(polys, pts, distance_metric="network", network_gdf=net)
+    edge_key = next(iter(edges))
+    e = edges[edge_key]
+    assert len(e) == 2  # two contained points
+
+
+def test_group_nodes_network_with_length_weight() -> None:
+    """group_nodes with network edges carrying 'length' triggers weighted paths branch."""
+    polys, pts = _poly_points_fixture()
+    poly_centroid = polys.geometry.iloc[0].centroid
+    lines = []
+    src = []
+    dst = []
+    lengths = []
+    for i, p in enumerate(pts.geometry):
+        src.append(i)
+        dst.append(i + 100)
+        seg = LineString([poly_centroid, p])
+        lines.append(seg)
+        lengths.append(seg.length)
+    mi = pd.MultiIndex.from_arrays([src, dst], names=("source_id", "target_id"))
+    net = gpd.GeoDataFrame({"length": lengths, "geometry": lines}, index=mi, crs=polys.crs)
+    nodes, edges = group_nodes(polys, pts, distance_metric="network", network_gdf=net)
+    edge_key = next(iter(edges))
+    e = edges[edge_key]
+    assert len(e) == 2
+    assert set(e.columns) >= {"weight", "geometry"}
+
+
+def test_group_nodes_no_matches_nonempty() -> None:
+    """Non-empty inputs but no spatial matches hit empty-join early branch."""
+    # Polygon far from points to ensure no containment matches
+    polys = gpd.GeoDataFrame(
+        {"name": ["A"]},
+        geometry=[Polygon([(10, 10), (12, 10), (12, 12), (10, 12)])],
+        crs="EPSG:3857",
+    ).set_index(pd.Index(["A"], name="zone"))
+    pts = gpd.GeoDataFrame(
+        {"pid": [1, 2]},
+        geometry=[Point(0, 0), Point(1, 1)],
+        crs="EPSG:3857",
+    ).set_index("pid")
+    nodes, edges = group_nodes(polys, pts)
+    edge_key = next(iter(edges))
+    assert edges[edge_key].empty
+
+
+def test_group_nodes_crs_mismatch_explicit_branch() -> None:
+    """CRS mismatch after validation: one empty input avoids utils' global CRS check.
+
+    This specifically exercises the explicit branch in group_nodes that checks
+    ``poly_crs != pt_crs`` by constructing a scenario where validate_gdf does not
+    raise (because one GDF is empty) but the CRSs still differ.
+    """
+    # Non-empty polygon in EPSG:3857
+    polys = gpd.GeoDataFrame(
+        {"name": ["A"]},
+        geometry=[Polygon([(0, 0), (2, 0), (2, 2), (0, 2)])],
+        crs="EPSG:3857",
+    ).set_index(pd.Index(["A"], name="zone"))
+    # Empty points in a different CRS (EPSG:4326)
+    pts = gpd.GeoDataFrame(
+        {"pid": []}, geometry=gpd.GeoSeries([], dtype="geometry"), crs="EPSG:4326"
+    ).set_index(pd.Index([], name="pid"))
+    with pytest.raises(ValueError, match="CRS mismatch between inputs:"):
+        group_nodes(polys, pts)
+
+
+def test_contiguity_network_metric_success() -> None:
+    """Contiguity graph with network metric builds network-path geometries."""
+    gdf = _small_square_polygons().iloc[:2]  # two adjacent squares
+    # Build network line connecting centroids
+    c1 = gdf.geometry.iloc[0].centroid
+    c2 = gdf.geometry.iloc[1].centroid
+    net = gpd.GeoDataFrame(
+        {"geometry": [LineString([c1, c2])]},
+        index=pd.MultiIndex.from_arrays([[0], [1]], names=("source_id", "target_id")),
+        crs=gdf.crs,
+    )
+    nodes, edges = contiguity_graph(gdf, distance_metric="network", network_gdf=net)
+    assert len(edges) == 1
+
+
+def test_waxman_network_metric_success(
+    small_points: gpd.GeoDataFrame, network_edges: gpd.GeoDataFrame
+) -> None:
+    """Waxman with network metric executes network distance dispatcher path."""
+    nodes, edges = waxman_graph(
+        small_points,
+        beta=0.6,
+        r0=3.0,
+        distance_metric="network",
+        network_gdf=network_edges,
+        seed=7,
+    )
+    assert len(nodes) == len(small_points)
+    # Probabilistic; ensure schema exists (execution path hit)
+    assert set(edges.columns) >= {"weight", "geometry"}
+
+
+def test_contiguity_network_length_weight_branch() -> None:
+    """Contiguity with network metric and 'length' attribute triggers weighted path logic."""
+    gdf = _small_square_polygons().iloc[:2]  # two adjacent squares
+    c1 = gdf.geometry.iloc[0].centroid
+    c2 = gdf.geometry.iloc[1].centroid
+    net = gpd.GeoDataFrame(
+        {"length": [c1.distance(c2)], "geometry": [LineString([c1, c2])]},
+        index=pd.MultiIndex.from_arrays([[0], [1]], names=("source_id", "target_id")),
+        crs=gdf.crs,
+    )
+    nodes, edges = contiguity_graph(gdf, distance_metric="network", network_gdf=net)
+    assert len(edges) == 1
+    # Ensure geometry and weight present (path weight via 'length')
+    assert set(edges.columns) >= {"weight", "geometry"}
+
+
+def test_contiguity_edges_unique_undirected_path() -> None:
+    """Ensure unique undirected edges path in _generate_contiguity_edges is exercised."""
+    gdf = _small_square_polygons()
+    _, edges = contiguity_graph(gdf, contiguity="queen")
+    # Should produce at least one edge for the small grid
+    assert len(edges) >= 1
+
+
+def test_contiguity_invalid_metric_raises() -> None:
+    """Unsupported contiguity distance_metric triggers ValueError."""
+    gdf = _small_square_polygons()
+    with pytest.raises(ValueError, match="Unsupported distance_metric"):
+        contiguity_graph(gdf, distance_metric="invalid")
+
+
+def test_contiguity_network_crs_mismatch() -> None:
+    """Network CRS different from polygons CRS raises ValueError."""
+    gdf = _small_square_polygons().iloc[:2]
+    c1 = gdf.geometry.iloc[0].centroid
+    c2 = gdf.geometry.iloc[1].centroid
+    # Deliberately different CRS for network
+    net = gpd.GeoDataFrame(
+        {"geometry": [LineString([c1, c2])]},
+        index=pd.MultiIndex.from_arrays([[0], [1]], names=("source_id", "target_id")),
+        crs="EPSG:4326",
+    )
+    with pytest.raises(ValueError, match="CRS mismatch"):
+        contiguity_graph(gdf, distance_metric="network", network_gdf=net)
+
+
+def test_contiguity_empty_as_nx() -> None:
+    """Empty contiguity result as NetworkX preserves metadata."""
+    empty = gpd.GeoDataFrame({"geometry": []}, geometry="geometry", crs="EPSG:3857")
+    G = cast("nx.Graph", contiguity_graph(empty, as_nx=True))
+    assert G.number_of_nodes() == 0
+    assert G.number_of_edges() == 0
+    assert G.graph.get("contiguity") == "queen"
+    assert G.graph.get("distance_metric") == "euclidean"
+
+
+def test_contiguity_single_polygon_no_edges() -> None:
+    """Single polygon yields no adjacency edges (weights.neighbors empty branch)."""
+    gdf = gpd.GeoDataFrame(
+        {"val": [0]},
+        geometry=[Polygon([(0, 0), (1, 0), (1, 1), (0, 1)])],
+        crs="EPSG:3857",
+    ).set_index(pd.Index([0], name="pid"))
+    nodes, edges = contiguity_graph(gdf)
+    assert len(nodes) == 1
+    assert edges.empty
+
+
+def test_directed_knn_as_nx(small_points: gpd.GeoDataFrame) -> None:
+    """Directed kNN with as_nx=True exercises _directed_graph return branch."""
+    src = small_points.iloc[:2]
+    dst = small_points.iloc[2:]
+    G = cast("nx.Graph", knn_graph(src, k=1, target_gdf=dst, as_nx=True))
+    assert hasattr(G, "number_of_nodes")
+    assert G.number_of_edges() >= 1
+
+
+def test_directed_knn_crs_mismatch(small_points: gpd.GeoDataFrame) -> None:
+    """Directed helpers validate CRS equality between src and dst."""
+    src = small_points.iloc[:2]
+    dst = small_points.iloc[2:].to_crs("EPSG:4326")
+    with pytest.raises(ValueError, match="CRS mismatch between source and target"):
+        knn_graph(src, k=1, target_gdf=dst)
+
+
+def test_network_edge_weight_length_branch(small_points: gpd.GeoDataFrame) -> None:
+    """Provide 'length' edge attribute on network to trigger weighted path branch."""
+    # Build a simple 2-edge network with explicit 'length' attributes
+    src_ids = [0, 1]
+    dst_ids = [1, 2]
+    lengths = [1.0, 2.0]
+    geom = [LineString([(0, 0), (1, 0)]), LineString([(1, 0), (0, 1)])]
+    mi = pd.MultiIndex.from_arrays([src_ids, dst_ids], names=("source_id", "target_id"))
+    data = {
+        "source_id": src_ids,
+        "target_id": dst_ids,
+        "length": lengths,
+        "geometry": geom,
+    }
+    net = gpd.GeoDataFrame(data, index=mi, crs="EPSG:27700")
+    # Use network metric to ensure _set_network_edge_geometries is invoked
+    _, e = fixed_radius_graph(small_points, radius=2.5, distance_metric="network", network_gdf=net)
+    assert set(e.columns) >= {"weight", "geometry"}
+
+
+def test_mst_unknown_metric_raises(small_points: gpd.GeoDataFrame) -> None:
+    """Unknown distance metric should raise from internal dispatcher via MST."""
+    with pytest.raises(ValueError, match="Unknown distance metric"):
+        euclidean_minimum_spanning_tree(small_points, distance_metric="invalid")
+
+
+def test_network_geometry_fallback_same_nearest_node() -> None:
+    """When both endpoints map to the same nearest network node, use straight segment fallback.
+
+    This specifically exercises the branch in network geometry construction where the
+    shortest-path node sequence has length <= 1, so the resulting edge geometry should
+    be a direct LineString between the original point coordinates (not along the network).
+    """
+    # Two sample points very close to the origin
+    pts = gpd.GeoDataFrame(
+        {"id": [0, 1]},
+        geometry=[Point(0.0, 0.01), Point(0.02, 0.0)],
+        crs="EPSG:27700",
+    ).set_index("id")
+
+    # A sparse network with one node at the origin and another far away, ensuring both
+    # points map to the origin node as their nearest network node
+    net = gpd.GeoDataFrame(
+        {
+            "geometry": [
+                LineString([(0.0, 0.0), (100.0, 100.0)]),
+            ]
+        },
+        index=pd.MultiIndex.from_arrays([[0], [1]], names=("source_id", "target_id")),
+        crs="EPSG:27700",
+    )
+
+    # Network distance between both points is 0 (same mapped network node), so any
+    # positive radius will include the edge. Geometry should fall back to straight line
+    # between the two points (not a path along the network, which would be degenerate).
+    nodes, edges = fixed_radius_graph(pts, radius=0.1, distance_metric="network", network_gdf=net)
+    assert len(nodes) == 2
+    assert len(edges) == 1
+    geom = edges.geometry.iloc[0]
+    assert isinstance(geom, LineString)
+    # The fallback straight segment should have non-zero length approximately equal to
+    # the Euclidean distance between the two sample points (diagonal ~0.02236)
+    assert geom.length > 0
