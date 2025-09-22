@@ -17,3 +17,5 @@ Graph
 .. autofunction:: is_torch_available
 
 .. autofunction:: validate_pyg
+
+.. autofunction:: add_metapaths
