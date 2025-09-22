@@ -17,8 +17,14 @@ and spatial analysis.
 from __future__ import annotations
 
 # Standard library imports
+import functools
 import logging
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
+from typing import cast
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 # Third-party imports
 import geopandas as gpd
@@ -29,6 +35,7 @@ from shapely.geometry import LineString
 
 # Local imports
 from city2graph.utils import GraphMetadata
+from city2graph.utils import gdf_to_nx
 from city2graph.utils import nx_to_gdf
 from city2graph.utils import validate_gdf
 from city2graph.utils import validate_nx
@@ -60,6 +67,7 @@ except ImportError:  # pragma: no cover - makes life easier for docs build.
 logger = logging.getLogger(__name__)
 
 __all__ = [
+    "add_metapaths",
     "gdf_to_pyg",
     "is_torch_available",
     "nx_to_pyg",
@@ -67,6 +75,7 @@ __all__ = [
     "pyg_to_nx",
     "validate_pyg",
 ]
+
 
 # Constants for error messages
 TORCH_ERROR_MSG = "PyTorch and PyTorch Geometric required for graph conversion functionality."
@@ -96,6 +105,9 @@ def gdf_to_pyg(
     homogeneous or heterogeneous graphs based on input structure. Node identifiers
     are taken from the GeoDataFrame index. Edge relationships are defined by a
     MultiIndex on the edge GeoDataFrame (source ID, target ID).
+
+    The operation multiplies typed adjacency tables to connect terminal node
+    pairs and can aggregate additional numeric edge attributes along the way.
 
     Parameters
     ----------
@@ -3045,3 +3057,977 @@ def _convert_hetero_pyg_to_nx(data: HeteroData, metadata: GraphMetadata) -> nx.G
     graph.graph["node_offset"] = node_offset
 
     return graph
+
+
+# ============================================================================
+# METAPATH UTILITIES
+# ============================================================================
+
+
+def add_metapaths(
+    graph: (
+        tuple[dict[str, gpd.GeoDataFrame], dict[tuple[str, str, str], gpd.GeoDataFrame]]
+        | nx.Graph
+        | nx.MultiGraph
+    ),
+    metapaths: list[list[tuple[str, str, str]]],
+    edge_attr: str | list[str] | None = None,
+    edge_attr_agg: str | object | None = "sum",
+    directed: bool = False,
+    trace_path: bool = False,
+    as_nx: bool = False,
+    multigraph: bool = False,
+    **_: object,
+) -> (
+    nx.Graph
+    | nx.MultiGraph
+    | tuple[
+        dict[str, gpd.GeoDataFrame],
+        dict[tuple[str, str, str], gpd.GeoDataFrame],
+    ]
+):
+    """
+    Add metapath-derived edges to a heterogeneous graph.
+
+    The operation multiplies typed adjacency tables to connect terminal node
+    pairs and can aggregate additional numeric edge attributes along the way.
+
+    Parameters
+    ----------
+    graph : tuple[dict[str, GeoDataFrame], dict[tuple[str, str, str], GeoDataFrame]] | networkx.Graph | networkx.MultiGraph
+        Heterogeneous graph input expressed as typed GeoDataFrame dictionaries or
+        a city2graph-compatible NetworkX graph.
+    metapaths : list[list[tuple[str, str, str]]]
+        Sequence of metapath specifications; every edge type is a
+        ``(src_type, relation, dst_type)`` tuple and each path must contain at
+        least two steps.
+    edge_attr : str | list[str] | None, optional
+        Numeric edge attributes to aggregate along metapaths. When ``None``, only
+        path weights are produced.
+    edge_attr_agg : str | object | None, optional
+        Aggregation strategy for ``edge_attr`` columns. Supported values are
+        ``"sum"`` and ``"mean"`` (default ``"sum"``).
+    directed : bool, optional
+        Treat metapaths as directed when ``True``; otherwise both edge
+        directions are accepted when available in the input graph.
+    trace_path : bool, optional
+        When ``True``, attempt to create traced geometries. Currently ignored but
+        retained for API compatibility.
+    as_nx : bool, optional
+        Return the result as a NetworkX graph when ``True``.
+    multigraph : bool, optional
+        When returning NetworkX data, build a ``networkx.MultiGraph`` if ``True``.
+    **_ : object
+        Ignored placeholder for future keyword extensions.
+
+    Returns
+    -------
+    tuple[dict[str, GeoDataFrame], dict[tuple[str, str, str], GeoDataFrame]] | networkx.Graph | networkx.MultiGraph
+        Updated heterogeneous dictionaries or a NetworkX graph with metapath
+        edges appended.
+    """
+    if trace_path:
+        logger.debug("trace_path option is not implemented; ignoring request.")
+
+    nodes_dict, edges_dict = _ensure_hetero_dict(graph)
+
+    if not metapaths or not edges_dict:
+        return _finalize_metapath_result(
+            nodes_dict,
+            edges_dict,
+            as_nx,
+            multigraph,
+            directed,
+            None,
+        )
+
+    edge_attrs = _normalize_edge_attrs(edge_attr)
+    aggregation = _resolve_edge_attr_agg(edge_attr_agg)
+
+    updated_edges = dict(edges_dict)
+    metapath_metadata: dict[tuple[str, str, str], dict[str, object]] = {}
+
+    for mp_index, metapath in enumerate(metapaths):
+        edge_key, result_gdf, metadata_entry = _materialize_metapath(
+            mp_index=mp_index,
+            metapath=metapath,
+            nodes=nodes_dict,
+            edges=edges_dict,
+            directed=directed,
+            edge_attrs=edge_attrs,
+            aggregation=aggregation,
+        )
+        updated_edges[edge_key] = result_gdf
+        metapath_metadata[edge_key] = metadata_entry
+
+    return _finalize_metapath_result(
+        nodes_dict,
+        updated_edges,
+        as_nx,
+        multigraph,
+        directed,
+        metapath_metadata,
+    )
+
+
+def _ensure_hetero_dict(
+    graph: (
+        tuple[
+            dict[str, gpd.GeoDataFrame],
+            dict[tuple[str, str, str], gpd.GeoDataFrame],
+        ]
+        | nx.Graph
+        | nx.MultiGraph
+    ),
+) -> tuple[
+    dict[str, gpd.GeoDataFrame],
+    dict[tuple[str, str, str], gpd.GeoDataFrame],
+]:
+    """
+    Normalize supported inputs to hetero GeoDataFrame dictionaries.
+
+    Ensures callers can work with a predictable pair of hetero mappings.
+
+    Parameters
+    ----------
+    graph : tuple[dict[str, geopandas.GeoDataFrame], dict[tuple[str, str, str], geopandas.GeoDataFrame]] \
+            | networkx.Graph \
+            | networkx.MultiGraph
+        Heterogeneous graph representation accepted by ``add_metapaths``.
+
+    Returns
+    -------
+    tuple[dict[str, geopandas.GeoDataFrame], dict[tuple[str, str, str], geopandas.GeoDataFrame]]
+        Normalised node and edge dictionaries.
+    """
+    if isinstance(graph, tuple):
+        if len(graph) != 2:
+            msg = "Graph tuple must contain (nodes_dict, edges_dict)"
+            raise ValueError(msg)
+
+        nodes_dict, raw_edges = graph
+
+        if not isinstance(nodes_dict, dict):
+            msg = "nodes_dict must be a dictionary"
+            raise TypeError(msg)
+
+        if raw_edges is None:
+            empty_edges: dict[tuple[str, str, str], gpd.GeoDataFrame] = {}
+            return nodes_dict, empty_edges
+
+        if not isinstance(raw_edges, dict):
+            msg = "edges_dict must be a dictionary"
+            raise TypeError(msg)
+
+        normalized_edges = cast(
+            "dict[tuple[str, str, str], gpd.GeoDataFrame]",
+            raw_edges,
+        )
+
+        return nodes_dict, normalized_edges
+
+    if isinstance(graph, (nx.Graph, nx.MultiGraph, nx.DiGraph, nx.MultiDiGraph)):
+        validate_nx(graph)
+        nodes_data, edges_data = nx_to_gdf(graph)
+
+        if not isinstance(nodes_data, dict):
+            msg = "add_metapaths requires a heterogeneous graph with typed nodes"
+            raise TypeError(msg)
+
+        if edges_data is None:
+            normalized_edges_graph: dict[tuple[str, str, str], gpd.GeoDataFrame] = {}
+
+        elif isinstance(edges_data, dict):
+            normalized_edges_graph = cast(
+                "dict[tuple[str, str, str], gpd.GeoDataFrame]",
+                edges_data,
+            )
+
+        else:
+            msg = "add_metapaths requires a heterogeneous graph with typed edges"
+            raise TypeError(msg)
+
+        return nodes_data, normalized_edges_graph
+
+    msg = "Unsupported graph input type for add_metapaths"
+    raise TypeError(msg)
+
+
+@dataclass(slots=True)
+class _EdgeAttrAggregation:
+    """
+    Container describing how to reduce edge attributes along a metapath.
+
+    Stores the callable reducers used during metapath aggregation.
+    """
+
+    tag: object
+    row_reducer: Callable[[pd.DataFrame], pd.Series]
+    group_reducer: str | Callable[[pd.Series], float]
+
+
+def _resolve_edge_attr_agg(
+    edge_attr_agg: str | object | None,
+) -> _EdgeAttrAggregation:
+    """
+    Normalise the aggregation option for edge attributes.
+
+    Translate the user supplied definition into reusable reducers.
+
+    Parameters
+    ----------
+    edge_attr_agg : str | object | None
+        Aggregation strategy requested by the caller. Supported values are
+        ``"sum"``, ``"mean"``, a callable reducer, or ``None`` which defaults to
+        ``"sum"``.
+
+    Returns
+    -------
+    _EdgeAttrAggregation
+        Resolved aggregation metadata containing callable reducers for row and
+        group operations.
+
+    Raises
+    ------
+    ValueError
+        If a string option is supplied that is not ``"sum"`` or ``"mean"``.
+    TypeError
+        If the option is neither a recognised string, a callable, nor ``None``.
+    """
+    option = edge_attr_agg if edge_attr_agg is not None else "sum"
+
+    if isinstance(option, str):
+        normalized = option.lower()
+        if normalized == "sum":
+            return _EdgeAttrAggregation("sum", _row_reduce_sum, "sum")
+        if normalized == "mean":
+            return _EdgeAttrAggregation("mean", _row_reduce_mean, "mean")
+        msg = f"Unsupported edge_attr_agg '{option}'"
+        raise ValueError(msg)
+
+    if callable(option):
+        return _EdgeAttrAggregation(
+            option,
+            functools.partial(_row_reduce_callable, func=option),
+            functools.partial(_group_reduce_callable, func=option),
+        )
+
+    msg = "edge_attr_agg must be 'sum', 'mean', a callable, or None"
+    raise TypeError(msg)
+
+
+def _row_reduce_sum(block: pd.DataFrame) -> pd.Series:
+    """
+    Return row-wise sums for a hop attribute block.
+
+    Missing values are treated as zeros before summation.
+
+    Parameters
+    ----------
+    block : pandas.DataFrame
+        Normalised attribute columns for a single hop across multiple paths.
+
+    Returns
+    -------
+    pandas.Series
+        Row-wise sums with missing values treated as zeros.
+    """
+    numeric = block.apply(pd.to_numeric, errors="coerce")
+    result = numeric.fillna(0.0).sum(axis=1)
+    return cast("pd.Series", result)
+
+
+def _row_reduce_mean(block: pd.DataFrame) -> pd.Series:
+    """
+    Return row-wise means while skipping missing values.
+
+    Each row is reduced to the arithmetic mean of its valid entries.
+
+    Parameters
+    ----------
+    block : pandas.DataFrame
+        Normalised attribute columns for a single hop across multiple paths.
+
+    Returns
+    -------
+    pandas.Series
+        Row-wise means calculated with ``NaN`` values ignored.
+    """
+    numeric = block.apply(pd.to_numeric, errors="coerce")
+    result = numeric.mean(axis=1, skipna=True)
+    return cast("pd.Series", result)
+
+
+def _row_reduce_callable(
+    block: pd.DataFrame,
+    *,
+    func: Callable[[np.ndarray], float],
+) -> pd.Series:
+    """
+    Apply a custom reducer to each row of a hop attribute block.
+
+    Allows user supplied reducers to participate in per-path aggregation.
+
+    Parameters
+    ----------
+    block : pandas.DataFrame
+        Normalised attribute columns for a single hop across multiple paths.
+    func : Callable[[numpy.ndarray], float]
+        Callable that reduces the non-null numeric values in a row to a scalar.
+
+    Returns
+    -------
+    pandas.Series
+        Row-wise reductions produced by ``func``.
+    """
+    numeric = block.apply(pd.to_numeric, errors="coerce")
+    # Avoid passing `func` as a keyword to DataFrame.apply since it clashes with
+    # the DataFrame.apply(func=...) parameter name itself, causing
+    # "multiple values for argument 'func'" TypeError. Use a lambda to forward
+    # the user-supplied reducer to our row helper.
+    result = numeric.apply(lambda row: _apply_callable_row(row, func=func), axis=1)
+    return cast("pd.Series", result)
+
+
+def _apply_callable_row(
+    row: pd.Series,
+    *,
+    func: Callable[[np.ndarray], float],
+) -> float:
+    """
+    Reduce a single hop row using ``func`` while handling empty inputs.
+
+    Helper used by :func:`_row_reduce_callable` to evaluate user reducers.
+
+    Parameters
+    ----------
+    row : pandas.Series
+        Hop attribute values for a single metapath traversal.
+    func : Callable[[numpy.ndarray], float]
+        Callable that reduces numeric values to a scalar result.
+
+    Returns
+    -------
+    float
+        Reduced value for the row; ``NaN`` when all values are missing.
+    """
+    valid = row.dropna().to_numpy()
+    if valid.size == 0:
+        return float("nan")
+    return float(func(valid))
+
+
+def _group_reduce_callable(
+    series: pd.Series,
+    *,
+    func: Callable[[np.ndarray], float],
+) -> float:
+    """
+    Reduce grouped path values with ``func`` while ignoring missing data.
+
+    Ensures custom reducers can be applied during terminal node aggregation.
+
+    Parameters
+    ----------
+    series : pandas.Series
+        Row reductions belonging to the same terminal node pair.
+    func : Callable[[numpy.ndarray], float]
+        Callable that combines numeric values into a scalar summary.
+
+    Returns
+    -------
+    float
+        Aggregated value for the group; ``NaN`` when the group is empty.
+    """
+    numeric = pd.to_numeric(series, errors="coerce").dropna()
+    if numeric.empty:
+        return float("nan")
+    return float(func(numeric.to_numpy()))
+
+
+def _safe_linestring(start_geom: object, end_geom: object) -> LineString | None:
+    """
+    Safely build a ``LineString`` between two geometries when possible.
+
+    Invalid or missing geometries result in ``None``.
+
+    Parameters
+    ----------
+    start_geom : object
+        Geometry for the source node of the metapath edge.
+    end_geom : object
+        Geometry for the destination node of the metapath edge.
+
+    Returns
+    -------
+    shapely.geometry.LineString | None
+        Straight segment between the input geometries, or ``None`` when either
+        geometry is missing or invalid.
+    """
+    if start_geom is None or end_geom is None:
+        return None
+    if getattr(start_geom, "is_empty", False) or getattr(end_geom, "is_empty", False):
+        return None
+    try:
+        return LineString([start_geom, end_geom])
+    except (TypeError, ValueError):
+        return None
+
+
+def _normalize_edge_attrs(edge_attr: str | list[str] | None) -> list[str] | None:
+    """
+    Normalise edge attribute selection to a list.
+
+    Produces predictable iterable input for downstream helpers.
+
+    Parameters
+    ----------
+    edge_attr : str | list[str] | None
+        User-supplied edge attribute selector, a single column name, a list of
+        names, or ``None``.
+
+    Returns
+    -------
+    list[str] | None
+        Normalised list of attribute names, or ``None`` when no attributes were
+        requested.
+    """
+    if edge_attr is None:
+        return None
+    if isinstance(edge_attr, str):
+        return [edge_attr]
+    return list(edge_attr)
+
+
+def _materialize_metapath(
+    *,
+    mp_index: int,
+    metapath: list[tuple[str, str, str]],
+    nodes: dict[str, gpd.GeoDataFrame],
+    edges: dict[tuple[str, str, str], gpd.GeoDataFrame],
+    directed: bool,
+    edge_attrs: list[str] | None,
+    aggregation: _EdgeAttrAggregation,
+) -> tuple[tuple[str, str, str], gpd.GeoDataFrame, dict[str, object]]:
+    """
+    Materialise a single metapath into an aggregated GeoDataFrame.
+
+    Collects hop data, aggregates attributes, and attaches straight geometries.
+
+    Parameters
+    ----------
+    mp_index : int
+        Position of the metapath in the user supplied list.
+    metapath : list[tuple[str, str, str]]
+        Sequence of edge type triples describing each hop.
+    nodes : dict[str, geopandas.GeoDataFrame]
+        Node GeoDataFrames keyed by node type.
+    edges : dict[tuple[str, str, str], geopandas.GeoDataFrame]
+        Edge GeoDataFrames keyed by edge type triples.
+    directed : bool
+        Whether traversals must respect edge direction strictly.
+    edge_attrs : list[str] | None
+        Optional edge attribute columns to aggregate along the path.
+    aggregation : _EdgeAttrAggregation
+        Aggregation helpers for per-row and per-group reductions.
+
+    Returns
+    -------
+    tuple[tuple[str, str, str], geopandas.GeoDataFrame, dict[str, object]]
+        Edge identifier, aggregated GeoDataFrame, and metadata describing the
+        generated metapath edges.
+
+    Raises
+    ------
+    ValueError
+        If the metapath is shorter than two hops or a hop lacks a two-level
+        ``MultiIndex``.
+    KeyError
+        If a required edge attribute column or node GeoDataFrame is missing.
+    """
+    if len(metapath) < 2:
+        msg = "Each metapath must contain at least two edge types"
+        raise ValueError(msg)
+
+    start_type = metapath[0][0]
+    end_type = metapath[-1][-1]
+    edge_key = (start_type, f"metapath_{mp_index}", end_type)
+    metadata = {
+        "metapath_spec": tuple(metapath),
+        "edge_attr": None if edge_attrs is None else tuple(edge_attrs),
+        "edge_attr_agg": aggregation.tag,
+    }
+
+    frames: list[pd.DataFrame] = []
+    start_index_name = f"{start_type}_id"
+    end_index_name = f"{end_type}_id"
+
+    for step_idx, edge_type in enumerate(metapath):
+        edge_gdf, reversed_lookup = _get_edge_frame(edges, edge_type, directed)
+
+        if not isinstance(edge_gdf.index, pd.MultiIndex) or edge_gdf.index.nlevels < 2:
+            msg = f"Edge GeoDataFrame for {edge_type} must have a two-level MultiIndex"
+            raise ValueError(msg)
+
+        src_level = 1 if reversed_lookup else 0
+        dst_level = 0 if reversed_lookup else 1
+
+        if step_idx == 0:
+            start_index_name = _normalise_index_name(
+                edge_gdf.index.names[src_level],
+                f"{start_type}_id",
+            )
+        if step_idx == len(metapath) - 1:
+            end_index_name = _normalise_index_name(
+                edge_gdf.index.names[dst_level],
+                f"{end_type}_id",
+            )
+
+        frames.append(
+            _edge_step_frame(
+                edge_gdf=edge_gdf,
+                step_idx=step_idx,
+                src_level=src_level,
+                dst_level=dst_level,
+                edge_attrs=edge_attrs,
+            ),
+        )
+
+    empty_result = _empty_metapath_gdf(
+        nodes,
+        start_type,
+        end_type,
+        edge_attrs,
+        start_index_name,
+        end_index_name,
+    )
+
+    if not frames or any(frame.empty for frame in frames):
+        return edge_key, empty_result, metadata
+
+    joined = _join_metapath_frames(frames)
+    if joined.empty:
+        return edge_key, empty_result, metadata
+
+    aggregated = _reduce_metapath_paths(
+        joined,
+        step_count=len(frames),
+        edge_attrs=edge_attrs,
+        aggregation=aggregation,
+        start_index_name=start_index_name,
+        end_index_name=end_index_name,
+    )
+    if aggregated is None or aggregated.empty:
+        return edge_key, empty_result, metadata
+
+    result = _attach_metapath_geometry(aggregated, nodes, start_type, end_type)
+    return edge_key, result, metadata
+
+
+def _get_edge_frame(
+    edges: dict[tuple[str, str, str], gpd.GeoDataFrame],
+    edge_type: tuple[str, str, str],
+    directed: bool,
+) -> tuple[gpd.GeoDataFrame, bool]:
+    """
+    Fetch the GeoDataFrame for an edge type, optionally using the reverse.
+
+    Falls back to the reverse specification when the traversal is undirected.
+
+    Parameters
+    ----------
+    edges : dict[tuple[str, str, str], geopandas.GeoDataFrame]
+        Mapping of edge types to their GeoDataFrames.
+    edge_type : tuple[str, str, str]
+        Edge type describing the hop currently being materialised.
+    directed : bool
+        Whether reverse lookups are disallowed.
+
+    Returns
+    -------
+    tuple[geopandas.GeoDataFrame, bool]
+        GeoDataFrame for the hop and a flag indicating if the reverse
+        orientation was used.
+
+    Raises
+    ------
+    KeyError
+        If neither the requested nor reverse edge type is available.
+    """
+    try:
+        return edges[edge_type], False
+    except KeyError:
+        if directed:
+            msg = f"Edge type {edge_type} not found in edges dictionary"
+            raise KeyError(msg) from None
+        reverse_key = (edge_type[2], edge_type[1], edge_type[0])
+        if reverse_key in edges:
+            return edges[reverse_key], True
+        msg = f"Edge type {edge_type} not found in edges dictionary"
+        raise KeyError(msg) from None
+
+
+def _edge_step_frame(
+    *,
+    edge_gdf: gpd.GeoDataFrame,
+    step_idx: int,
+    src_level: int,
+    dst_level: int,
+    edge_attrs: list[str] | None,
+) -> pd.DataFrame:
+    """
+    Convert one hop into a canonical DataFrame used for joins.
+
+    Provides consistent column naming for subsequent merges.
+
+    Parameters
+    ----------
+    edge_gdf : geopandas.GeoDataFrame
+        GeoDataFrame describing the hop.
+    step_idx : int
+        Zero-based hop index within the metapath.
+    src_level : int
+        Index level to treat as the hop source.
+    dst_level : int
+        Index level to treat as the hop destination.
+    edge_attrs : list[str] | None
+        Optional edge attributes to propagate through the traversal.
+
+    Returns
+    -------
+    pandas.DataFrame
+        Canonical hop representation with source/destination identifiers and
+        optional attribute columns.
+    """
+    src_col = f"src_{step_idx}"
+    dst_col = f"dst_{step_idx}"
+
+    columns = [src_col, dst_col]
+    available_attrs: list[str] | None = None
+    if edge_attrs:
+        available_attrs = [attr for attr in edge_attrs if attr in edge_gdf.columns]
+        columns.extend(f"{attr}_step{step_idx}" for attr in available_attrs)
+
+    if edge_gdf.empty:
+        return pd.DataFrame(columns=columns)
+
+    data: dict[str, np.ndarray] = {
+        src_col: edge_gdf.index.get_level_values(src_level).to_numpy(),
+        dst_col: edge_gdf.index.get_level_values(dst_level).to_numpy(),
+    }
+
+    if available_attrs:
+        for attr in available_attrs:
+            data[f"{attr}_step{step_idx}"] = edge_gdf[attr].to_numpy()
+
+    return pd.DataFrame(data)
+
+
+def _join_metapath_frames(frames: list[pd.DataFrame]) -> pd.DataFrame:
+    """
+    Inner-join successive hop frames to enumerate complete traversals.
+
+    Each join connects the destination identifiers of one hop to the source of
+    the next.
+
+    Parameters
+    ----------
+    frames : list[pandas.DataFrame]
+        Canonical hop frames produced by :func:`_edge_step_frame`.
+
+    Returns
+    -------
+    pandas.DataFrame
+        Joined metapath traversals with aligned hop information.
+    """
+    if not frames:
+        return pd.DataFrame()
+
+    combined = frames[0]
+    for idx in range(1, len(frames)):
+        combined = combined.merge(
+            frames[idx],
+            left_on=f"dst_{idx - 1}",
+            right_on=f"src_{idx}",
+            how="inner",
+            copy=False,
+        )
+        combined = combined.drop(columns=f"src_{idx}", errors="ignore")
+        if combined.empty:
+            break
+
+    return combined
+
+
+def _reduce_metapath_paths(
+    combined: pd.DataFrame,
+    *,
+    step_count: int,
+    edge_attrs: list[str] | None,
+    aggregation: _EdgeAttrAggregation,
+    start_index_name: str,
+    end_index_name: str,
+) -> pd.DataFrame | None:
+    """
+    Group joined paths into terminal node pairs with aggregated weights.
+
+    Produces a compact table ready for geometry attachment.
+
+    Parameters
+    ----------
+    combined : pandas.DataFrame
+        Joined traversal table produced by :func:`_join_metapath_frames`.
+    step_count : int
+        Number of hops in the metapath.
+    edge_attrs : list[str] | None
+        Optional edge attributes to aggregate along each traversal.
+    aggregation : _EdgeAttrAggregation
+        Aggregation helpers defining row and group reductions.
+    start_index_name : str
+        Name for the source level in the output ``MultiIndex``.
+    end_index_name : str
+        Name for the destination level in the output ``MultiIndex``.
+
+    Returns
+    -------
+    pandas.DataFrame | None
+        Aggregated table indexed by terminal node pairs, or ``None`` when no
+        traversals survive.
+
+    Raises
+    ------
+    KeyError
+        If a required edge attribute column is missing from the joined table.
+    """
+    if combined.empty:
+        return None
+
+    src_col = "src_0"
+    dst_col = f"dst_{step_count - 1}"
+
+    workload = pd.DataFrame(
+        {
+            "src": combined[src_col].to_numpy(),
+            "dst": combined[dst_col].to_numpy(),
+            "weight": np.ones(len(combined), dtype=float),
+        },
+    )
+
+    agg_map: dict[str, str | Callable[[pd.Series], float]] = {"weight": "sum"}
+
+    if edge_attrs:
+        for attr in edge_attrs:
+            step_columns = [f"{attr}_step{i}" for i in range(step_count)]
+            missing = set(step_columns) - set(combined.columns)
+            if missing:
+                msg = f"Edge attribute(s) '{attr}' missing in metapath steps"
+                raise KeyError(msg)
+            block = combined[step_columns]
+            workload[attr] = aggregation.row_reducer(block).to_numpy()
+            agg_map[attr] = aggregation.group_reducer
+
+    aggregated = workload.groupby(["src", "dst"], sort=False).agg(agg_map)
+    if aggregated.empty:
+        return None
+
+    aggregated.index = aggregated.index.set_names([start_index_name, end_index_name])
+    return aggregated
+
+
+def _empty_metapath_gdf(
+    nodes: dict[str, gpd.GeoDataFrame],
+    start_type: str,
+    end_type: str,
+    edge_attrs: list[str] | None,
+    start_index_name: str,
+    end_index_name: str,
+) -> gpd.GeoDataFrame:
+    """
+    Create an empty GeoDataFrame placeholder for unmet metapaths.
+
+    Ensures downstream consumers receive consistent structure even with no data.
+
+    Parameters
+    ----------
+    nodes : dict[str, geopandas.GeoDataFrame]
+        Mapping of node types to their GeoDataFrames.
+    start_type : str
+        Node type at the beginning of the metapath.
+    end_type : str
+        Node type at the end of the metapath.
+    edge_attrs : list[str] | None
+        Optional edge attributes expected in the result.
+    start_index_name : str
+        Name for the source level in the result index.
+    end_index_name : str
+        Name for the destination level in the result index.
+
+    Returns
+    -------
+    geopandas.GeoDataFrame
+        Empty GeoDataFrame matching the expected schema for the metapath.
+    """
+    columns = ["weight"]
+    if edge_attrs:
+        columns.extend(edge_attrs)
+    columns.append("geometry")
+
+    start_nodes = nodes.get(start_type)
+    end_nodes = nodes.get(end_type)
+
+    crs = None
+    if start_nodes is not None and start_nodes.crs:
+        crs = start_nodes.crs
+    elif end_nodes is not None:
+        crs = end_nodes.crs
+
+    empty = gpd.GeoDataFrame(columns=columns, geometry="geometry", crs=crs)
+    empty.index = pd.MultiIndex.from_tuples([], names=[start_index_name, end_index_name])
+    return empty
+
+
+def _attach_metapath_geometry(
+    aggregated: pd.DataFrame,
+    nodes: dict[str, gpd.GeoDataFrame],
+    start_type: str,
+    end_type: str,
+) -> gpd.GeoDataFrame:
+    """
+    Attach straight geometries between terminal node pairs.
+
+    Generates straight-line links that connect the start and end node positions.
+
+    Parameters
+    ----------
+    aggregated : pandas.DataFrame
+        Aggregated metapath table produced by :func:`_reduce_metapath_paths`.
+    nodes : dict[str, geopandas.GeoDataFrame]
+        Mapping of node types to their GeoDataFrames.
+    start_type : str
+        Node type for the source nodes.
+    end_type : str
+        Node type for the destination nodes.
+
+    Returns
+    -------
+    geopandas.GeoDataFrame
+        GeoDataFrame containing aggregated metrics and straight-line geometries.
+
+    Raises
+    ------
+    KeyError
+        If node GeoDataFrames for ``start_type`` or ``end_type`` are missing.
+    """
+    start_nodes = nodes.get(start_type)
+    end_nodes = nodes.get(end_type)
+
+    if start_nodes is None or end_nodes is None:
+        msg = f"Missing node GeoDataFrame for start '{start_type}' or end '{end_type}'"
+        raise KeyError(msg)
+
+    start_series = start_nodes.geometry.reindex(aggregated.index.get_level_values(0))
+    end_series = end_nodes.geometry.reindex(aggregated.index.get_level_values(1))
+
+    geometries = [
+        _safe_linestring(start_geom, end_geom)
+        for start_geom, end_geom in zip(start_series, end_series, strict=False)
+    ]
+
+    crs = start_nodes.crs or end_nodes.crs
+    result = gpd.GeoDataFrame(aggregated, geometry=geometries, crs=crs)
+
+    if "weight" in result.columns and not result.empty:
+        weight_series = result["weight"]
+        if weight_series.notna().all():
+            rounded = weight_series.round()
+            if np.allclose(weight_series.to_numpy(), rounded.to_numpy()):
+                result["weight"] = rounded.astype(int)
+
+    return result
+
+
+def _normalise_index_name(raw_name: object, fallback: str) -> str:
+    """
+    Return a sensible index level name for merged metapaths.
+
+    Provides deterministic naming when original indices are unnamed.
+
+    Parameters
+    ----------
+    raw_name : object
+        Original index level name extracted from a ``MultiIndex``.
+    fallback : str
+        Name to use when the source level is unnamed.
+
+    Returns
+    -------
+    str
+        Normalised index level name.
+    """
+    if isinstance(raw_name, str) and raw_name:
+        return raw_name
+    if raw_name is None:
+        return fallback
+    return str(raw_name)
+
+
+def _finalize_metapath_result(
+    nodes_dict: dict[str, gpd.GeoDataFrame],
+    edges_dict: dict[tuple[str, str, str], gpd.GeoDataFrame],
+    as_nx: bool,
+    multigraph: bool,
+    directed: bool,
+    metadata: dict[tuple[str, str, str], dict[str, object]] | None,
+) -> (
+    nx.Graph
+    | nx.MultiGraph
+    | tuple[
+        dict[str, gpd.GeoDataFrame],
+        dict[tuple[str, str, str], gpd.GeoDataFrame],
+    ]
+):
+    """
+    Return hetero dictionaries or convert to NetworkX with metadata.
+
+    Handles the optional conversion to NetworkX while keeping metadata in sync.
+
+    Parameters
+    ----------
+    nodes_dict : dict[str, geopandas.GeoDataFrame]
+        Mapping of node types to their GeoDataFrames.
+    edges_dict : dict[tuple[str, str, str], geopandas.GeoDataFrame]
+        Mapping of edge types to their GeoDataFrames.
+    as_nx : bool
+        Whether to convert the result to a NetworkX graph.
+    multigraph : bool
+        Build a :class:`networkx.MultiGraph` when returning NetworkX data.
+    directed : bool
+        Produce a directed NetworkX graph if requested.
+    metadata : dict[tuple[str, str, str], dict[str, object]] | None
+        Metadata describing metapath-derived edges to attach to the graph.
+
+    Returns
+    -------
+    networkx.Graph | networkx.MultiGraph | tuple[dict[str, geopandas.GeoDataFrame], dict[tuple[str, str, str], geopandas.GeoDataFrame]]
+        Either the hetero GeoDataFrame dictionaries or, when ``as_nx`` is set,
+        a NetworkX graph updated with the provided metadata.
+    """
+    if not as_nx:
+        return nodes_dict, edges_dict
+
+    nx_graph = gdf_to_nx(
+        nodes=nodes_dict,
+        edges=edges_dict,
+        multigraph=multigraph,
+        directed=directed,
+    )
+
+    if metadata:
+        existing = nx_graph.graph.get("metapath_dict")
+        if isinstance(existing, dict):
+            existing.update(metadata)
+        else:
+            existing = dict(metadata)
+        nx_graph.graph["metapath_dict"] = existing
+
+    return nx_graph
