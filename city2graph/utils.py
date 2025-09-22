@@ -2034,7 +2034,7 @@ class GraphAnalyzer:
 
 def dual_graph(
     graph: tuple[gpd.GeoDataFrame, gpd.GeoDataFrame] | nx.Graph | nx.MultiGraph,
-    edge_id_col: str | None,
+    edge_id_col: str | None = None,
     keep_original_geom: bool = False,
     as_nx: bool = False,
 ) -> tuple[gpd.GeoDataFrame, gpd.GeoDataFrame] | nx.Graph | nx.MultiGraph:
@@ -2458,6 +2458,7 @@ def nx_to_gdf(
     G: nx.Graph | nx.MultiGraph,
     nodes: bool = True,
     edges: bool = True,
+    set_missing_pos_from: tuple[str, ...] | None = ("x", "y"),
 ) -> (
     gpd.GeoDataFrame
     | tuple[gpd.GeoDataFrame, gpd.GeoDataFrame]
@@ -2481,6 +2482,10 @@ def nx_to_gdf(
         If True, a GeoDataFrame for nodes will be created and returned.
     edges : bool, default True
         If True, a GeoDataFrame for edges will be created and returned.
+    set_missing_pos_from : tuple[str, ...] | None, default ("x", "y")
+            If provided (or None implies ("x", "y")) set missing node 'pos' from
+            the given attribute name(s). With two names use them as x/y; with one
+            name expect a 2-length coordinate.
 
     Returns
     -------
@@ -2523,6 +2528,35 @@ def nx_to_gdf(
     if not (nodes or edges):
         msg = "Must request at least one of nodes or edges"
         raise ValueError(msg)
+
+    # Minimal pre-processing to set missing 'pos' from provided attribute names
+    existing_pos = nx.get_node_attributes(G, "pos")
+
+    if not existing_pos and set_missing_pos_from is not None:
+        if len(set_missing_pos_from) == 2:
+            x_name, y_name = set_missing_pos_from[0], set_missing_pos_from[1]
+            x_attr = nx.get_node_attributes(G, x_name)
+            y_attr = nx.get_node_attributes(G, y_name)
+            eligible = x_attr.keys() & y_attr.keys()
+            to_set = {
+                n: (x_attr[n], y_attr[n])
+                for n in eligible
+                if x_attr[n] is not None and y_attr[n] is not None
+            }
+            if to_set:
+                nx.set_node_attributes(G, to_set, "pos")
+
+        elif len(set_missing_pos_from) == 1:
+            coord_name = set_missing_pos_from[0]
+            coord_attr = nx.get_node_attributes(G, coord_name)
+            to_set = {
+                n: (v[0], v[1]) if not isinstance(v, tuple) else v
+                for n, v in coord_attr.items()
+                if isinstance(v, (list, tuple)) and len(v) == 2
+            }
+            if to_set:
+                nx.set_node_attributes(G, to_set, "pos")
+
     converter = GraphConverter()
     return converter.nx_to_gdf(G, nodes, edges)
 

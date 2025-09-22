@@ -113,8 +113,32 @@ For CUDA-enabled PyTorch (conda):
 Examples
 --------
 
-**Morphology**
+**Graph**
 
+.. code-block:: python
+
+   # Define metapath: amenity -> segment -> segment -> amenity (3-hop in this case)
+   metapaths = [[("amenity", "is_nearby", "segment"),
+                 ("segment", "connects", "segment"),
+                 ("segment", "connects", "segment"),
+                 ("segment", "is_nearby", "amenity")]]
+
+   # Add metapath-derived edges to connect amenities through street networks
+   nodes_with_metapaths, edges_with_metapaths = city2graph.add_metapaths(
+       (combined_nodes, combined_edges),
+       metapaths,
+       edge_attr="distance_m",
+       edge_attr_agg="sum"
+   )
+
+.. figure:: _static/metapath.gif
+   :width: 1000px
+   :alt: Animation showing metapath connections between amenities through street segments in Soho, London
+   :align: center
+
+>> For details, see :doc:`examples/add_metapaths`
+
+**Morphology**
 
 .. code-block:: python
 
