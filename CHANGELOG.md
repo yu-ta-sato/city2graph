@@ -5,6 +5,24 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+
+## 0.1.6 (2025-09-22)
+
+### Added
+- Added `add_metapath` by @yu-ta-sato in https://github.com/c2g-dev/city2graph/pull/43
+- Added `set_missing_pos_from` with default of `("x", "y")` in `nx_to_gdf` in https://github.com/c2g-dev/city2graph/pull/43
+
+
+### Changed
+- Refactored test codes and adjusted sources by @yu-ta-sato in https://github.com/c2g-dev/city2graph/pull/44
+
+### Fixed
+- Set None as default for `edge_id_col` in `dual_graph` in https://github.com/c2g-dev/city2graph/pull/43
+
+### Documentation
+- Added examples of `add_metapaths` in https://city2graph.net/examples/adding_metapaths.ipynb
+
+
 ## 0.1.5 (2025-09-19)
 
 ### Added
@@ -13,9 +31,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 - Improved computation efficiency in `_add_edges`
-
-### Changed
-- N/A
 
 ### Fixed
 - Fixed the issue [#30](https://github.com/c2g-dev/city2graph/issues/30)
