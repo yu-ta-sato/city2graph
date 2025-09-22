@@ -758,6 +758,28 @@ def test_add_metapaths_basic_aggregations(
             assert result["travel_time"].isna().all()
 
 
+def test_add_metapaths_edge_attr_list(
+    sample_hetero_nodes_dict: dict[str, gpd.GeoDataFrame],
+    sample_hetero_edges_dict: dict[tuple[str, str, str], gpd.GeoDataFrame],
+) -> None:
+    """Passing ``edge_attr`` as a list should aggregate each requested column."""
+    edges_with_attr = {k: v.copy() for k, v in sample_hetero_edges_dict.items()}
+    for gdf in edges_with_attr.values():
+        gdf["travel_time"] = 1.0
+
+    _, edges_out = graph_module.add_metapaths(
+        (sample_hetero_nodes_dict, edges_with_attr),
+        METAPATH,
+        edge_attr=["travel_time"],
+        edge_attr_agg="sum",
+    )
+
+    result = edges_out[RESULT_KEY]
+    assert "travel_time" in result.columns
+    if not result.empty:
+        assert (result["travel_time"] > 0).all()
+
+
 # --- Return formats & NX integration ---
 @pytest.mark.parametrize("mode", ["as_nx", "networkx_input", "metadata_merge"])
 def test_add_metapaths_return_formats(
@@ -805,6 +827,69 @@ def test_add_metapaths_return_formats(
         )
         assert isinstance(g, nx.MultiGraph)
         assert "legacy" in g.graph["metapath_dict"]
+
+
+def test_add_metapaths_index_name_fallback(
+    sample_hetero_nodes_dict: dict[str, gpd.GeoDataFrame],
+    sample_hetero_edges_dict: dict[tuple[str, str, str], gpd.GeoDataFrame],
+) -> None:
+    """Unnamed hop indices should fall back to sensible identifiers."""
+    edges_no_names = {k: v.copy() for k, v in sample_hetero_edges_dict.items()}
+    for gdf in edges_no_names.values():
+        gdf.index = gdf.index.set_names([None, None])
+
+    _, edges_out = graph_module.add_metapaths(
+        (sample_hetero_nodes_dict, edges_no_names),
+        METAPATH,
+    )
+
+    result = edges_out[RESULT_KEY]
+    assert result.index.names == ["building_id", "road_id"]
+
+
+def test_add_metapaths_nx_edges_none(
+    sample_hetero_nodes_dict: dict[str, gpd.GeoDataFrame],
+    sample_hetero_edges_dict: dict[tuple[str, str, str], gpd.GeoDataFrame],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When ``nx_to_gdf`` returns ``None`` for edges, it should normalise to {}."""
+    hetero_graph = gdf_to_nx(
+        nodes=sample_hetero_nodes_dict,
+        edges=sample_hetero_edges_dict,
+        multigraph=True,
+    )
+
+    monkeypatch.setattr(
+        graph_module,
+        "nx_to_gdf",
+        lambda _g: (sample_hetero_nodes_dict, None),
+    )
+
+    nodes_out, edges_out = graph_module.add_metapaths(hetero_graph, METAPATH)
+    assert nodes_out is sample_hetero_nodes_dict
+    assert edges_out == {}
+
+
+def test_add_metapaths_nx_edges_wrong_type(
+    sample_hetero_nodes_dict: dict[str, gpd.GeoDataFrame],
+    sample_hetero_edges_dict: dict[tuple[str, str, str], gpd.GeoDataFrame],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Non-dict edge data from ``nx_to_gdf`` should raise ``TypeError``."""
+    hetero_graph = gdf_to_nx(
+        nodes=sample_hetero_nodes_dict,
+        edges=sample_hetero_edges_dict,
+        multigraph=True,
+    )
+
+    monkeypatch.setattr(
+        graph_module,
+        "nx_to_gdf",
+        lambda _g: (sample_hetero_nodes_dict, [1, 2, 3]),
+    )
+
+    with pytest.raises(TypeError, match="typed edges"):
+        graph_module.add_metapaths(hetero_graph, METAPATH)
 
 
 # --- Input normalisation early returns ---

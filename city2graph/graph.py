@@ -3125,6 +3125,13 @@ def add_metapaths(
     tuple[dict[str, GeoDataFrame], dict[tuple[str, str, str], GeoDataFrame]] | networkx.Graph | networkx.MultiGraph
         Updated heterogeneous dictionaries or a NetworkX graph with metapath
         edges appended.
+
+    Notes
+    -----
+    Legacy scaffolding for path-tracing geometries has been removed because it
+    was never executed. The ``trace_path`` argument is preserved for API
+    compatibility but remains a no-op while straight-line geometries are
+    generated for all metapath edges.
     """
     if trace_path:
         logger.debug("trace_path option is not implemented; ignoring request.")
@@ -3235,18 +3242,16 @@ def _ensure_hetero_dict(
             raise TypeError(msg)
 
         if edges_data is None:
-            normalized_edges_graph: dict[tuple[str, str, str], gpd.GeoDataFrame] = {}
+            return nodes_data, {}
 
-        elif isinstance(edges_data, dict):
-            normalized_edges_graph = cast(
-                "dict[tuple[str, str, str], gpd.GeoDataFrame]",
-                edges_data,
-            )
-
-        else:
+        if not isinstance(edges_data, dict):
             msg = "add_metapaths requires a heterogeneous graph with typed edges"
             raise TypeError(msg)
 
+        normalized_edges_graph = cast(
+            "dict[tuple[str, str, str], gpd.GeoDataFrame]",
+            edges_data,
+        )
         return nodes_data, normalized_edges_graph
 
     msg = "Unsupported graph input type for add_metapaths"
@@ -3602,7 +3607,7 @@ def _materialize_metapath(
         end_index_name,
     )
 
-    if not frames or any(frame.empty for frame in frames):
+    if any(frame.empty for frame in frames):
         return edge_key, empty_result, metadata
 
     joined = _join_metapath_frames(frames)
@@ -3617,7 +3622,7 @@ def _materialize_metapath(
         start_index_name=start_index_name,
         end_index_name=end_index_name,
     )
-    if aggregated is None or aggregated.empty:
+    if aggregated.empty:
         return edge_key, empty_result, metadata
 
     result = _attach_metapath_geometry(aggregated, nodes, start_type, end_type)
@@ -3740,9 +3745,6 @@ def _join_metapath_frames(frames: list[pd.DataFrame]) -> pd.DataFrame:
     pandas.DataFrame
         Joined metapath traversals with aligned hop information.
     """
-    if not frames:
-        return pd.DataFrame()
-
     combined = frames[0]
     for idx in range(1, len(frames)):
         combined = combined.merge(
@@ -3767,7 +3769,7 @@ def _reduce_metapath_paths(
     aggregation: _EdgeAttrAggregation,
     start_index_name: str,
     end_index_name: str,
-) -> pd.DataFrame | None:
+) -> pd.DataFrame:
     """
     Group joined paths into terminal node pairs with aggregated weights.
 
@@ -3790,18 +3792,15 @@ def _reduce_metapath_paths(
 
     Returns
     -------
-    pandas.DataFrame | None
-        Aggregated table indexed by terminal node pairs, or ``None`` when no
-        traversals survive.
+    pandas.DataFrame
+        Aggregated table indexed by terminal node pairs. The table is empty
+        when no traversals survive the joins or aggregation.
 
     Raises
     ------
     KeyError
         If a required edge attribute column is missing from the joined table.
     """
-    if combined.empty:
-        return None
-
     src_col = "src_0"
     dst_col = f"dst_{step_count - 1}"
 
@@ -3828,10 +3827,44 @@ def _reduce_metapath_paths(
 
     aggregated = workload.groupby(["src", "dst"], sort=False).agg(agg_map)
     if aggregated.empty:
-        return None
+        return _empty_metapath_frame(edge_attrs, start_index_name, end_index_name)
 
     aggregated.index = aggregated.index.set_names([start_index_name, end_index_name])
     return aggregated
+
+
+def _empty_metapath_frame(
+    edge_attrs: list[str] | None,
+    start_index_name: str,
+    end_index_name: str,
+) -> pd.DataFrame:
+    """
+    Create an empty aggregation frame with a consistent schema.
+
+    Ensures downstream consumers receive predictable column ordering and index
+    names even when no metapath traversals are available.
+
+    Parameters
+    ----------
+    edge_attrs : list[str] | None
+        Edge attributes expected in the aggregated output.
+    start_index_name : str
+        MultiIndex level name representing the metapath start nodes.
+    end_index_name : str
+        MultiIndex level name representing the metapath end nodes.
+
+    Returns
+    -------
+    pandas.DataFrame
+        Empty DataFrame with the requested columns and index structure.
+    """
+    columns = ["weight"]
+    if edge_attrs:
+        columns.extend(edge_attrs)
+
+    frame = pd.DataFrame(columns=columns)
+    frame.index = pd.MultiIndex.from_tuples([], names=[start_index_name, end_index_name])
+    return frame
 
 
 def _empty_metapath_gdf(
@@ -3867,11 +3900,6 @@ def _empty_metapath_gdf(
     geopandas.GeoDataFrame
         Empty GeoDataFrame matching the expected schema for the metapath.
     """
-    columns = ["weight"]
-    if edge_attrs:
-        columns.extend(edge_attrs)
-    columns.append("geometry")
-
     start_nodes = nodes.get(start_type)
     end_nodes = nodes.get(end_type)
 
@@ -3881,9 +3909,13 @@ def _empty_metapath_gdf(
     elif end_nodes is not None:
         crs = end_nodes.crs
 
-    empty = gpd.GeoDataFrame(columns=columns, geometry="geometry", crs=crs)
-    empty.index = pd.MultiIndex.from_tuples([], names=[start_index_name, end_index_name])
-    return empty
+    base_frame = _empty_metapath_frame(edge_attrs, start_index_name, end_index_name)
+    geometry = gpd.GeoSeries([], crs=crs)
+    return gpd.GeoDataFrame(
+        base_frame.assign(geometry=geometry),
+        geometry="geometry",
+        crs=crs,
+    )
 
 
 def _attach_metapath_geometry(
