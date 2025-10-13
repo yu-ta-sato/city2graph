@@ -2,14 +2,14 @@
 
 city2graph
 ==========
-.. figure:: _static/city2graph_logo_main.png
-   :width: 400px
+.. figure:: _static/social_preview_city2graph.png
+   :width: 1000px
    :alt: city2graph logo
    :align: center
    :class: only-light
 
-.. figure:: _static/city2graph_logo_main_dark.png
-   :width: 400px
+.. figure:: _static/social_preview.png
+   :width: 1000px
    :alt: city2graph logo
    :align: center
    :class: only-dark
@@ -35,6 +35,10 @@ Keywords
 --------
 
 GeoAI, Graph Neural Networks, GNNs, PyTorch Geometric, Geospatial Analysis, Urban Analytics, Spatial Data Science, Urban Mobility, Transportation Networks, Geospatial Foundation Models, Digital Twin, Urban Informatics, Geographic Data Science, Graph Representation Learning, Urban Planning and Design, Urban Morphology.
+
+.. |Stars| image:: https://img.shields.io/github/stars/c2g-dev/city2graph
+   :target: https://github.com/c2g-dev/city2graph
+   :alt: GitHub Stars
 
 .. |PyPI| image:: https://badge.fury.io/py/city2graph.svg
    :target: https://badge.fury.io/py/city2graph
@@ -68,7 +72,7 @@ GeoAI, Graph Neural Networks, GNNs, PyTorch Geometric, Geospatial Analysis, Urba
    :target: https://github.com/astral-sh/ruff
    :alt: Ruff
 
-|PyPI| |conda-forge| |PyPIDownloads| |DOI| |License| |Platform| |codecov| |Ruff|
+|Stars| |PyPI| |conda-forge| |PyPIDownloads| |DOI| |License| |Platform| |codecov| |Ruff|
 
 Quickstart
 ----------
@@ -113,6 +117,13 @@ For CUDA-enabled PyTorch (conda):
 Examples
 --------
 
+.. code-block:: python
+
+   import city2graph as c2g
+   import geopandas as gpd
+   import pandas as pd
+   from pathlib import Path
+
 **Graph**
 
 .. code-block:: python
@@ -124,7 +135,7 @@ Examples
                  ("segment", "is_nearby", "amenity")]]
 
    # Add metapath-derived edges to connect amenities through street networks
-   nodes_with_metapaths, edges_with_metapaths = city2graph.add_metapaths(
+   nodes_with_metapaths, edges_with_metapaths = c2g.add_metapaths(
        (combined_nodes, combined_edges),
        metapaths,
        edge_attr="distance_m",
@@ -142,7 +153,7 @@ Examples
 
 .. code-block:: python
 
-   morphological_nodes, morphological_edges = city2graph.morphological_graph(
+   morphological_nodes, morphological_edges = c2g.morphological_graph(
       buildings_gdf,
       segments_gdf,
       center_point,
@@ -163,9 +174,9 @@ Examples
 .. code-block:: python
 
    sample_gtfs_path = Path("./itm_london_gtfs.zip")
-   gtfs_data = city2graph.load_gtfs(sample_gtfs_path)
+   gtfs_data = c2g.load_gtfs(sample_gtfs_path)
 
-   travel_summary_nodes, travel_summary_edges = city2graph.travel_summary_graph(
+   travel_summary_nodes, travel_summary_edges = c2g.travel_summary_graph(
       gtfs_data, calendar_start="20250601", calendar_end="20250601")
 
 .. figure:: _static/trav_sum_network_overview.png
@@ -186,7 +197,7 @@ Examples
    zones_gdf = gpd.read_file("zones.gpkg")
 
    # Convert OD matrix to graph
-   od_nodes, od_edges = city2graph.od_matrix_to_graph(
+   od_nodes, od_edges = c2g.od_matrix_to_graph(
        od_data,
        zones_gdf,
        source_col="origin",
@@ -209,7 +220,7 @@ Examples
 
 .. code-block:: python
 
-   fixed_radius_graph = city2graph.fixed_radius_graph(poi_gdf, radius=100)
+   fixed_radius_graph = c2g.fixed_radius_graph(poi_gdf, radius=100)
 
 .. raw:: html
 
@@ -222,17 +233,17 @@ Examples
 
 .. code-block:: python
 
-   wax_l1_nodes, wax_l1_edges = city2graph.waxman_graph(poi_gdf,
+   wax_l1_nodes, wax_l1_edges = c2g.waxman_graph(poi_gdf,
                                     distance_metric="manhattan",
                                     r0=100,
                                     beta=0.5)
 
-   wax_l2_nodes, wax_l2_edges = city2graph.waxman_graph(poi_gdf,
+   wax_l2_nodes, wax_l2_edges = c2g.waxman_graph(poi_gdf,
                                     distance_metric="euclidean",
                                     r0=100,
                                     beta=0.5)
 
-   wax_net_nodes, wax_net_edges = city2graph.waxman_graph(poi_gdf,
+   wax_net_nodes, wax_net_edges = c2g.waxman_graph(poi_gdf,
                                     distance_metric="network",
                                     r0=100,
                                     beta=0.5,
@@ -252,7 +263,7 @@ Examples
    }
 
    # Generate proximity edges between layers using KNN method
-   proximity_nodes, proximity_edges = city2graph.bridge_nodes(
+   proximity_nodes, proximity_edges = c2g.bridge_nodes(
       nodes_dict,
       proximity_method="knn",
       k=5,
@@ -267,7 +278,7 @@ Examples
 .. code-block:: python
 
    # Build a contiguity graph (Queen or Rook) from polygonal zones
-   wn_q_nodes, wn_q_edges = city2graph.contiguity_graph(
+   wn_q_nodes, wn_q_edges = c2g.contiguity_graph(
        wards_gdf,
        contiguity="queen",        # or "rook"
        distance_metric="euclidean" # or "manhattan", "network"
@@ -276,7 +287,7 @@ Examples
 .. code-block:: python
 
    # Link point features (e.g., POIs, stops) to containing polygons (e.g., wards)
-   nodes_dict, edges_dict = city2graph.group_nodes(
+   nodes_dict, edges_dict = c2g.group_nodes(
        polygons_gdf=wards_gdf,
        points_gdf=poi_gdf,
        predicate="covered_by"      # include boundary points; alternatives: "within", "contains"
@@ -296,7 +307,7 @@ Examples
    }
 
    # Convert to PyG HeteroData
-   hetero_graph = city2graph.gdf_to_pyg(combined_nodes, combined_edges)
+   hetero_graph = c2g.gdf_to_pyg(combined_nodes, combined_edges)
 
 .. figure:: _static/contiguity_graph.png
    :width: 1000px

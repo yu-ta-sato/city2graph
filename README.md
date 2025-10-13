@@ -1,6 +1,6 @@
 # city2graph: GeoAI with Graph Neural Networks (GNNs) and Spatial Network Analysis
 
-[![city2graph](http://city2graph.net/_static/social_preview.png)](http://city2graph.net/_static/social_preview.png)
+[![city2graph](http://city2graph.net/_static/social_preview_city2graph.png)](http://city2graph.net/_static/social_preview_city2graph.png)
 
 **city2graph** is a Python library for converting geospatial datasets into graph representations, providing an integrated interface for [GeoPandas](https://geopandas.org/), [NetworkX](https://networkx.org/), and [PyTorch Geometric](https://pytorch-geometric.readthedocs.io/en/latest/) across multiple domains (e.g. streets, transportations, OD matrices, POI proximities, etc.). It enables researchers and practitioners to seamlessly develop advanced GeoAI and geographic data science applications. For more information, please visit the [documentation](https://city2graph.net).
 

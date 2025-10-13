@@ -43,7 +43,7 @@ extensions = [
 
 # Open Graph (social media) configuration
 ogp_site_url = "https://city2graph.net/"
-ogp_image = "https://city2graph.net/_static/social_preview.png"
+ogp_image = "https://city2graph.net/_static/social_preview_city2graph.png"
 ogp_description = "Transform urban data into graphs for spatial analysis and Graph Neural Networks"
 ogp_type = "website"
 
@@ -112,8 +112,11 @@ html_css_files = [
     "custom.css",
 ]
 
-# Custom JavaScript files (if needed)
-html_js_files: list[str] = []
+# Custom JavaScript files (Google Analytics)
+html_js_files = [
+    ("https://www.googletagmanager.com/gtag/js?id=G-YLJ6HSS8C4", {"async": "async"}),
+    "gtag.js",
+]
 
 # Theme-specific configuration
 html_theme_options = {
