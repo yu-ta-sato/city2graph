@@ -8,3 +8,6 @@ rules:
     required: only-when-needed
   truthy:
     check-keys: false
+
+ignore: |
+  .github/dependabot.yml
