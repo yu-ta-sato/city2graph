@@ -146,7 +146,8 @@ html_theme_options = {
 
     # Social media and SEO
     "open_graph_image": "_static/city2graph_logo_wide.png",
-    "open_graph_description": "A Python package for transforming urban data into graphs for spatial analysis and Graph Neural Networks.",
+    "open_graph_description": "A Python package converting geospatial data into graphs for spatial network analysis and Graph Neural Networks",
+    "thumbnail": "https://city2graph.net/_static/social_preview_city2graph.png",
 
     # Page layout options
     "collapse_navigation": False,        # Keep navigation expanded
