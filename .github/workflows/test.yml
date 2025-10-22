@@ -1,4 +1,6 @@
 name: Run Tests and Upload Coverage
+permissions:
+  contents: read
 
 on:
   push:
