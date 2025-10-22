@@ -1,0 +1,95 @@
+# Dependabot configuration for city2graph
+# https://docs.github.com/github/administering-a-repository/configuration-options-for-dependency-updates
+
+version: 2
+updates:
+  # Python dependencies
+  - package-ecosystem: pip
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: '09:00'
+      timezone: Europe/London
+    open-pull-requests-limit: 10
+    labels:
+      - dependencies
+      - python
+    groups:
+      # Group all PyTorch-related updates together
+      pytorch:
+        patterns:
+          - torch*
+        update-types:
+          - minor
+          - patch
+      # Group development dependencies
+      dev-dependencies:
+        patterns:
+          - pytest*
+          - mypy
+          - ruff
+          - pre-commit
+          - isort
+        update-types:
+          - minor
+          - patch
+      # Group documentation dependencies
+      docs-dependencies:
+        patterns:
+          - sphinx*
+          - myst-parser
+          - nbsphinx
+          - numpydoc
+          - pydata-sphinx-theme
+        update-types:
+          - minor
+          - patch
+      # Group geospatial dependencies
+      geospatial:
+        patterns:
+          - geopandas
+          - shapely
+          - osmnx
+          - libpysal
+          - momepy
+          - overturemaps
+          - contextily
+          - folium
+          - mapclassify
+        update-types:
+          - minor
+          - patch
+
+  # GitHub Actions
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: '09:00'
+      timezone: Europe/London
+    open-pull-requests-limit: 5
+    labels:
+      - dependencies
+      - github-actions
+    groups:
+      github-actions:
+        patterns:
+          - '*'
+        update-types:
+          - minor
+          - patch
+
+  # Docker
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: '09:00'
+      timezone: Europe/London
+    open-pull-requests-limit: 5
+    labels:
+      - dependencies
+      - docker
