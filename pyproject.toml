@@ -252,7 +252,7 @@ max-line-length = 140
 convention = "numpy"
 
 [tool.ruff.lint.pylint]
-max-args = 10
+max-args = 11
 max-branches = 15
 
 [tool.pytest.ini_options]

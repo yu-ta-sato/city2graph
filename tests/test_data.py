@@ -146,6 +146,51 @@ def test_load_overture_data_invalid_types(test_bbox: list[float]) -> None:
         load_overture_data(test_bbox, types=invalid_types)
 
 
+def test_load_overture_data_invalid_release(test_bbox: list[float]) -> None:
+    """Test that invalid release raises ValueError."""
+    invalid_release = "2099-99-99.0"
+
+    # Patch ALL_RELEASES at the data module level
+    with (
+        patch.object(data_module, "ALL_RELEASES", ["2025-08-20.0", "2025-08-20.1", "2025-09-24.0"]),
+        pytest.raises(
+            ValueError,
+            match="Invalid release: 2099-99-99.0. Valid releases are: 2025-08-20.0, 2025-08-20.1, 2025-09-24.0",
+        ),
+    ):
+        load_overture_data(test_bbox, types=["building"], release=invalid_release)
+
+
+@patch("city2graph.data.subprocess.run")
+@patch("city2graph.data.gpd.read_file")
+def test_load_overture_data_valid_release(
+    mock_read_file: Mock,
+    mock_subprocess: Mock,
+    test_bbox: list[float],
+) -> None:
+    """Test that valid release is accepted without raising errors."""
+    valid_release = "2025-08-20.1"
+
+    # Mock GeoDataFrame
+    mock_gdf = Mock(spec=gpd.GeoDataFrame)
+    mock_gdf.empty = False
+    mock_read_file.return_value = mock_gdf
+
+    # Patch ALL_RELEASES at the data module level
+    with patch.object(
+        data_module, "ALL_RELEASES", ["2025-08-20.0", "2025-08-20.1", "2025-09-24.0"]
+    ):
+        result = load_overture_data(test_bbox, types=["building"], release=valid_release)
+
+        # Verify the function completed successfully
+        assert "building" in result
+        # Verify the release parameter was passed to subprocess
+        mock_subprocess.assert_called_once()
+        call_args = mock_subprocess.call_args[0][0]
+        assert "-r" in call_args
+        assert valid_release in call_args
+
+
 @patch("city2graph.data.subprocess.run")
 @patch("city2graph.data.gpd.read_file")
 def test_load_overture_data_default_types(
@@ -236,6 +281,84 @@ def test_load_overture_data_with_prefix(
     output_index = args.index("-o") + 1
     output_path = args[output_index]
     assert prefix in output_path
+
+
+@patch("city2graph.data.subprocess.run")
+@patch("city2graph.data.gpd.read_file")
+def test_load_overture_data_with_connect_timeout(
+    mock_read_file: Mock,
+    mock_subprocess: Mock,
+    test_bbox: list[float],
+) -> None:
+    """Test load_overture_data with connect_timeout parameter."""
+    mock_gdf = Mock(spec=gpd.GeoDataFrame)
+    mock_gdf.empty = False
+    mock_read_file.return_value = mock_gdf
+
+    load_overture_data(test_bbox, types=["building"], connect_timeout=5.0)
+
+    # Verify connect_timeout parameter was passed to subprocess
+    args = mock_subprocess.call_args[0][0]
+    assert "--connect-timeout" in args
+    assert "5.0" in args
+
+
+@patch("city2graph.data.subprocess.run")
+@patch("city2graph.data.gpd.read_file")
+def test_load_overture_data_with_request_timeout(
+    mock_read_file: Mock,
+    mock_subprocess: Mock,
+    test_bbox: list[float],
+) -> None:
+    """Test load_overture_data with request_timeout parameter."""
+    mock_gdf = Mock(spec=gpd.GeoDataFrame)
+    mock_gdf.empty = False
+    mock_read_file.return_value = mock_gdf
+
+    load_overture_data(test_bbox, types=["building"], request_timeout=10.0)
+
+    # Verify request_timeout parameter was passed to subprocess
+    args = mock_subprocess.call_args[0][0]
+    assert "--request-timeout" in args
+    assert "10.0" in args
+
+
+@patch("city2graph.data.subprocess.run")
+@patch("city2graph.data.gpd.read_file")
+def test_load_overture_data_with_no_stac(
+    mock_read_file: Mock,
+    mock_subprocess: Mock,
+    test_bbox: list[float],
+) -> None:
+    """Test load_overture_data with use_stac=False parameter."""
+    mock_gdf = Mock(spec=gpd.GeoDataFrame)
+    mock_gdf.empty = False
+    mock_read_file.return_value = mock_gdf
+
+    load_overture_data(test_bbox, types=["building"], use_stac=False)
+
+    # Verify --no-stac flag was passed to subprocess
+    args = mock_subprocess.call_args[0][0]
+    assert "--no-stac" in args
+
+
+@patch("city2graph.data.subprocess.run")
+@patch("city2graph.data.gpd.read_file")
+def test_load_overture_data_with_stac_true(
+    mock_read_file: Mock,
+    mock_subprocess: Mock,
+    test_bbox: list[float],
+) -> None:
+    """Test load_overture_data with use_stac=True (default)."""
+    mock_gdf = Mock(spec=gpd.GeoDataFrame)
+    mock_gdf.empty = False
+    mock_read_file.return_value = mock_gdf
+
+    load_overture_data(test_bbox, types=["building"], use_stac=True)
+
+    # Verify --no-stac flag was NOT passed to subprocess
+    args = mock_subprocess.call_args[0][0]
+    assert "--no-stac" not in args
 
 
 @patch("city2graph.data.subprocess.run")

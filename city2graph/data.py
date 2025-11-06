@@ -15,6 +15,7 @@ from pathlib import Path
 # Third-party imports
 import geopandas as gpd
 import pandas as pd
+from overturemaps.core import ALL_RELEASES
 from pyproj import CRS
 from shapely.geometry import LineString
 from shapely.geometry import MultiLineString
@@ -58,6 +59,10 @@ def load_overture_data(
     prefix: str = "",
     save_to_file: bool = True,
     return_data: bool = True,
+    release: str | None = None,
+    connect_timeout: float | None = None,
+    request_timeout: float | None = None,
+    use_stac: bool = True,
 ) -> dict[str, gpd.GeoDataFrame]:
     """
     Load data from Overture Maps using the CLI tool and optionally save to GeoJSON files.
@@ -82,6 +87,20 @@ def load_overture_data(
         Whether to save downloaded data to GeoJSON files.
     return_data : bool, default True
         Whether to return the data as GeoDataFrames.
+    release : str, optional
+        Overture Maps release version to use (e.g., '2024-11-13.0'). If None, uses the
+        default release from the CLI tool. Must be a valid release from the overturemaps
+        library's ALL_RELEASES list.
+    connect_timeout : float, optional
+        Socket connection timeout in seconds. If None, uses the AWS SDK default value
+        (typically 1 second).
+    request_timeout : float, optional
+        Socket read timeout in seconds (Windows and macOS only). If None, uses the AWS SDK
+        default value (typically 3 seconds). This option is ignored on non-Windows,
+        non-macOS systems.
+    use_stac : bool, default True
+        Whether to use Overture's STAC-geoparquet catalog to speed up queries. If False,
+        data will be read normally without the STAC optimization.
 
     Returns
     -------
@@ -91,7 +110,7 @@ def load_overture_data(
     Raises
     ------
     ValueError
-        If invalid data types are specified.
+        If invalid data types are specified or if an invalid release version is provided.
     subprocess.CalledProcessError
         If the Overture Maps CLI command fails.
 
@@ -106,12 +125,31 @@ def load_overture_data(
     >>> data = load_overture_data(bbox, types=['building', 'segment'])
     >>> buildings = data['building']
     >>> segments = data['segment']
+
+    >>> # Download with a specific release version
+    >>> data = load_overture_data(bbox, types=['building'], release='2024-11-13.0')
+
+    >>> # Download with custom timeout settings
+    >>> data = load_overture_data(
+    ...     bbox,
+    ...     types=['building'],
+    ...     connect_timeout=5.0,
+    ...     request_timeout=10.0
+    ... )
+
+    >>> # Download without STAC optimization
+    >>> data = load_overture_data(bbox, types=['building'], use_stac=False)
     """
     # Validate input parameters
     types = types or list(VALID_OVERTURE_TYPES)
     invalid_types = [t for t in types if t not in VALID_OVERTURE_TYPES]
     if invalid_types:
         msg = f"Invalid types: {invalid_types}"
+        raise ValueError(msg)
+
+    # Validate release parameter if provided
+    if release is not None and ALL_RELEASES is not None and release not in ALL_RELEASES:
+        msg = f"Invalid release: {release}. Valid releases are: {', '.join(ALL_RELEASES)}"
         raise ValueError(msg)
 
     # Prepare area and bounding box
@@ -132,6 +170,10 @@ def load_overture_data(
             save_to_file,
             return_data,
             clip_geom,
+            release,
+            connect_timeout,
+            request_timeout,
+            use_stac,
         )
         if return_data:
             result[data_type] = gdf
@@ -266,6 +308,10 @@ def _download_and_process_type(
     save_to_file: bool,
     return_data: bool,
     clip_geom: Polygon | None,
+    release: str | None = None,
+    connect_timeout: float | None = None,
+    request_timeout: float | None = None,
+    use_stac: bool = True,
 ) -> gpd.GeoDataFrame:
     """
     Download and process a single data type from Overture Maps.
@@ -289,6 +335,18 @@ def _download_and_process_type(
         Whether to return the data.
     clip_geom : Polygon or None
         Optional geometry for precise clipping.
+    release : str or None
+        Overture Maps release version to use.
+    connect_timeout : float, optional
+        Socket connection timeout in seconds. If None, uses the AWS SDK default value
+        (typically 1 second).
+    request_timeout : float, optional
+        Socket read timeout in seconds (Windows and macOS only). If None, uses the AWS SDK
+        default value (typically 3 seconds). This option is ignored on non-Windows,
+        non-macOS systems.
+    use_stac : bool, default True
+        Whether to use Overture's STAC-geoparquet catalog to speed up queries. If False,
+        data will be read normally without the STAC optimization.
 
     Returns
     -------
@@ -302,12 +360,20 @@ def _download_and_process_type(
     Examples
     --------
     >>> gdf = _download_and_process_type('building', '-74.1,40.7,-74.0,40.8',
-    ...                                  './data', 'nyc', True, True, None)
+    ...                                  './data', 'nyc', True, True, None, '2024-11-13.0')
     """
     output_path = Path(output_dir) / f"{prefix}{data_type}.geojson"
 
     # Build and execute download command
     cmd = ["overturemaps", "download", f"--bbox={bbox_str}", "-f", "geojson", f"--type={data_type}"]
+    if release:
+        cmd.extend(["-r", release])
+    if connect_timeout is not None:
+        cmd.extend(["--connect-timeout", str(connect_timeout)])
+    if request_timeout is not None:
+        cmd.extend(["--request-timeout", str(request_timeout)])
+    if not use_stac:
+        cmd.append("--no-stac")
     if save_to_file:
         cmd.extend(["-o", str(output_path)])
 
@@ -413,7 +479,6 @@ def _extract_connector_positions(segment: pd.Series, valid_connector_ids: set[st
     >>> segment = pd.Series({'connectors': '[{"id": "c1", "at": 0.5}]'})
     >>> valid_ids = {'c1'}
     >>> positions = _extract_connector_positions(segment, valid_ids)
-    >>> positions
     [0.0, 0.5, 1.0]
     """
     connectors_str = segment.get("connectors", "")
