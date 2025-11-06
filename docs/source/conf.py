@@ -20,8 +20,8 @@ sys.path.insert(0, os.path.abspath("../.."))
 project = "city2graph"
 copyright = "2025, Yuta Sato & city2graph developers"
 author = "Yuta Sato"
-release = "0.1.2"
-version = "0.1.2"
+release = "0.1.7"
+version = "0.1.7"
 
 # -- General configuration ---------------------------------------------------
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#general-configuration
