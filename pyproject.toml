@@ -37,8 +37,8 @@ dependencies = [
 
 [project.optional-dependencies]
 cpu = [
-    "torch>=2.6.0",
-    "torchvision>=0.21.0",
+    "torch>=2.9.0",
+    "torchvision>=0.24.0",
     "torch_geometric>=2.6.1",
 ]
 cu118 = [
@@ -57,7 +57,7 @@ cu126 = [
     "torch_geometric>=2.6.1",
 ]
 cu128 = [
-    "torch>=2.7.0",
+    "torch>=2.9.0",
     "torchvision>=0.24.0",
     "torch_geometric>=2.6.1",
 ]
