@@ -6,6 +6,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
+## 0.1.7 (2025-11-06)
+
+### Added
+- Added `cu130` for PyTorch support with CUDA 13.0
+
+### Changed
+- Updated minimum version requirement for `overturemaps` and `geopandas` as `>=0.17.0` and `>=1.1.1`, respectively
+- Updated API parameters for `load_overture_data()`
+
+### Fixed
+NA
+
+### Documentation
+- Updated documentation version to 0.1.7
+
+
 ## 0.1.6 (2025-09-22)
 
 ### Added
