@@ -19,6 +19,7 @@ classifiers = [
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
     "Programming Language :: Python :: 3 :: Only",
     "Topic :: Scientific/Engineering :: GIS",
 ]
@@ -31,7 +32,7 @@ dependencies = [
     "geopandas >0.12.0",
     "libpysal >=4.12.1",
     "momepy",
-    "overturemaps",
+    "overturemaps >=0.17.0",
 ]
 
 [project.optional-dependencies]
@@ -57,7 +58,12 @@ cu126 = [
 ]
 cu128 = [
     "torch>=2.7.0",
-    "torchvision>=0.22.0",
+    "torchvision>=0.24.0",
+    "torch_geometric>=2.6.1",
+]
+cu130 = [
+    "torch>=2.9.0",
+    "torchvision>=0.24.0",
     "torch_geometric>=2.6.1",
 ]
 
@@ -69,7 +75,8 @@ conflicts = [
     { extra = "cu118" },
     { extra = "cu124" },
     { extra = "cu126" },
-    { extra = "cu128" } ]
+    { extra = "cu128" },
+    { extra = "cu130" } ]
 ]
 
 [tool.uv.sources]
@@ -80,6 +87,7 @@ torch = [
   { index = "pytorch-cu124", extra = "cu124", marker = "sys_platform == 'linux' or sys_platform == 'win32'"  },
   { index = "pytorch-cu126", extra = "cu126", marker = "sys_platform == 'linux' or sys_platform == 'win32'"  },
   { index = "pytorch-cu128", extra = "cu128", marker = "sys_platform == 'linux' or sys_platform == 'win32'"  },
+  { index = "pytorch-cu130", extra = "cu130", marker = "sys_platform == 'linux' or sys_platform == 'win32'"  },
 ]
 
 [[tool.uv.index]]
@@ -105,6 +113,11 @@ explicit = true
 [[tool.uv.index]]
 name = "pytorch-cu128"
 url = "https://download.pytorch.org/whl/cu128"
+explicit = true
+
+[[tool.uv.index]]
+name = "pytorch-cu130"
+url = "https://download.pytorch.org/whl/cu130"
 explicit = true
 
 [[tool.uv.index]]
