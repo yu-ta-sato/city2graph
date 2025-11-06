@@ -23,21 +23,21 @@ classifiers = [
     "Topic :: Scientific/Engineering :: GIS",
 ]
 keywords = ["GeoAI", "Graph Neural Networks", "GNNs", "PyTorch Geometric", "Geospatial Analysis", "Urban Analytics", "Spatial Data Science", "Urban Mobility", "Transportation Networks", "Spatial Knowledge Graphs", "Spatiotemporal Analysis", "Geospatial Foundation Models", "Digital Twin", "Urban Informatics", "Geographic Data Science", "Graph Representation Learning", "Urban Planning and Design"]
-requires-python = ">=3.11,<4.0"
+requires-python = ">=3.11,<3.14"
 dependencies = [
     "networkx >=2.8",
     "osmnx >=2.0.3",
     "shapely >=2.1.0",
-    "geopandas >0.12.0",
+    "geopandas >=1.1.1",
     "libpysal >=4.12.1",
     "momepy",
-    "overturemaps",
+    "overturemaps >=0.17.0",
 ]
 
 [project.optional-dependencies]
 cpu = [
-    "torch>=2.6.0",
-    "torchvision>=0.21.0",
+    "torch>=2.9.0",
+    "torchvision>=0.24.0",
     "torch_geometric>=2.6.1",
 ]
 cu118 = [
@@ -56,8 +56,13 @@ cu126 = [
     "torch_geometric>=2.6.1",
 ]
 cu128 = [
-    "torch>=2.7.0",
-    "torchvision>=0.22.0",
+    "torch>=2.9.0",
+    "torchvision>=0.24.0",
+    "torch_geometric>=2.6.1",
+]
+cu130 = [
+    "torch>=2.9.0",
+    "torchvision>=0.24.0",
     "torch_geometric>=2.6.1",
 ]
 
@@ -69,7 +74,8 @@ conflicts = [
     { extra = "cu118" },
     { extra = "cu124" },
     { extra = "cu126" },
-    { extra = "cu128" } ]
+    { extra = "cu128" },
+    { extra = "cu130" } ]
 ]
 
 [tool.uv.sources]
@@ -80,6 +86,7 @@ torch = [
   { index = "pytorch-cu124", extra = "cu124", marker = "sys_platform == 'linux' or sys_platform == 'win32'"  },
   { index = "pytorch-cu126", extra = "cu126", marker = "sys_platform == 'linux' or sys_platform == 'win32'"  },
   { index = "pytorch-cu128", extra = "cu128", marker = "sys_platform == 'linux' or sys_platform == 'win32'"  },
+  { index = "pytorch-cu130", extra = "cu130", marker = "sys_platform == 'linux' or sys_platform == 'win32'"  },
 ]
 
 [[tool.uv.index]]
@@ -105,6 +112,11 @@ explicit = true
 [[tool.uv.index]]
 name = "pytorch-cu128"
 url = "https://download.pytorch.org/whl/cu128"
+explicit = true
+
+[[tool.uv.index]]
+name = "pytorch-cu130"
+url = "https://download.pytorch.org/whl/cu130"
 explicit = true
 
 [[tool.uv.index]]
@@ -240,7 +252,7 @@ max-line-length = 140
 convention = "numpy"
 
 [tool.ruff.lint.pylint]
-max-args = 10
+max-args = 11
 max-branches = 15
 
 [tool.pytest.ini_options]

@@ -45,13 +45,13 @@ This will install PyTorch and PyTorch Geometric with CPU support, suitable for d
 
 #### With PyTorch + CUDA (GPU)
 
-For GPU acceleration, you can install city2graph with a specific CUDA version extra. For example, for CUDA 12.8:
+For GPU acceleration, you can install city2graph with a specific CUDA version extra. For example, for CUDA 13.0:
 
 ```bash
-pip install "city2graph[cu128]"
+pip install "city2graph[cu130]"
 ```
 
-Supported CUDA versions are `cu118`, `cu124`, `cu126`, and `cu128`.
+Supported CUDA versions are `cu118`, `cu124`, `cu126`, `cu128`, and `cu130`.
 
 ### Using conda
 
