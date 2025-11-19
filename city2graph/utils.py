@@ -17,6 +17,7 @@ import geopandas as gpd
 import momepy
 import networkx as nx
 import pandas as pd
+import rustworkx as rx
 from shapely.geometry import LineString
 from shapely.geometry import Point
 
@@ -28,6 +29,8 @@ __all__ = [
     "filter_graph_by_distance",
     "gdf_to_nx",
     "nx_to_gdf",
+    "nx_to_rx",
+    "rx_to_nx",
     "segments_to_graph",
     "validate_gdf",
     "validate_nx",
@@ -321,6 +324,8 @@ class GeoDataProcessor:
         >>> import networkx as nx
         >>> G = nx.Graph(is_hetero=False, crs="EPSG:4326")
         >>> G.add_node(0, pos=(0, 0))
+        >>> G.add_node(1, pos=(0, 1))
+        >>> G.add_edge(0, 1)
         >>> try:
         ...     GeoDataProcessor.validate_nx(G)
         ... except ValueError as e:
@@ -2363,7 +2368,7 @@ def gdf_to_nx(
         Node data. For homogeneous graphs, a single GeoDataFrame. For
         heterogeneous graphs, a dictionary mapping node type names to
         GeoDataFrames. Node IDs are taken from the GeoDataFrame index.
-    edges : geopandas.GeoDataFrame or dict, optional
+    edges : geopandas.GeoDataFrame or dict[tuple[str, str, str], geopandas.GeoDataFrame], optional
         Edge data. For homogeneous graphs, a single GeoDataFrame. For
         heterogeneous graphs, a dictionary mapping edge type tuples
         (source_type, relation_type, target_type) to GeoDataFrames.
@@ -3028,3 +3033,157 @@ def validate_nx(graph: nx.Graph | nx.MultiGraph) -> None:
 
     processor = GeoDataProcessor()
     processor.validate_nx(graph)
+
+
+def nx_to_rx(graph: nx.Graph | nx.MultiGraph) -> rx.PyGraph | rx.PyDiGraph:
+    """
+    Convert a NetworkX graph to a rustworkx graph.
+
+    This function converts a NetworkX graph object into a rustworkx graph object,
+    preserving node, edge, and graph attributes. It handles both directed and
+    undirected graphs, as well as multigraphs. The original NetworkX node IDs
+    are stored in the node payload under the key ``__nx_node_id__`` to ensure
+    reversibility.
+
+    Parameters
+    ----------
+    graph : networkx.Graph or networkx.MultiGraph
+        The NetworkX graph to convert.
+
+    Returns
+    -------
+    rustworkx.PyGraph or rustworkx.PyDiGraph
+        The converted rustworkx graph.
+
+    See Also
+    --------
+    rx_to_nx : Convert a rustworkx graph back to NetworkX.
+
+    Examples
+    --------
+    >>> import networkx as nx
+    >>> G = nx.Graph()
+    >>> G.add_node("a", color="red")
+    >>> G.add_edge("a", "b", weight=2)
+    >>> rx_G = nx_to_rx(G)
+    """
+    is_directed = graph.is_directed()
+    is_multigraph = graph.is_multigraph()
+
+    out_graph = (
+        rx.PyDiGraph(multigraph=is_multigraph)
+        if is_directed
+        else rx.PyGraph(multigraph=is_multigraph)
+    )
+
+    # Copy graph attributes
+    out_graph.attrs = graph.graph.copy()
+
+    # Add nodes and attributes
+    node_mapping = {}
+    for node, data in graph.nodes(data=True):
+        # Prepare node payload
+        payload = data.copy()
+
+        # Store original NetworkX node ID for reversibility
+        payload["__nx_node_id__"] = node
+
+        # Add node to rustworkx graph
+        rx_idx = out_graph.add_node(payload)
+
+        # Map original NetworkX node ID to rustworkx node index
+        node_mapping[node] = rx_idx
+
+    # Add edges and attributes
+    edges_to_add = []
+    if is_multigraph:
+        for u, v, k, data in graph.edges(data=True, keys=True):
+            payload = data.copy()
+            payload["__nx_edge_key__"] = k
+            edges_to_add.append((node_mapping[u], node_mapping[v], payload))
+    else:
+        for u, v, data in graph.edges(data=True):
+            edges_to_add.append((node_mapping[u], node_mapping[v], data.copy()))
+
+    out_graph.add_edges_from(edges_to_add)
+
+    return out_graph
+
+
+def rx_to_nx(graph: rx.PyGraph | rx.PyDiGraph) -> nx.Graph | nx.MultiGraph:
+    """
+    Convert a rustworkx graph to a NetworkX graph.
+
+    This function converts a rustworkx graph object into a NetworkX graph object,
+    restoring node, edge, and graph attributes. It attempts to restore original
+    NetworkX node IDs if they were preserved during a previous conversion using
+    ``nx_to_rx`` (via the ``__nx_node_id__`` key).
+
+    Parameters
+    ----------
+    graph : rustworkx.PyGraph or rustworkx.PyDiGraph
+        The rustworkx graph to convert.
+
+    Returns
+    -------
+    networkx.Graph or networkx.MultiGraph
+        The converted NetworkX graph.
+
+    See Also
+    --------
+    nx_to_rx : Convert a NetworkX graph to rustworkx.
+
+    Examples
+    --------
+    >>> # Assuming rx_G is a rustworkx graph
+    >>> nx_G = rx_to_nx(rx_G)
+    """
+    is_directed = isinstance(graph, rx.PyDiGraph)
+    is_multigraph = graph.multigraph
+
+    out_graph = (
+        (nx.MultiDiGraph() if is_multigraph else nx.DiGraph())
+        if is_directed
+        else nx.MultiGraph()
+        if is_multigraph
+        else nx.Graph()
+    )
+
+    # Restore graph attributes
+    if isinstance(graph.attrs, dict):
+        out_graph.graph.update(graph.attrs)
+
+    # Restore nodes and attributes
+    rx_to_nx_mapping = {}
+    for rx_idx in graph.node_indices():
+        payload = graph[rx_idx]
+        node_data = {}
+
+        # Attempt to retrieve original node ID and data
+        if isinstance(payload, dict):
+            node_data = payload.copy()
+            nx_id = node_data.pop("__nx_node_id__", rx_idx)
+        else:
+            nx_id = rx_idx
+            node_data = {"payload": payload} if payload is not None else {}
+
+        out_graph.add_node(nx_id, **node_data)
+        rx_to_nx_mapping[rx_idx] = nx_id
+
+    # Restore edges and attributes
+    # edge_index_map returns {edge_idx: (u_idx, v_idx, data)}
+    for u_rx, v_rx, data in graph.edge_index_map().values():
+        u_nx = rx_to_nx_mapping[u_rx]
+        v_nx = rx_to_nx_mapping[v_rx]
+        edge_data = (
+            data if isinstance(data, dict) else ({"payload": data} if data is not None else {})
+        )
+
+        if is_multigraph:
+            key = edge_data.pop("__nx_edge_key__", None)
+            out_graph.add_edge(u_nx, v_nx, key, **edge_data)
+
+        else:
+            out_graph.add_edge(u_nx, v_nx, **edge_data)
+
+    return out_graph
