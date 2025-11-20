@@ -6,10 +6,13 @@ duplication and keep a single source of truth for shared logic across tests.
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 import geopandas as gpd
 import networkx as nx
 import pandas as pd
 import pytest
+import rustworkx as rx
 from shapely.geometry import LineString
 from shapely.geometry import Point
 
@@ -20,6 +23,9 @@ from city2graph.utils import GraphMetadata
 from city2graph.utils import gdf_to_nx
 from city2graph.utils import nx_to_gdf
 from tests import helpers
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 # ============================================================================
 # BASE TEST CLASSES WITH SHARED FUNCTIONALITY
@@ -939,3 +945,89 @@ class TestEdgeCases:
             primary_barriers=tessellation_barriers_gdf,
         )
         assert isinstance(result, gpd.GeoDataFrame)
+
+
+# ============================================================================
+# RUSTWORKX CONVERSION TESTS
+# ============================================================================
+
+
+class TestRustworkxConversions:
+    """Test conversions between NetworkX and rustworkx."""
+
+    @pytest.mark.parametrize(
+        "create_graph",
+        [
+            lambda: nx.Graph(name="undirected"),
+            lambda: nx.DiGraph(name="directed"),
+            lambda: nx.MultiGraph(name="multi_undirected"),
+            lambda: nx.MultiDiGraph(name="multi_directed"),
+        ],
+    )
+    def test_nx_rx_roundtrip(self, create_graph: Callable[[], nx.Graph]) -> None:
+        """Test full roundtrip conversion preserves structure and attributes."""
+        # Setup complex graph
+        G = create_graph()
+        G.graph["crs"] = "EPSG:4326"
+        G.add_node("a", color="red", size=10)
+        G.add_node(1, color="blue")
+
+        # Add edges with attributes
+        G.add_edge("a", 1, weight=0.5, type="road")
+
+        # If multi-graph, add another edge between same nodes
+        if G.is_multigraph():
+            G.add_edge("a", 1, weight=0.8, type="path")
+
+        # Convert to rustworkx
+        rx_graph = utils.nx_to_rx(G)
+
+        # Verify RX structure
+        assert rx_graph.num_nodes() == G.number_of_nodes()
+        assert rx_graph.num_edges() == G.number_of_edges()
+        assert rx_graph.attrs["crs"] == "EPSG:4326"
+
+        # Convert back to NetworkX
+        G_restored = utils.rx_to_nx(rx_graph)
+
+        # Verify restored graph
+        assert nx.utils.graphs_equal(G, G_restored)
+
+    def test_rx_to_nx_raw_input(self) -> None:
+        """Test converting a raw rustworkx graph (no __nx_node_id__)."""
+        rx_G = rx.PyGraph(multigraph=False)
+        rx_G.attrs = {"test": "attr"}
+
+        # Add nodes with raw payload (not dict) and dict payload
+        idx1 = rx_G.add_node("raw_payload")
+        idx2 = rx_G.add_node({"attr": "value"})
+
+        rx_G.add_edge(idx1, idx2, {"weight": 0.5})
+
+        if rx_G.multigraph:
+            rx_G.add_edge(idx1, idx2, {"weight": 0.8})
+
+        # Convert
+        nx_G = utils.rx_to_nx(rx_G)
+
+        assert isinstance(nx_G, nx.Graph)
+        assert nx_G.graph["test"] == "attr"
+
+        # Check nodes - should use integer indices since no __nx_node_id__
+        assert idx1 in nx_G.nodes
+        assert nx_G.nodes[idx1]["payload"] == "raw_payload"
+        assert nx_G.nodes[idx2]["attr"] == "value"
+
+        # Check edge
+        assert nx_G.has_edge(idx1, idx2)
+        assert nx_G.edges[idx1, idx2]["weight"] == 0.5
+
+    def test_rx_to_nx_raw_edge_payload(self) -> None:
+        """Test converting RX graph with non-dict edge payloads."""
+        rx_G = rx.PyGraph(multigraph=False)
+        i1 = rx_G.add_node(None)
+        i2 = rx_G.add_node(None)
+        rx_G.add_edge(i1, i2, "edge_label")
+
+        nx_G = utils.rx_to_nx(rx_G)
+        assert nx_G.edges[i1, i2]["payload"] == "edge_label"

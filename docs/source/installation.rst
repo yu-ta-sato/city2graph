@@ -95,6 +95,7 @@ city2graph requires the following packages:
 * libpysal
 * momepy
 * overturemaps
+* rustworkx
 
 For graph neural network functionality, you'll also need:
 
