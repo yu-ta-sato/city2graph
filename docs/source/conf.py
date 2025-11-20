@@ -201,6 +201,7 @@ intersphinx_mapping = {
 
     # Graph libraries
     "networkx": ("https://networkx.org/documentation/stable/", None),
+    "rustworkx": ("https://www.rustworkx.org/", None),
 
     # Deep learning and PyTorch ecosystem
     "torch": ("https://pytorch.org/docs/stable/", None),

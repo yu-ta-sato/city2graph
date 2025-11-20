@@ -23,3 +23,7 @@ Utils
 .. autofunction:: create_tessellation
 
 .. autofunction:: create_isochrone
+
+.. autofunction:: nx_to_rx
+
+.. autofunction:: rx_to_nx
