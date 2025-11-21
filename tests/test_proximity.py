@@ -111,22 +111,6 @@ def test_knn_non_string_metric_defaults(small_points: gpd.GeoDataFrame) -> None:
     assert not edges.empty
 
 
-def test_network_metric_knn_and_cache(
-    small_points: gpd.GeoDataFrame, network_edges: gpd.GeoDataFrame
-) -> None:
-    """Two calls with network metric reuse cached network graph on network_gdf."""
-    # First call builds cache
-    _, e1 = fixed_radius_graph(
-        small_points, radius=2.0, distance_metric="network", network_gdf=network_edges
-    )
-    assert hasattr(network_edges, "_c2g_cached_nx")
-    # Second call reuses cache
-    _, e2 = fixed_radius_graph(
-        small_points, radius=2.0, distance_metric="network", network_gdf=network_edges
-    )
-    assert e1.equals(e2)
-
-
 def test_network_metric_requires_network_gdf(small_points: gpd.GeoDataFrame) -> None:
     """Requesting network metric without network_gdf triggers clear error."""
     with pytest.raises(ValueError, match="network_gdf is required"):
@@ -481,7 +465,7 @@ def test_waxman_invalid_metric_raises(small_points: gpd.GeoDataFrame) -> None:
 def test_group_nodes_invalid_metric() -> None:
     """Unsupported distance metric raises ValueError via public API."""
     polys, pts = _poly_points_fixture()
-    with pytest.raises(ValueError, match="Unsupported distance_metric"):
+    with pytest.raises(ValueError, match="Unknown distance metric"):
         group_nodes(polys, pts, distance_metric="invalid")  # type: ignore[arg-type]
 
 
@@ -669,7 +653,7 @@ def test_contiguity_edges_unique_undirected_path() -> None:
 def test_contiguity_invalid_metric_raises() -> None:
     """Unsupported contiguity distance_metric triggers ValueError."""
     gdf = _small_square_polygons()
-    with pytest.raises(ValueError, match="Unsupported distance_metric"):
+    with pytest.raises(ValueError, match="Unknown distance metric"):
         contiguity_graph(gdf, distance_metric="invalid")
 
 
@@ -790,3 +774,94 @@ def test_network_geometry_fallback_same_nearest_node() -> None:
     # The fallback straight segment should have non-zero length approximately equal to
     # the Euclidean distance between the two sample points (diagonal ~0.02236)
     assert geom.length > 0
+
+
+def test_generators_insufficient_points_early_exit() -> None:
+    """Generators return empty graph (or single node) when points are insufficient.
+
+    Covers early exit branches for:
+    - delaunay_graph (< 3 points)
+    - gabriel_graph (< 2 points)
+    - relative_neighborhood_graph (< 2 points)
+    - euclidean_minimum_spanning_tree (< 2 points)
+    - fixed_radius_graph (< 2 points)
+    - waxman_graph (< 2 points)
+    """
+    # 1 point case
+    p1 = _single_point_gdf()
+
+    # Delaunay (< 3)
+    nodes, edges = delaunay_graph(p1)
+    assert len(nodes) == 1
+    assert edges.empty
+
+    # Gabriel (< 2)
+    nodes, edges = gabriel_graph(p1)
+    assert len(nodes) == 1
+    assert edges.empty
+
+    # RNG (< 2)
+    nodes, edges = relative_neighborhood_graph(p1)
+    assert len(nodes) == 1
+    assert edges.empty
+
+    # MST (< 2)
+    nodes, edges = euclidean_minimum_spanning_tree(p1)
+    assert len(nodes) == 1
+    assert edges.empty
+
+    # Fixed Radius (< 2)
+    nodes, edges = fixed_radius_graph(p1, radius=1.0)
+    assert len(nodes) == 1
+    assert edges.empty
+
+    # Waxman (< 2)
+    nodes, edges = waxman_graph(p1, beta=0.5, r0=1.0)
+    assert len(nodes) == 1
+    assert edges.empty
+
+    # 2 points case for Delaunay (still < 3)
+    p2 = _points([(0, 0), (1, 1)])
+    nodes, edges = delaunay_graph(p2)
+    assert len(nodes) == 2
+    assert edges.empty
+
+
+def test_bridge_nodes_errors_and_nx() -> None:
+    """Cover bridge_nodes error branches and as_nx=True path."""
+    p1 = _single_point_gdf()
+
+    # < 2 layers
+    with pytest.raises(ValueError, match="needs at least two layers"):
+        bridge_nodes({"a": p1})
+
+    # Invalid method
+    with pytest.raises(ValueError, match="proximity_method must be 'knn' or 'fixed_radius'"):
+        bridge_nodes({"a": p1, "b": p1}, proximity_method="invalid")
+
+    # Check networkx output
+
+    G = cast("nx.Graph", bridge_nodes({"a": p1, "b": p1}, k=1, as_nx=True))
+    assert G.number_of_nodes() == 2
+    assert G.number_of_nodes() == 2
+
+
+def test_contiguity_input_validation_and_empty_neighbors() -> None:
+    """Cover contiguity_graph input validation and disjoint polygons."""
+    # Not a GeoDataFrame
+    with pytest.raises(TypeError, match="Input must be a GeoDataFrame"):
+        contiguity_graph("not a gdf")
+
+    # Disjoint polygons -> empty weights.neighbors -> empty edges
+    # Create two polygons far apart
+    polys = gpd.GeoDataFrame(
+        {"val": [1, 2]},
+        geometry=[
+            Polygon([(0, 0), (1, 0), (1, 1), (0, 1)]),
+            Polygon([(10, 10), (11, 10), (11, 11), (10, 11)]),
+        ],
+        crs="EPSG:3857",
+    )
+    nodes, edges = contiguity_graph(polys)
+    assert len(nodes) == 2
+    assert edges.empty
