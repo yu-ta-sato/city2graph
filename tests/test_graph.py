@@ -26,7 +26,7 @@ from shapely.geometry import Point
 from shapely.geometry import Polygon
 
 from city2graph import graph as graph_module
-from city2graph.utils import GraphMetadata
+from city2graph.base import GraphMetadata
 from city2graph.utils import gdf_to_nx
 
 # Import torch-related modules conditionally

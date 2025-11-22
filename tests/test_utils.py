@@ -17,9 +17,9 @@ from shapely.geometry import LineString
 from shapely.geometry import Point
 
 from city2graph import utils
-from city2graph.utils import GeoDataProcessor
-from city2graph.utils import GraphConverter
-from city2graph.utils import GraphMetadata
+from city2graph.base import GeoDataProcessor
+from city2graph.base import GraphMetadata
+from city2graph.utils import NxConverter
 from city2graph.utils import gdf_to_nx
 from city2graph.utils import nx_to_gdf
 from tests import helpers
@@ -186,7 +186,7 @@ class TestGraphStructures(BaseGraphTest):
         G.add_edge(1, 2)
         G.graph = {"crs": sample_crs, "is_hetero": False}
 
-        utils.GeoDataProcessor().validate_nx(G)
+        GeoDataProcessor().validate_nx(G)
         assert "pos" in G.nodes[1]
         assert "pos" in G.nodes[2]
 
@@ -315,7 +315,7 @@ class TestGraphAnalysis(BaseGraphTest):
 # ============================================================================
 
 
-class TestGraphConversions(BaseConversionTest):
+class TestNxConversions(BaseConversionTest):
     """Test conversions between GeoDataFrame and NetworkX formats."""
 
     def test_homogeneous_roundtrip_conversion(
@@ -758,14 +758,14 @@ class TestEdgeCases:
         self,
         directed_multigraph_edges_gdf: gpd.GeoDataFrame,
     ) -> None:
-        """Test GraphConverter edge cases for missing coverage."""
+        """Test NxConverter edge cases for missing coverage."""
         # Test directed graph creation (line 284)
-        converter = GraphConverter(directed=True, multigraph=True)
+        converter = NxConverter(directed=True, multigraph=True)
         graph = converter.gdf_to_nx(nodes=None, edges=directed_multigraph_edges_gdf)
         assert isinstance(graph, nx.MultiDiGraph)
 
         # Test edges is None after validation (line 277-278)
-        converter = GraphConverter()
+        converter = NxConverter()
         with pytest.raises(ValueError, match="Edges GeoDataFrame cannot be None"):
             converter._convert_homogeneous(nodes=None, edges=None)
 
@@ -917,8 +917,8 @@ class TestEdgeCases:
     ) -> None:
         """Test edge index names handling (lines 629, 633, 660, 697-698, 713)."""
         # Test line 465 - edge_index_names not dict handling
-        converter = GraphConverter()
-        metadata = utils.GraphMetadata(crs=sample_crs, is_hetero=True)
+        converter = NxConverter()
+        metadata = GraphMetadata(crs=sample_crs, is_hetero=True)
         metadata.edge_index_names = "not_a_dict"  # type: ignore[assignment]  # This should trigger line 465
 
         graph = nx.Graph()
