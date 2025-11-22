@@ -105,6 +105,10 @@ class GraphMetadata:
             dict[tuple[str, str, str], list[list[str | int]]] | list[list[str | int]] | None
         ) = None
 
+        # Geometry storage for exact reconstruction (WKB hexadecimal format)
+        self.node_geometries: dict[str, list[str]] | list[str] | None = None
+        self.edge_geometries: dict[tuple[str, str, str], list[str]] | list[str] | None = None
+
     def to_dict(self) -> dict[str, object]:
         """
         Convert to dictionary for NetworkX graph metadata.
@@ -248,8 +252,26 @@ class BaseGraphConverter(ABC):
             msg = "Either nodes or edges must be provided."
             raise ValueError(msg)
 
+        # Type validation
         is_nodes_dict = isinstance(nodes, dict)
+        is_nodes_gdf = isinstance(nodes, gpd.GeoDataFrame)
         is_edges_dict = isinstance(edges, dict)
+        is_edges_gdf = isinstance(edges, gpd.GeoDataFrame)
+
+        # Validate nodes type
+        if nodes is not None and not is_nodes_dict and not is_nodes_gdf:
+            msg = "Nodes must be a GeoDataFrame or a dictionary of GeoDataFrames"
+            raise TypeError(msg)
+
+        # Validate edges type based on nodes type
+        if edges is not None:
+            if is_nodes_gdf and not is_edges_gdf:
+                msg = "For homogeneous graphs, edges must be a GeoDataFrame or None"
+                raise TypeError(msg)
+            if is_nodes_dict and not is_edges_dict:
+                msg = "For heterogeneous graphs, edges must be a dictionary or None"
+                raise TypeError(msg)
+
         is_hetero = is_nodes_dict or is_edges_dict
 
         if is_hetero:

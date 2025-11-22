@@ -22,8 +22,12 @@ import networkx as nx
 import numpy as np
 import pandas as pd
 import pytest
+import torch
+from shapely.geometry import LineString
 from shapely.geometry import Point
 from shapely.geometry import Polygon
+from torch_geometric.data import Data
+from torch_geometric.data import HeteroData
 
 from city2graph import graph as graph_module
 from city2graph.base import GraphMetadata
@@ -1157,3 +1161,242 @@ def test_add_metapaths_attach_geometry_missing_nodes(
     nodes_missing = {k: v for k, v in sample_hetero_nodes_dict.items() if k != "road"}
     with pytest.raises(KeyError, match="Missing node GeoDataFrame"):
         graph_module.add_metapaths((nodes_missing, sample_hetero_edges_dict), METAPATH)
+
+
+class TestKeepGeom:
+    """Test keep_geom parameter functionality."""
+
+    @pytest.fixture
+    def sample_geom_data(self) -> tuple[gpd.GeoDataFrame, gpd.GeoDataFrame]:
+        """Create sample data with curved geometries for testing."""
+        # Create sample nodes
+        nodes_data = {
+            "node_id": [1, 2, 3],
+            "geometry": [Point(0, 0), Point(1, 1), Point(2, 2)],
+            "feature": [1.0, 2.0, 3.0],
+        }
+        nodes = gpd.GeoDataFrame(nodes_data).set_index("node_id")
+        nodes.crs = "EPSG:4326"
+
+        # Create sample edges
+        edges_data = {
+            "source_id": [1, 2],
+            "target_id": [2, 3],
+            "geometry": [
+                LineString([(0, 0), (1, 1)]),
+                LineString([(1, 1), (2, 2)]),
+            ],
+            "weight": [0.5, 1.5],
+        }
+        edges = gpd.GeoDataFrame(edges_data).set_index(["source_id", "target_id"])
+        edges.crs = "EPSG:4326"
+
+        return nodes, edges
+
+    def test_keep_geom_true(
+        self,
+        sample_geom_data: tuple[gpd.GeoDataFrame, gpd.GeoDataFrame],
+    ) -> None:
+        """Test conversion and reconstruction with keep_geom=True."""
+        nodes, edges = sample_geom_data
+
+        # Convert with keep_geom=True (default)
+        data = gdf_to_pyg(nodes, edges, keep_geom=True)
+
+        # Check if geometries are stored in metadata
+        assert data.graph_metadata.node_geometries is not None
+        assert data.graph_metadata.edge_geometries is not None
+
+        # Reconstruct with keep_geom=True
+        nodes_rec, edges_rec = pyg_to_gdf(data, keep_geom=True)
+        assert isinstance(nodes_rec, gpd.GeoDataFrame)
+        assert isinstance(edges_rec, gpd.GeoDataFrame)
+
+        # Geometries should be exactly the same (stored WKB)
+        assert nodes_rec.geometry.equals(nodes.geometry)
+        assert edges_rec.geometry.equals(edges.geometry)
+
+    def test_keep_geom_false_conversion(
+        self,
+        sample_geom_data: tuple[gpd.GeoDataFrame, gpd.GeoDataFrame],
+    ) -> None:
+        """Test conversion with keep_geom=False."""
+        nodes, edges = sample_geom_data
+
+        # Convert with keep_geom=False
+        data = gdf_to_pyg(nodes, edges, keep_geom=False)
+
+        # Check that geometries are NOT stored in metadata
+        assert (
+            not hasattr(data.graph_metadata, "node_geometries")
+            or data.graph_metadata.node_geometries is None
+        )
+        assert (
+            not hasattr(data.graph_metadata, "edge_geometries")
+            or data.graph_metadata.edge_geometries is None
+        )
+
+        # Reconstruct (keep_geom=True/False shouldn't matter as they are not stored)
+        nodes_rec, edges_rec = pyg_to_gdf(data)
+        assert isinstance(nodes_rec, gpd.GeoDataFrame)
+        assert isinstance(edges_rec, gpd.GeoDataFrame)
+
+        # Geometries should be reconstructed from pos (centroids)
+        # Use geom_equals_exact for floating point comparison with tolerance
+        assert nodes_rec.geometry.geom_equals_exact(nodes.geometry, tolerance=1e-6).all()
+        assert edges_rec.geometry.geom_equals_exact(edges.geometry, tolerance=1e-6).all()
+
+    def test_keep_geom_false_reconstruction(
+        self,
+        sample_geom_data: tuple[gpd.GeoDataFrame, gpd.GeoDataFrame],
+    ) -> None:
+        """Test reconstruction with keep_geom=False ignoring stored geometries."""
+        nodes, edges = sample_geom_data
+
+        # Convert with keep_geom=True (store them)
+        # Convert with keep_geom=True (store them)
+        gdf_to_pyg(nodes, edges, keep_geom=True)
+
+        # Let's use a curved edge case
+        edges_curved_data = {
+            "source_id": [1],
+            "target_id": [3],
+            "geometry": [LineString([(0, 0), (0, 2), (2, 2)])],  # L-shape
+            "weight": [1.0],
+        }
+        edges_curved = gpd.GeoDataFrame(edges_curved_data).set_index(["source_id", "target_id"])
+        edges_curved.crs = "EPSG:4326"
+
+        data_curved = gdf_to_pyg(nodes, edges_curved, keep_geom=True)
+
+        # Reconstruct with keep_geom=True -> should preserve L-shape
+        _, edges_rec_true = pyg_to_gdf(data_curved, keep_geom=True)
+        assert isinstance(edges_rec_true, gpd.GeoDataFrame)
+        assert edges_rec_true.geometry.iloc[0].equals(edges_curved.geometry.iloc[0])
+
+        # Reconstruct with keep_geom=False -> should be straight line from (0,0) to (2,2)
+        _, edges_rec_false = pyg_to_gdf(data_curved, keep_geom=False)
+        assert isinstance(edges_rec_false, gpd.GeoDataFrame)
+
+        expected_straight = LineString([(0, 0), (2, 2)])
+        # Use equals_exact for floating point comparison
+        assert edges_rec_false.geometry.iloc[0].equals_exact(expected_straight, tolerance=1e-6)
+        assert not edges_rec_false.geometry.iloc[0].equals(edges_curved.geometry.iloc[0])
+
+
+class TestCoverage:
+    """Tests to ensure full code coverage."""
+
+    def test_convert_invalid_inputs(self, sample_nodes_gdf: gpd.GeoDataFrame) -> None:
+        """Test invalid input types in convert method."""
+        # Nodes GDF but edges not GDF/None
+        with pytest.raises(TypeError, match="For homogeneous graphs, edges must be a GeoDataFrame"):
+            gdf_to_pyg(sample_nodes_gdf, edges={"invalid": "type"})
+
+        # Nodes dict but edges not dict/None
+        with pytest.raises(TypeError, match="For heterogeneous graphs, edges must be a dictionary"):
+            gdf_to_pyg({"n": sample_nodes_gdf}, edges=sample_nodes_gdf)
+
+        # Nodes invalid type
+        with pytest.raises(TypeError, match="Nodes must be a GeoDataFrame or a dictionary"):
+            gdf_to_pyg("invalid_nodes")
+
+    def test_convert_none_nodes(self) -> None:
+        """Test None nodes in conversion methods."""
+        converter = graph_module.PyGConverter()
+
+        # Homogeneous
+        with pytest.raises(ValueError, match="Nodes GeoDataFrame is required"):
+            converter._convert_homogeneous(None, None)
+
+        # Heterogeneous
+        with pytest.raises(ValueError, match="Nodes dictionary is required"):
+            converter._convert_heterogeneous(None, None)
+
+    def test_reconstruct_missing_geometry_data(self, sample_nodes_gdf: gpd.GeoDataFrame) -> None:
+        """Test reconstruction when features exist but geometry/pos is missing."""
+        # Create data with features but no pos/geometry
+        data = gdf_to_pyg(sample_nodes_gdf)
+        data.pos = None
+        data.graph_metadata.node_geometries = None
+
+        nodes_rec, _ = pyg_to_gdf(data)
+        assert isinstance(nodes_rec, gpd.GeoDataFrame)
+        # Note: implementation creates empty GeoSeries with None
+        assert nodes_rec.geometry.isna().all()
+
+    def test_reconstruct_edge_missing_geometry_data(
+        self, sample_edges_gdf: gpd.GeoDataFrame, sample_nodes_gdf: gpd.GeoDataFrame
+    ) -> None:
+        """Test edge reconstruction when features exist but geometry is missing."""
+        # Create data with features but no stored geometries
+        data = gdf_to_pyg(sample_nodes_gdf, sample_edges_gdf, keep_geom=False)
+        # Remove pos to prevent reconstruction from pos
+        data.pos = None
+
+        # This will trigger the fallback to empty geometry in _reconstruct_edge_gdf
+        _, edges_rec = pyg_to_gdf(data)
+        assert isinstance(edges_rec, gpd.GeoDataFrame)
+        assert edges_rec.geometry.isna().all()
+
+    def test_reconstruct_hetero_edge_errors(self, sample_pyg_hetero_data: HeteroData) -> None:
+        """Test heterogeneous edge reconstruction errors."""
+        converter = graph_module.PyGConverter()
+        metadata = sample_pyg_hetero_data.graph_metadata
+
+        with pytest.raises(TypeError, match="Edge type must be a tuple"):
+            converter._reconstruct_edge_gdf(sample_pyg_hetero_data, metadata, edge_type="invalid")  # type: ignore[arg-type]
+
+    def test_create_geometry_missing_pos(self, sample_pyg_data: Data) -> None:
+        """Test geometry creation with missing pos."""
+        converter = graph_module.PyGConverter()
+        sample_pyg_data.pos = None
+        assert converter._create_geometry_from_positions(sample_pyg_data) is None
+
+    def test_create_edge_geometries_hetero_no_stored(
+        self,
+        sample_hetero_nodes_dict: dict[str, gpd.GeoDataFrame],
+        sample_hetero_edges_dict: dict[tuple[str, str, str], gpd.GeoDataFrame],
+    ) -> None:
+        """Test heterogeneous edge geometry creation from pos (keep_geom=False)."""
+        # Convert with keep_geom=False
+        data = gdf_to_pyg(sample_hetero_nodes_dict, sample_hetero_edges_dict, keep_geom=False)
+
+        # Reconstruct
+        _, edges_rec = pyg_to_gdf(data, keep_geom=False)
+        assert isinstance(edges_rec, dict)
+
+        # Edges should have geometries (straight lines)
+        # Edges should have geometries (straight lines)
+        for gdf in edges_rec.values():
+            assert not gdf.geometry.isna().all()
+            assert all(isinstance(g, LineString) for g in gdf.geometry)
+
+    def test_create_features_no_numeric(self, sample_nodes_gdf: gpd.GeoDataFrame) -> None:
+        """Test feature creation with no numeric columns."""
+        # Create GDF with only string columns
+        gdf = sample_nodes_gdf.copy()
+        gdf["str_col"] = "a"
+        gdf = gdf[["str_col", "geometry"]]
+
+        converter = graph_module.PyGConverter()
+        features = converter._create_features(gdf, feature_cols=None)
+        assert features.shape[1] == 0
+
+    def test_create_node_positions_no_geom(self, sample_nodes_gdf: gpd.GeoDataFrame) -> None:
+        """Test node position creation with no geometry."""
+        gdf = sample_nodes_gdf.copy()
+        # Remove geometry column to trigger the None return
+        del gdf["geometry"]
+
+        converter = graph_module.PyGConverter()
+        assert converter._create_node_positions(gdf) is None
+
+    def test_serialize_geometries_no_geom(self, sample_nodes_gdf: gpd.GeoDataFrame) -> None:
+        """Test geometry serialization with no geometry."""
+        gdf = sample_nodes_gdf.copy()
+        # Remove geometry column to trigger the None return
+        del gdf["geometry"]
+
+        converter = graph_module.PyGConverter()
+        assert converter._serialize_geometries(gdf) is None
