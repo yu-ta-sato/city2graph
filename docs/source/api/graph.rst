@@ -19,3 +19,5 @@ Graph
 .. autofunction:: validate_pyg
 
 .. autofunction:: add_metapaths
+
+.. autofunction:: filter_edges_by_weight
