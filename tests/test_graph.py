@@ -48,6 +48,7 @@ pytestmark = pytest.mark.skipif(not TORCH_AVAILABLE, reason="PyTorch not availab
 
 # Import graph functions only if torch is available
 if TORCH_AVAILABLE:
+    from city2graph.graph import add_metapaths_by_weight
     from city2graph.graph import gdf_to_pyg
     from city2graph.graph import is_torch_available
     from city2graph.graph import nx_to_pyg
@@ -700,6 +701,98 @@ METAPATH = [[("building", "connects_to", "road"), ("road", "links_to", "road")]]
 RESULT_KEY = ("building", "metapath_0", "road")
 
 
+@pytest.fixture
+def sample_weight_graph_data() -> tuple[
+    dict[str, gpd.GeoDataFrame], dict[tuple[str, str, str], gpd.GeoDataFrame]
+]:
+    """Small heterogeneous graph tailored for add_metapaths_by_weight tests."""
+    buildings = gpd.GeoDataFrame(
+        {
+            "geometry": [Point(0, 0), Point(10, 0), Point(20, 0)],
+            "node_type": "building",
+        },
+        index=[1, 2, 3],
+        crs="EPSG:4326",
+    )
+
+    streets = gpd.GeoDataFrame(
+        {
+            "geometry": [Point(0, 1), Point(10, 1), Point(20, 1)],
+            "node_type": "street",
+        },
+        index=[101, 102, 103],
+        crs="EPSG:4326",
+    )
+
+    nodes_dict = {"building": buildings, "street": streets}
+
+    b_s_edges = gpd.GeoDataFrame(
+        {
+            "weight": [1.0, 1.0, 1.0],
+            "edge_type": "access",
+            "geometry": [
+                LineString([(0, 0), (0, 1)]),
+                LineString([(10, 0), (10, 1)]),
+                LineString([(20, 0), (20, 1)]),
+            ],
+        },
+        index=pd.MultiIndex.from_tuples([(1, 101), (2, 102), (3, 103)]),
+        crs="EPSG:4326",
+    )
+
+    s_b_edges = gpd.GeoDataFrame(
+        {
+            "weight": [1.0, 1.0, 1.0],
+            "edge_type": "access",
+            "geometry": [
+                LineString([(0, 1), (0, 0)]),
+                LineString([(10, 1), (10, 0)]),
+                LineString([(20, 1), (20, 0)]),
+            ],
+        },
+        index=pd.MultiIndex.from_tuples([(101, 1), (102, 2), (103, 3)]),
+        crs="EPSG:4326",
+    )
+
+    s_s_edges = gpd.GeoDataFrame(
+        {
+            "weight": [10.0, 10.0],
+            "edge_type": "road",
+            "geometry": [
+                LineString([(0, 1), (10, 1)]),
+                LineString([(10, 1), (20, 1)]),
+            ],
+        },
+        index=pd.MultiIndex.from_tuples([(101, 102), (102, 103)]),
+        crs="EPSG:4326",
+    )
+
+    s_s_edges_rev = gpd.GeoDataFrame(
+        {
+            "weight": [10.0, 10.0],
+            "edge_type": "road",
+            "geometry": [
+                LineString([(10, 1), (0, 1)]),
+                LineString([(20, 1), (10, 1)]),
+            ],
+        },
+        index=pd.MultiIndex.from_tuples([(102, 101), (103, 102)]),
+        crs="EPSG:4326",
+    )
+
+    edges_dict = {
+        ("building", "access", "street"): b_s_edges,
+        ("street", "access", "building"): s_b_edges,
+        ("street", "road", "street"): s_s_edges,
+        ("street", "road_rev", "street"): s_s_edges_rev,
+    }
+
+    return nodes_dict, edges_dict
+
+
+WeightGraphData = tuple[dict[str, gpd.GeoDataFrame], dict[tuple[str, str, str], gpd.GeoDataFrame]]
+
+
 # --- Aggregation modes ---
 @pytest.mark.parametrize("agg_mode", ["sum", "mean", "callable", "callable_all_nan"])
 def test_add_metapaths_basic_aggregations(
@@ -1161,6 +1254,140 @@ def test_add_metapaths_attach_geometry_missing_nodes(
     nodes_missing = {k: v for k, v in sample_hetero_nodes_dict.items() if k != "road"}
     with pytest.raises(KeyError, match="Missing node GeoDataFrame"):
         graph_module.add_metapaths((nodes_missing, sample_hetero_edges_dict), METAPATH)
+
+
+# --- add_metapaths_by_weight tests ---
+def test_add_metapaths_by_weight_basic(sample_weight_graph_data: WeightGraphData) -> None:
+    """Connect buildings within a threshold and materialize geometry."""
+    nodes_dict, edges_dict = sample_weight_graph_data
+    nodes_out, edges_out = add_metapaths_by_weight(
+        (nodes_dict, edges_dict),
+        endpoint_type="building",
+        weight="weight",
+        threshold=15.0,
+        directed=True,
+    )
+
+    relation = ("building", "connected_within_0.0_15.0", "building")
+    assert nodes_out is nodes_dict
+    assert relation in edges_out
+
+    new_edges = edges_out[relation]
+    pairs = set(new_edges.index.tolist())
+    assert pairs == {(1, 2), (2, 1), (2, 3), (3, 2)}
+    assert new_edges.loc[(1, 2), "weight"] == pytest.approx(12.0)
+    geom = new_edges.loc[(1, 2), "geometry"]
+    assert isinstance(geom, LineString)
+    assert list(geom.coords) == [(0.0, 0.0), (10.0, 0.0)]
+
+
+def test_add_metapaths_by_weight_threshold_controls(
+    sample_weight_graph_data: WeightGraphData,
+) -> None:
+    """Threshold and min_threshold bounds should gate which pairs are emitted."""
+    nodes_dict, edges_dict = sample_weight_graph_data
+
+    _, edges_threshold = add_metapaths_by_weight(
+        (nodes_dict, edges_dict),
+        endpoint_type="building",
+        weight="weight",
+        threshold=12.0,
+        directed=True,
+    )
+    rel_max = ("building", "connected_within_0.0_12.0", "building")
+    assert rel_max in edges_threshold
+    assert (1, 2) in set(edges_threshold[rel_max].index.tolist())
+
+    _, edges_filtered = add_metapaths_by_weight(
+        (nodes_dict, edges_dict),
+        endpoint_type="building",
+        weight="weight",
+        threshold=20.0,
+        min_threshold=13.0,
+        directed=True,
+    )
+    rel_min = ("building", "connected_within_13.0_20.0", "building")
+    if rel_min in edges_filtered:
+        assert edges_filtered[rel_min].empty
+
+
+def test_add_metapaths_by_weight_edge_types_and_custom_name(
+    sample_weight_graph_data: WeightGraphData,
+) -> None:
+    """Ensure edge filters and friendly relation labels behave as expected."""
+    nodes_dict, edges_dict = sample_weight_graph_data
+
+    _, edges_custom = add_metapaths_by_weight(
+        (nodes_dict, edges_dict),
+        endpoint_type="building",
+        weight="weight",
+        threshold=15.0,
+        new_edge_type="accessible",
+    )
+    custom_rel = ("building", "accessible", "building")
+    assert custom_rel in edges_custom
+
+    _, edges_filtered = add_metapaths_by_weight(
+        (nodes_dict, edges_dict),
+        endpoint_type="building",
+        weight="weight",
+        threshold=100.0,
+        edge_types=[
+            ("building", "access", "street"),
+            ("street", "access", "building"),
+        ],
+    )
+    filtered_rel = ("building", "connected_within_0.0_100.0", "building")
+    assert filtered_rel not in edges_filtered
+
+
+def test_add_metapaths_by_weight_networkx_io(sample_weight_graph_data: WeightGraphData) -> None:
+    """Cover NetworkX round-trips both as input and output."""
+    nodes_dict, edges_dict = sample_weight_graph_data
+
+    nx_result = add_metapaths_by_weight(
+        (nodes_dict, edges_dict),
+        endpoint_type="building",
+        weight="weight",
+        threshold=15.0,
+        as_nx=True,
+    )
+    assert isinstance(nx_result, nx.Graph)
+    assert any(
+        data.get("edge_type") == ("building", "connected_within_0.0_15.0", "building")
+        for _, _, data in nx_result.edges(data=True)
+    )
+
+    hetero_graph = gdf_to_nx(nodes=nodes_dict, edges=edges_dict)
+    nx_roundtrip = add_metapaths_by_weight(
+        hetero_graph,
+        endpoint_type="building",
+        weight="weight",
+        threshold=15.0,
+        as_nx=True,
+    )
+    assert isinstance(nx_roundtrip, nx.Graph)
+    assert any(
+        data.get("edge_type") == ("building", "connected_within_0.0_15.0", "building")
+        for _, _, data in nx_roundtrip.edges(data=True)
+    )
+
+
+def test_add_metapaths_by_weight_missing_endpoint(
+    sample_weight_graph_data: WeightGraphData,
+) -> None:
+    """Unknown endpoint types should short-circuit and return originals."""
+    nodes_dict, edges_dict = sample_weight_graph_data
+
+    nodes_out, edges_out = add_metapaths_by_weight(
+        (nodes_dict, edges_dict),
+        endpoint_type="nonexistent",
+        weight="weight",
+        threshold=15.0,
+    )
+
+    assert nodes_out is nodes_dict
+    assert len(edges_out) == len(edges_dict)
 
 
 class TestKeepGeom:

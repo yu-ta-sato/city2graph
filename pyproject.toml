@@ -33,6 +33,7 @@ dependencies = [
     "momepy",
     "overturemaps >=0.17.0",
     "rustworkx >=0.17.1",
+    "scipy >=1.10.0",
 ]
 
 [project.optional-dependencies]

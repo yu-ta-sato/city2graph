@@ -21,6 +21,7 @@ import functools
 import logging
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
+from typing import Any
 from typing import cast
 
 if TYPE_CHECKING:
@@ -31,6 +32,8 @@ import geopandas as gpd
 import networkx as nx
 import numpy as np
 import pandas as pd
+from scipy import sparse
+from scipy.sparse import csgraph
 from shapely import wkb
 from shapely.geometry import LineString
 
@@ -69,6 +72,7 @@ logger = logging.getLogger(__name__)
 
 __all__ = [
     "add_metapaths",
+    "add_metapaths_by_weight",
     "gdf_to_pyg",
     "is_torch_available",
     "nx_to_pyg",
@@ -837,12 +841,8 @@ class PyGConverter(BaseGraphConverter):
             gdf = gpd.GeoDataFrame(gdf_data, geometry=geometry, index=index_values)
         else:
             # Handle missing geometry
-            empty_geom = gpd.GeoSeries([], crs=metadata.crs if metadata.crs else None)
-            if gdf_data:
-                length = len(next(iter(gdf_data.values())))
-                empty_geom = gpd.GeoSeries(
-                    [None] * length, crs=metadata.crs if metadata.crs else None
-                )
+            length = len(next(iter(gdf_data.values()))) if gdf_data else 0
+            empty_geom = gpd.GeoSeries([None] * length, crs=metadata.crs if metadata.crs else None)
             gdf = gpd.GeoDataFrame(gdf_data, geometry=empty_geom, index=index_values)
 
         # Set index names and CRS
@@ -915,12 +915,8 @@ class PyGConverter(BaseGraphConverter):
             gdf = gpd.GeoDataFrame(gdf_data, geometry=geometry, index=index_values)
         else:
             # Handle missing geometry
-            empty_geom = gpd.GeoSeries([], crs=metadata.crs if metadata.crs else None)
-            if gdf_data:
-                length = len(next(iter(gdf_data.values())))
-                empty_geom = gpd.GeoSeries(
-                    [None] * length, crs=metadata.crs if metadata.crs else None
-                )
+            length = len(next(iter(gdf_data.values()))) if gdf_data else 0
+            empty_geom = gpd.GeoSeries([None] * length, crs=metadata.crs if metadata.crs else None)
             gdf = gpd.GeoDataFrame(gdf_data, geometry=empty_geom, index=index_values)
 
         # Set index names and CRS
@@ -1380,9 +1376,6 @@ class PyGConverter(BaseGraphConverter):
         # Select only numeric columns from valid_cols to prevent conversion errors
         # This logic was previously only in _create_edge_features but is good for nodes too
         numeric_cols = gdf[valid_cols].select_dtypes(include=np.number).columns.tolist()
-
-        if not numeric_cols:
-            return torch.zeros((len(gdf), 0), dtype=dtype, device=device)
 
         # Map torch dtype to numpy dtype for consistency
         numpy_dtype = torch.tensor(0, dtype=dtype).numpy().dtype
@@ -2299,14 +2292,709 @@ def _validate_homo_structure(data: Data, metadata: GraphMetadata) -> None:
             raise ValueError(msg)
 
 
-# ============================================================================
-# GRAPH RECONSTRUCTION FUNCTIONS
-# ============================================================================
+def _validate_and_resolve_parameters(
+    new_edge_type: tuple[str, str, str] | str | None,
+    endpoint_type: str | None,
+    min_threshold: float,
+    threshold: float,
+) -> tuple[str, tuple[str, str, str]] | None:
+    """
+    Validate and resolve parameters for metapath connection.
+
+    Validates parameter consistency and constructs the target edge type tuple
+    from the provided parameters.
+
+    Parameters
+    ----------
+    new_edge_type : tuple[str, str, str] | str | None
+        Target edge type tuple (src, rel, dst) or just the relation name.
+    endpoint_type : str | None
+        The node type to connect.
+    min_threshold : float
+        Minimum cost threshold.
+    threshold : float
+        Maximum cost threshold.
+
+    Returns
+    -------
+    tuple[str, tuple[str, str, str]] | None
+        Tuple of (endpoint_type, target_edge_type_tuple) if valid, None otherwise.
+    """
+    resolved_endpoint_type = endpoint_type
+    relation_name = None
+    target_edge_type_tuple = None
+
+    if isinstance(new_edge_type, tuple):
+        target_edge_type_tuple = new_edge_type
+        if resolved_endpoint_type is None:
+            resolved_endpoint_type = new_edge_type[0]
+    elif isinstance(new_edge_type, str):
+        relation_name = new_edge_type
+
+    if resolved_endpoint_type is None:
+        logger.warning("endpoint_type not provided and could not be inferred.")
+        return None
+
+    if target_edge_type_tuple is None:
+        relation_name = relation_name or f"connected_within_{min_threshold}_{threshold}"
+        target_edge_type_tuple = (resolved_endpoint_type, relation_name, resolved_endpoint_type)
+
+    return resolved_endpoint_type, target_edge_type_tuple
 
 
-# ============================================================================
-# METAPATH UTILITIES
-# ============================================================================
+def add_metapaths_by_weight(
+    graph: (
+        tuple[dict[str, gpd.GeoDataFrame], dict[tuple[str, str, str], gpd.GeoDataFrame]]
+        | nx.Graph
+        | nx.MultiGraph
+    ),
+    weight: str,
+    threshold: float,
+    new_edge_type: tuple[str, str, str] | str | None = None,
+    min_threshold: float = 0.0,
+    edge_types: list[tuple[str, str, str]] | None = None,
+    endpoint_type: str | None = None,
+    directed: bool = False,
+    as_nx: bool = False,
+    multigraph: bool = False,
+) -> (
+    nx.Graph
+    | nx.MultiGraph
+    | tuple[
+        dict[str, gpd.GeoDataFrame],
+        dict[tuple[str, str, str], gpd.GeoDataFrame],
+    ]
+):
+    """
+    Connect nodes of a specific type if they are reachable within a cost threshold band.
+
+    This function dynamically adds metapaths (edges) between nodes of a specified
+    `endpoint_type` if they are reachable within a given cost band [`min_threshold`,
+    `threshold`] based on edge weights (e.g., travel time). It uses Dijkstra's
+    algorithm for path finding via `scipy.sparse.csgraph` for efficiency.
+
+    Parameters
+    ----------
+    graph : tuple or networkx.Graph or networkx.MultiGraph
+        Input graph. Can be a tuple of (nodes_dict, edges_dict) or a NetworkX graph.
+    weight : str
+        The edge attribute to use as weight (e.g., 'travel_time').
+    threshold : float
+        The maximum cost threshold for connection.
+    new_edge_type : tuple[str, str, str] | str, optional
+        Target edge type tuple (src, rel, dst) or just the relation name.
+        If a tuple is provided, `endpoint_type` can be inferred.
+    min_threshold : float, default 0.0
+        The minimum cost threshold for connection.
+    edge_types : list[tuple[str, str, str]], optional
+        List of edge types to consider for traversal. If None, all edges are used.
+    endpoint_type : str, optional
+        The node type to connect (e.g., 'building'). Required if `new_edge_type`
+        is not a tuple.
+    directed : bool, default False
+        If True, creates a directed graph for traversal.
+    as_nx : bool, default False
+        If True, returns a NetworkX graph.
+    multigraph : bool, default False
+        If True, returns a MultiGraph (only relevant if as_nx=True).
+
+    Returns
+    -------
+    nx.Graph or nx.MultiGraph or tuple
+        The graph with added metapaths. Format depends on `as_nx` parameter.
+    """
+    # Validate and resolve parameters
+    params = _validate_and_resolve_parameters(
+        new_edge_type, endpoint_type, min_threshold, threshold
+    )
+    if params is None:
+        return _return_original_graph(graph)
+
+    endpoint_type, target_edge_type_tuple = params
+
+    # Prepare data for sparse matrix construction
+    (
+        node_to_idx,
+        idx_to_node,
+        endpoint_indices,
+        row_indices,
+        col_indices,
+        data,
+        num_nodes,
+    ) = _prepare_sparse_graph_data(graph, endpoint_type, edge_types, weight)
+
+    if not data:
+        return _return_original_graph(graph)
+
+    if not endpoint_indices:
+        logger.warning("No nodes of type '%s' found.", endpoint_type)
+        return _return_original_graph(graph)
+
+    # Build sparse matrix
+    adj_matrix = sparse.csr_matrix((data, (row_indices, col_indices)), shape=(num_nodes, num_nodes))
+
+    # Run Dijkstra's algorithm
+    dist_matrix = csgraph.dijkstra(
+        csgraph=adj_matrix,
+        directed=directed or (isinstance(graph, nx.Graph) and graph.is_directed()),
+        indices=endpoint_indices,
+        limit=threshold,
+    )
+
+    # Extract metapath edges
+    new_edges_data = _extract_metapath_edges(
+        dist_matrix,
+        endpoint_indices,
+        idx_to_node,
+        min_threshold,
+        threshold,
+        graph,
+        directed,
+        target_edge_type_tuple,
+        weight,
+    )
+
+    # Construct and return result
+    return _construct_metapath_result(
+        graph,
+        new_edges_data,
+        as_nx,
+        directed,
+        multigraph,
+        target_edge_type_tuple,
+        weight,
+        endpoint_type,
+    )
+
+
+def _return_original_graph(
+    graph: (
+        tuple[dict[str, gpd.GeoDataFrame], dict[tuple[str, str, str], gpd.GeoDataFrame]]
+        | nx.Graph
+        | nx.MultiGraph
+    ),
+) -> (
+    nx.Graph
+    | nx.MultiGraph
+    | tuple[
+        dict[str, gpd.GeoDataFrame],
+        dict[tuple[str, str, str], gpd.GeoDataFrame],
+    ]
+):
+    """
+    Return the original graph as-is.
+
+    This function is only called when as_nx=False, so it just returns
+    the graph without any conversion.
+
+    Parameters
+    ----------
+    graph : tuple or networkx.Graph or networkx.MultiGraph
+        Input graph in either GeoDataFrame tuple or NetworkX format.
+
+    Returns
+    -------
+    nx.Graph or nx.MultiGraph or tuple
+        The original graph unchanged.
+    """
+    # This function is only called with as_nx=False, so just return the graph as-is
+    return graph
+
+
+def _prepare_sparse_graph_data(
+    graph: (
+        tuple[dict[str, gpd.GeoDataFrame], dict[tuple[str, str, str], gpd.GeoDataFrame]]
+        | nx.Graph
+        | nx.MultiGraph
+    ),
+    endpoint_type: str,
+    edge_types: list[tuple[str, str, str]] | None,
+    weight: str,
+) -> tuple[
+    dict[object, int],
+    dict[int, object],
+    list[int],
+    list[int],
+    list[int],
+    list[float],
+    int,
+]:
+    """
+    Prepare sparse graph data by delegating to appropriate handler.
+
+    Dispatches to GeoDataFrame or NetworkX specific handler based on input type.
+
+    Parameters
+    ----------
+    graph : tuple or networkx.Graph or networkx.MultiGraph
+        Input graph.
+    endpoint_type : str
+        Node type to identify as endpoints.
+    edge_types : list[tuple[str, str, str]] or None
+        Edge types to include in traversal.
+    weight : str
+        Edge attribute to use as weight.
+
+    Returns
+    -------
+    tuple
+        Seven-element tuple containing node mappings, indices, and edge data.
+    """
+    if isinstance(graph, tuple):
+        return _prepare_graph_data_from_gdf(graph, endpoint_type, edge_types, weight)
+    return _prepare_graph_data_from_nx(graph, endpoint_type, edge_types, weight)
+
+
+def _prepare_graph_data_from_gdf(
+    graph: tuple[dict[str, gpd.GeoDataFrame], dict[tuple[str, str, str], gpd.GeoDataFrame]],
+    endpoint_type: str,
+    edge_types: list[tuple[str, str, str]] | None,
+    weight: str,
+) -> tuple[
+    dict[object, int],
+    dict[int, object],
+    list[int],
+    list[int],
+    list[int],
+    list[float],
+    int,
+]:
+    """
+    Build sparse graph data from GeoDataFrame tuple.
+
+    Extracts node indices and edge weights from GeoDataFrame dictionaries.
+
+    Parameters
+    ----------
+    graph : tuple[dict[str, GeoDataFrame], dict[tuple[str, str, str], GeoDataFrame]]
+        Input graph as GeoDataFrame tuple.
+    endpoint_type : str
+        Node type to identify as endpoints.
+    edge_types : list[tuple[str, str, str]] or None
+        Edge types to include in traversal.
+    weight : str
+        Edge attribute to use as weight.
+
+    Returns
+    -------
+    tuple
+        Seven-element tuple containing node mappings, indices, and edge data.
+    """
+    nodes_dict, edges_dict = graph
+    node_to_idx: dict[object, int] = {}
+    idx_to_node: dict[int, object] = {}
+    endpoint_indices: list[int] = []
+    row_indices: list[int] = []
+    col_indices: list[int] = []
+    data: list[float] = []
+    current_idx = 0
+
+    # Build node index
+    for n_type, gdf in nodes_dict.items():
+        for node_id in gdf.index:
+            key = (n_type, node_id)
+            if key not in node_to_idx:
+                node_to_idx[key] = current_idx
+                idx_to_node[current_idx] = key
+                current_idx += 1
+
+            if n_type == endpoint_type:
+                endpoint_indices.append(node_to_idx[key])
+
+    # Collect edges
+    for e_type, gdf in edges_dict.items():
+        if edge_types and e_type not in edge_types:
+            continue
+
+        src_type, _, dst_type = e_type
+        us = gdf.index.get_level_values(0)
+        vs = gdf.index.get_level_values(1)
+        ws = gdf[weight].to_numpy()
+
+        for u, v, w in zip(us, vs, ws, strict=False):
+            u_key = (src_type, u)
+            v_key = (dst_type, v)
+            u_idx = node_to_idx[u_key]
+            v_idx = node_to_idx[v_key]
+            w_val = float(w)
+
+            row_indices.append(u_idx)
+            col_indices.append(v_idx)
+            data.append(w_val)
+
+    return (
+        node_to_idx,
+        idx_to_node,
+        endpoint_indices,
+        row_indices,
+        col_indices,
+        data,
+        current_idx,
+    )
+
+
+def _prepare_graph_data_from_nx(
+    graph: nx.Graph | nx.MultiGraph,
+    endpoint_type: str,
+    edge_types: list[tuple[str, str, str]] | None,
+    weight: str,
+) -> tuple[
+    dict[object, int],
+    dict[int, object],
+    list[int],
+    list[int],
+    list[int],
+    list[float],
+    int,
+]:
+    """
+    Build sparse graph data from NetworkX graph.
+
+    Extracts node indices and edge weights from NetworkX graph structure.
+
+    Parameters
+    ----------
+    graph : networkx.Graph or networkx.MultiGraph
+        Input NetworkX graph.
+    endpoint_type : str
+        Node type to identify as endpoints.
+    edge_types : list[tuple[str, str, str]] or None
+        Edge types to include in traversal.
+    weight : str
+        Edge attribute to use as weight.
+
+    Returns
+    -------
+    tuple
+        Seven-element tuple containing node mappings, indices, and edge data.
+    """
+    node_to_idx: dict[object, int] = {}
+    idx_to_node: dict[int, object] = {}
+    endpoint_indices: list[int] = []
+    row_indices: list[int] = []
+    col_indices: list[int] = []
+    data: list[float] = []
+    current_idx = 0
+
+    # Build node index
+    for n, d in graph.nodes(data=True):
+        if n not in node_to_idx:
+            node_to_idx[n] = current_idx
+            idx_to_node[current_idx] = n
+            current_idx += 1
+
+        if d.get("node_type") == endpoint_type:
+            endpoint_indices.append(node_to_idx[n])
+
+    edges_iter = (
+        graph.edges(data=True, keys=True) if graph.is_multigraph() else graph.edges(data=True)
+    )
+
+    min_weights: dict[tuple[int, int], float] = {}
+
+    for edge in edges_iter:
+        if graph.is_multigraph():
+            u, v, _, d = edge
+        else:
+            u, v, d = edge
+
+        if edge_types and d.get("edge_type") not in edge_types:
+            continue
+
+        w_val = d.get(weight)
+        u_idx = node_to_idx[u]
+        v_idx = node_to_idx[v]
+        w_float = float(w_val)
+
+        pair = (u_idx, v_idx)
+        if pair not in min_weights or w_float < min_weights[pair]:
+            min_weights[pair] = w_float
+
+    for (u_idx, v_idx), w in min_weights.items():
+        row_indices.append(u_idx)
+        col_indices.append(v_idx)
+        data.append(w)
+
+    return (
+        node_to_idx,
+        idx_to_node,
+        endpoint_indices,
+        row_indices,
+        col_indices,
+        data,
+        current_idx,
+    )
+
+
+def _extract_metapath_edges(
+    dist_matrix: np.ndarray,
+    endpoint_indices: list[int],
+    idx_to_node: dict[int, object],
+    min_threshold: float,
+    threshold: float,
+    graph: (
+        tuple[dict[str, gpd.GeoDataFrame], dict[tuple[str, str, str], gpd.GeoDataFrame]]
+        | nx.Graph
+        | nx.MultiGraph
+    ),
+    directed: bool,
+    target_edge_type: tuple[str, str, str],
+    weight: str,
+) -> list[dict[str, Any]]:
+    """
+    Extract metapath edges from Dijkstra distance matrix.
+
+    Filters distances and creates edge records for valid connections.
+
+    Parameters
+    ----------
+    dist_matrix : numpy.ndarray
+        Distance matrix from Dijkstra algorithm.
+    endpoint_indices : list[int]
+        Indices of endpoint nodes.
+    idx_to_node : dict[int, object]
+        Mapping from indices to node keys.
+    min_threshold : float
+        Minimum distance threshold.
+    threshold : float
+        Maximum distance threshold.
+    graph : tuple or networkx.Graph or networkx.MultiGraph
+        Original input graph for node attribute lookup.
+    directed : bool
+        Whether graph is directed.
+    target_edge_type : tuple[str, str, str]
+        Edge type for new metapath edges.
+    weight : str
+        Edge weight attribute name.
+
+    Returns
+    -------
+    list[dict[str, Any]]
+        List of edge data dictionaries.
+    """
+    new_edges_data = []
+    endpoint_indices_arr = np.array(endpoint_indices)
+
+    for i, start_idx in enumerate(endpoint_indices):
+        dists = dist_matrix[i]
+        dists_to_endpoints = dists[endpoint_indices_arr]
+
+        valid_mask = (
+            (dists_to_endpoints >= min_threshold)
+            & (dists_to_endpoints <= threshold)
+            & (dists_to_endpoints != np.inf)
+        )
+        valid_mask[i] = False
+
+        valid_target_indices_in_endpoints = np.where(valid_mask)[0]
+
+        if valid_target_indices_in_endpoints.size > 0:
+            start_node_key = idx_to_node[start_idx]
+
+            for target_idx_in_endpoints in valid_target_indices_in_endpoints:
+                target_idx = endpoint_indices[target_idx_in_endpoints]
+                dist = dists_to_endpoints[target_idx_in_endpoints]
+                end_node_key = idx_to_node[target_idx]
+
+                if isinstance(graph, tuple):
+                    start_node = cast("tuple[str, object]", start_node_key)[1]
+                    end_node = cast("tuple[str, object]", end_node_key)[1]
+                else:
+                    start_node = start_node_key
+                    end_node = end_node_key
+
+                start_orig = start_node
+                end_orig = end_node
+
+                if isinstance(graph, (nx.Graph, nx.MultiGraph)):
+                    start_orig = graph.nodes[start_node].get("_original_index", start_node)
+                    end_orig = graph.nodes[end_node].get("_original_index", end_node)
+
+                orig_edge_index = (start_orig, end_orig)
+
+                if not directed and start_orig > end_orig:  # type: ignore[operator]
+                    orig_edge_index = (end_orig, start_orig)
+
+                new_edges_data.append(
+                    {
+                        "u": start_node,
+                        "v": end_node,
+                        weight: float(dist),
+                        "edge_type": target_edge_type,
+                        "_original_edge_index": orig_edge_index,
+                    }
+                )
+    return new_edges_data
+
+
+def _add_edges_to_nx_graph(
+    nx_graph: nx.Graph | nx.MultiGraph,
+    new_edges_data: list[dict[str, Any]],
+    target_edge_type: tuple[str, str, str],
+    weight: str,
+) -> nx.Graph | nx.MultiGraph:
+    """
+    Add metapath edges to a NetworkX graph.
+
+    This function adds edges from the provided edge data list to an existing
+    NetworkX graph and updates the graph's edge type registry.
+
+    Parameters
+    ----------
+    nx_graph : networkx.Graph or networkx.MultiGraph
+        NetworkX graph to add edges to.
+    new_edges_data : list[dict[str, Any]]
+        List of edge data dictionaries.
+    target_edge_type : tuple[str, str, str]
+        Edge type for new metapath edges.
+    weight : str
+        Edge weight attribute name.
+
+    Returns
+    -------
+    networkx.Graph or networkx.MultiGraph
+        Graph with edges added.
+    """
+    edges_to_add = [
+        (
+            e["u"],
+            e["v"],
+            {
+                weight: e[weight],
+                "edge_type": e["edge_type"],
+                "_original_edge_index": e["_original_edge_index"],
+            },
+        )
+        for e in new_edges_data
+    ]
+    nx_graph.add_edges_from(edges_to_add)
+
+    if "edge_types" in nx_graph.graph and target_edge_type not in nx_graph.graph["edge_types"]:
+        nx_graph.graph["edge_types"].append(target_edge_type)
+
+    return nx_graph
+
+
+def _create_edge_gdf_from_data(
+    new_edges_data: list[dict[str, Any]],
+    endpoint_gdf: gpd.GeoDataFrame,
+    weight: str,
+) -> gpd.GeoDataFrame:
+    """
+    Create GeoDataFrame for metapath edges.
+
+    This function constructs a GeoDataFrame from edge data dictionaries,
+    creating LineString geometries between endpoint nodes.
+
+    Parameters
+    ----------
+    new_edges_data : list[dict[str, Any]]
+        List of edge data dictionaries.
+    endpoint_gdf : geopandas.GeoDataFrame
+        GeoDataFrame of endpoint nodes for geometry creation.
+    weight : str
+        Edge weight attribute name.
+
+    Returns
+    -------
+    geopandas.GeoDataFrame
+        GeoDataFrame containing the new edges.
+    """
+    df = pd.DataFrame(new_edges_data)
+
+    u_geoms = endpoint_gdf.loc[df["u"]].geometry.to_numpy()
+    v_geoms = endpoint_gdf.loc[df["v"]].geometry.to_numpy()
+
+    geometries = [
+        LineString([u.centroid, v.centroid]) for u, v in zip(u_geoms, v_geoms, strict=False)
+    ]
+
+    new_gdf = gpd.GeoDataFrame(df[[weight, "edge_type"]], geometry=geometries, crs=endpoint_gdf.crs)
+
+    new_gdf.index = pd.MultiIndex.from_frame(df[["u", "v"]])
+    new_gdf.index.names = ["u", "v"]
+
+    return new_gdf
+
+
+def _construct_metapath_result(
+    graph: (
+        tuple[dict[str, gpd.GeoDataFrame], dict[tuple[str, str, str], gpd.GeoDataFrame]]
+        | nx.Graph
+        | nx.MultiGraph
+    ),
+    new_edges_data: list[dict[str, Any]],
+    as_nx: bool,
+    directed: bool,
+    multigraph: bool,
+    target_edge_type: tuple[str, str, str],
+    weight: str,
+    endpoint_type: str,
+) -> (
+    nx.Graph
+    | nx.MultiGraph
+    | tuple[
+        dict[str, gpd.GeoDataFrame],
+        dict[tuple[str, str, str], gpd.GeoDataFrame],
+    ]
+):
+    """
+    Construct the result graph with metapath edges added.
+
+    Adds new edges to the graph in NetworkX or GeoDataFrame format.
+
+    Parameters
+    ----------
+    graph : tuple or networkx.Graph or networkx.MultiGraph
+        Original input graph.
+    new_edges_data : list[dict[str, Any]]
+        List of new edge data to add.
+    as_nx : bool
+        Whether to return NetworkX format.
+    directed : bool
+        Whether graph is directed.
+    multigraph : bool
+        Whether to use MultiGraph format.
+    target_edge_type : tuple[str, str, str]
+        Edge type for new metapath edges.
+    weight : str
+        Edge weight attribute name.
+    endpoint_type : str
+        Node type of endpoints.
+
+    Returns
+    -------
+    nx.Graph or nx.MultiGraph or tuple
+        Graph with metapath edges added.
+    """
+    if as_nx:
+        # Convert to NetworkX if needed
+        if isinstance(graph, tuple):
+            nodes_dict_in, edges_dict_in = graph
+            nx_graph = gdf_to_nx(
+                nodes_dict_in, edges_dict_in, directed=directed, multigraph=multigraph
+            )
+        else:
+            nx_graph = graph
+
+        # Add edges to NetworkX graph
+        return _add_edges_to_nx_graph(nx_graph, new_edges_data, target_edge_type, weight)
+
+    # Return as GeoDataFrame tuple
+    if isinstance(graph, tuple):
+        nodes_dict, edges_dict = graph
+    else:
+        nodes_dict, edges_dict = nx_to_gdf(graph)
+
+    if not new_edges_data:
+        return nodes_dict, edges_dict
+
+    # Create GeoDataFrame for new edges
+    endpoint_gdf = nodes_dict[endpoint_type]
+    new_gdf = _create_edge_gdf_from_data(new_edges_data, endpoint_gdf, weight)
+    edges_dict[target_edge_type] = new_gdf
+
+    return nodes_dict, edges_dict
 
 
 def add_metapaths(
@@ -2767,33 +3455,24 @@ def _materialize_metapath(
     Parameters
     ----------
     mp_index : int
-        Position of the metapath in the user supplied list.
+        Index of the metapath.
     metapath : list[tuple[str, str, str]]
-        Sequence of edge type triples describing each hop.
+        List of edge types defining the metapath.
     nodes : dict[str, geopandas.GeoDataFrame]
-        Node GeoDataFrames keyed by node type.
+        Dictionary of node GeoDataFrames.
     edges : dict[tuple[str, str, str], geopandas.GeoDataFrame]
-        Edge GeoDataFrames keyed by edge type triples.
+        Dictionary of edge GeoDataFrames.
     directed : bool
-        Whether traversals must respect edge direction strictly.
-    edge_attrs : list[str] | None
-        Optional edge attribute columns to aggregate along the path.
+        Whether the graph is directed.
+    edge_attrs : list[str] or None
+        List of edge attributes to aggregate.
     aggregation : _EdgeAttrAggregation
-        Aggregation helpers for per-row and per-group reductions.
+        Aggregation strategy.
 
     Returns
     -------
-    tuple[tuple[str, str, str], geopandas.GeoDataFrame, dict[str, object]]
-        Edge identifier, aggregated GeoDataFrame, and metadata describing the
-        generated metapath edges.
-
-    Raises
-    ------
-    ValueError
-        If the metapath is shorter than two hops or a hop lacks a two-level
-        ``MultiIndex``.
-    KeyError
-        If a required edge attribute column or node GeoDataFrame is missing.
+    tuple
+        Tuple containing the edge key, the result GeoDataFrame, and metadata.
     """
     if len(metapath) < 2:
         msg = "Each metapath must contain at least two edge types"
@@ -2808,6 +3487,7 @@ def _materialize_metapath(
         "edge_attr_agg": aggregation.tag,
     }
 
+    # 1. Build canonical frames for each hop
     frames: list[pd.DataFrame] = []
     start_index_name = f"{start_type}_id"
     end_index_name = f"{end_type}_id"
@@ -2815,51 +3495,54 @@ def _materialize_metapath(
     for step_idx, edge_type in enumerate(metapath):
         edge_gdf, reversed_lookup = _get_edge_frame(edges, edge_type, directed)
 
-        if not isinstance(edge_gdf.index, pd.MultiIndex) or edge_gdf.index.nlevels < 2:
-            msg = f"Edge GeoDataFrame for {edge_type} must have a two-level MultiIndex"
-            raise ValueError(msg)
-
-        src_level = 1 if reversed_lookup else 0
-        dst_level = 0 if reversed_lookup else 1
-
+        # Update index names from the first/last hop
         if step_idx == 0:
-            start_index_name = _normalise_index_name(
-                edge_gdf.index.names[src_level],
-                f"{start_type}_id",
-            )
+            idx_name = edge_gdf.index.names[1 if reversed_lookup else 0]
+            start_index_name = _normalise_index_name(idx_name, f"{start_type}_id")
         if step_idx == len(metapath) - 1:
-            end_index_name = _normalise_index_name(
-                edge_gdf.index.names[dst_level],
-                f"{end_type}_id",
+            idx_name = edge_gdf.index.names[0 if reversed_lookup else 1]
+            end_index_name = _normalise_index_name(idx_name, f"{end_type}_id")
+
+        frame = _build_hop_frame(
+            edge_gdf=edge_gdf,
+            step_idx=step_idx,
+            reversed_lookup=reversed_lookup,
+            edge_attrs=edge_attrs,
+        )
+        if frame.empty:
+            return (
+                edge_key,
+                _empty_metapath_gdf(
+                    nodes, start_type, end_type, edge_attrs, start_index_name, end_index_name
+                ),
+                metadata,
+            )
+        frames.append(frame)
+
+    # 2. Join hops
+    joined = frames[0]
+    for idx in range(1, len(frames)):
+        joined = joined.merge(
+            frames[idx],
+            left_on=f"dst_{idx - 1}",
+            right_on=f"src_{idx}",
+            how="inner",
+            copy=False,
+        )
+        # Drop intermediate join columns to save memory
+        joined = joined.drop(columns=[f"dst_{idx - 1}", f"src_{idx}"], errors="ignore")
+
+        if joined.empty:
+            return (
+                edge_key,
+                _empty_metapath_gdf(
+                    nodes, start_type, end_type, edge_attrs, start_index_name, end_index_name
+                ),
+                metadata,
             )
 
-        frames.append(
-            _edge_step_frame(
-                edge_gdf=edge_gdf,
-                step_idx=step_idx,
-                src_level=src_level,
-                dst_level=dst_level,
-                edge_attrs=edge_attrs,
-            ),
-        )
-
-    empty_result = _empty_metapath_gdf(
-        nodes,
-        start_type,
-        end_type,
-        edge_attrs,
-        start_index_name,
-        end_index_name,
-    )
-
-    if any(frame.empty for frame in frames):
-        return edge_key, empty_result, metadata
-
-    joined = _join_metapath_frames(frames)
-    if joined.empty:
-        return edge_key, empty_result, metadata
-
-    aggregated = _reduce_metapath_paths(
+    # 3. Aggregate paths
+    aggregated = _aggregate_paths(
         joined,
         step_count=len(frames),
         edge_attrs=edge_attrs,
@@ -2867,9 +3550,17 @@ def _materialize_metapath(
         start_index_name=start_index_name,
         end_index_name=end_index_name,
     )
-    if aggregated.empty:
-        return edge_key, empty_result, metadata
 
+    if aggregated.empty:
+        return (
+            edge_key,
+            _empty_metapath_gdf(
+                nodes, start_type, end_type, edge_attrs, start_index_name, end_index_name
+            ),
+            metadata,
+        )
+
+    # 4. Attach geometry
     result = _attach_metapath_geometry(aggregated, nodes, start_type, end_type)
     return edge_key, result, metadata
 
@@ -2882,131 +3573,90 @@ def _get_edge_frame(
     """
     Fetch the GeoDataFrame for an edge type, optionally using the reverse.
 
-    Falls back to the reverse specification when the traversal is undirected.
+    Checks for the edge type in the dictionary. If not found and the graph is
+    undirected, checks for the reverse edge type.
 
     Parameters
     ----------
     edges : dict[tuple[str, str, str], geopandas.GeoDataFrame]
-        Mapping of edge types to their GeoDataFrames.
+        Dictionary of edge GeoDataFrames.
     edge_type : tuple[str, str, str]
-        Edge type describing the hop currently being materialised.
+        The edge type to fetch.
     directed : bool
-        Whether reverse lookups are disallowed.
+        Whether the graph is directed.
 
     Returns
     -------
     tuple[geopandas.GeoDataFrame, bool]
-        GeoDataFrame for the hop and a flag indicating if the reverse
-        orientation was used.
-
-    Raises
-    ------
-    KeyError
-        If neither the requested nor reverse edge type is available.
+        The edge GeoDataFrame and a boolean indicating if it is reversed.
     """
-    try:
+    if edge_type in edges:
         return edges[edge_type], False
-    except KeyError:
-        if directed:
-            msg = f"Edge type {edge_type} not found in edges dictionary"
-            raise KeyError(msg) from None
+
+    if not directed:
         reverse_key = (edge_type[2], edge_type[1], edge_type[0])
         if reverse_key in edges:
             return edges[reverse_key], True
-        msg = f"Edge type {edge_type} not found in edges dictionary"
-        raise KeyError(msg) from None
+
+    msg = f"Edge type {edge_type} not found in edges dictionary"
+    raise KeyError(msg)
 
 
-def _edge_step_frame(
+def _build_hop_frame(
     *,
     edge_gdf: gpd.GeoDataFrame,
     step_idx: int,
-    src_level: int,
-    dst_level: int,
+    reversed_lookup: bool,
     edge_attrs: list[str] | None,
 ) -> pd.DataFrame:
     """
     Convert one hop into a canonical DataFrame used for joins.
 
-    Provides consistent column naming for subsequent merges.
+    Extracts source and destination indices and optional attributes.
 
     Parameters
     ----------
     edge_gdf : geopandas.GeoDataFrame
-        GeoDataFrame describing the hop.
+        The edge GeoDataFrame for this hop.
     step_idx : int
-        Zero-based hop index within the metapath.
-    src_level : int
-        Index level to treat as the hop source.
-    dst_level : int
-        Index level to treat as the hop destination.
-    edge_attrs : list[str] | None
-        Optional edge attributes to propagate through the traversal.
+        The index of the current step in the metapath.
+    reversed_lookup : bool
+        Whether the edge is being traversed in reverse.
+    edge_attrs : list[str] or None
+        List of edge attributes to include.
 
     Returns
     -------
     pandas.DataFrame
-        Canonical hop representation with source/destination identifiers and
-        optional attribute columns.
+        Canonical DataFrame with source and destination columns.
     """
+    if not isinstance(edge_gdf.index, pd.MultiIndex) or edge_gdf.index.nlevels < 2:
+        msg = "Edge GeoDataFrame must have a two-level MultiIndex"
+        raise ValueError(msg)
+
+    src_level = 1 if reversed_lookup else 0
+    dst_level = 0 if reversed_lookup else 1
+
     src_col = f"src_{step_idx}"
     dst_col = f"dst_{step_idx}"
 
-    columns = [src_col, dst_col]
-    available_attrs: list[str] | None = None
-    if edge_attrs:
-        available_attrs = [attr for attr in edge_attrs if attr in edge_gdf.columns]
-        columns.extend(f"{attr}_step{step_idx}" for attr in available_attrs)
-
-    if edge_gdf.empty:
-        return pd.DataFrame(columns=columns)
-
-    data: dict[str, np.ndarray] = {
+    data = {
         src_col: edge_gdf.index.get_level_values(src_level).to_numpy(),
         dst_col: edge_gdf.index.get_level_values(dst_level).to_numpy(),
     }
 
-    if available_attrs:
-        for attr in available_attrs:
+    if edge_attrs:
+        missing_attrs = [attr for attr in edge_attrs if attr not in edge_gdf.columns]
+        if missing_attrs:
+            msg = f"Edge attribute(s) {missing_attrs} missing in metapath steps"
+            raise KeyError(msg)
+        for attr in edge_attrs:
             data[f"{attr}_step{step_idx}"] = edge_gdf[attr].to_numpy()
 
     return pd.DataFrame(data)
 
 
-def _join_metapath_frames(frames: list[pd.DataFrame]) -> pd.DataFrame:
-    """
-    Inner-join successive hop frames to enumerate complete traversals.
-
-    Each join connects the destination identifiers of one hop to the source of
-    the next.
-
-    Parameters
-    ----------
-    frames : list[pandas.DataFrame]
-        Canonical hop frames produced by :func:`_edge_step_frame`.
-
-    Returns
-    -------
-    pandas.DataFrame
-        Joined metapath traversals with aligned hop information.
-    """
-    combined = frames[0]
-    for idx in range(1, len(frames)):
-        combined = combined.merge(
-            frames[idx],
-            left_on=f"dst_{idx - 1}",
-            right_on=f"src_{idx}",
-            how="inner",
-            copy=False,
-        )
-        combined = combined.drop(columns=f"src_{idx}", errors="ignore")
-        if combined.empty:
-            break
-
-    return combined
-
-
-def _reduce_metapath_paths(
+def _aggregate_paths(
     combined: pd.DataFrame,
     *,
     step_count: int,
@@ -3018,59 +3668,60 @@ def _reduce_metapath_paths(
     """
     Group joined paths into terminal node pairs with aggregated weights.
 
-    Produces a compact table ready for geometry attachment.
+    Aggregates weights and optional attributes for each path.
 
     Parameters
     ----------
     combined : pandas.DataFrame
-        Joined traversal table produced by :func:`_join_metapath_frames`.
+        DataFrame containing all joined paths.
     step_count : int
-        Number of hops in the metapath.
-    edge_attrs : list[str] | None
-        Optional edge attributes to aggregate along each traversal.
+        Number of steps in the metapath.
+    edge_attrs : list[str] or None
+        List of edge attributes to aggregate.
     aggregation : _EdgeAttrAggregation
-        Aggregation helpers defining row and group reductions.
+        Aggregation strategy for edge attributes.
     start_index_name : str
-        Name for the source level in the output ``MultiIndex``.
+        Name of the start node index.
     end_index_name : str
-        Name for the destination level in the output ``MultiIndex``.
+        Name of the end node index.
 
     Returns
     -------
     pandas.DataFrame
-        Aggregated table indexed by terminal node pairs. The table is empty
-        when no traversals survive the joins or aggregation.
-
-    Raises
-    ------
-    KeyError
-        If a required edge attribute column is missing from the joined table.
+        Aggregated DataFrame with weights.
     """
     src_col = "src_0"
     dst_col = f"dst_{step_count - 1}"
 
-    workload = pd.DataFrame(
-        {
-            "src": combined[src_col].to_numpy(),
-            "dst": combined[dst_col].to_numpy(),
-            "weight": np.ones(len(combined), dtype=float),
-        },
-    )
-
+    # Prepare aggregation dictionary
     agg_map: dict[str, str | Callable[[pd.Series], float]] = {"weight": "sum"}
+
+    # Base workload with path count (weight=1 for each path)
+    workload_data = {
+        "src": combined[src_col].to_numpy(),
+        "dst": combined[dst_col].to_numpy(),
+        "weight": np.ones(len(combined), dtype=float),
+    }
 
     if edge_attrs:
         for attr in edge_attrs:
-            step_columns = [f"{attr}_step{i}" for i in range(step_count)]
-            missing = set(step_columns) - set(combined.columns)
-            if missing:
-                msg = f"Edge attribute(s) '{attr}' missing in metapath steps"
-                raise KeyError(msg)
+            # Collect columns for this attribute across all steps
+            step_columns = [
+                f"{attr}_step{i}"
+                for i in range(step_count)
+                if f"{attr}_step{i}" in combined.columns
+            ]
+
+            # Row reduction (e.g. sum of times along the path)
             block = combined[step_columns]
-            workload[attr] = aggregation.row_reducer(block).to_numpy()
+            workload_data[attr] = aggregation.row_reducer(block).to_numpy()
             agg_map[attr] = aggregation.group_reducer
 
+    workload = pd.DataFrame(workload_data)
+
+    # Group by terminal nodes and aggregate (e.g. sum of weights = number of paths)
     aggregated = workload.groupby(["src", "dst"], sort=False).agg(agg_map)
+
     if aggregated.empty:
         return _empty_metapath_frame(edge_attrs, start_index_name, end_index_name)
 
@@ -3103,10 +3754,7 @@ def _empty_metapath_frame(
     pandas.DataFrame
         Empty DataFrame with the requested columns and index structure.
     """
-    columns = ["weight"]
-    if edge_attrs:
-        columns.extend(edge_attrs)
-
+    columns = ["weight"] + (edge_attrs if edge_attrs else [])
     frame = pd.DataFrame(columns=columns)
     frame.index = pd.MultiIndex.from_tuples([], names=[start_index_name, end_index_name])
     return frame
