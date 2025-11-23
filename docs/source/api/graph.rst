@@ -20,4 +20,4 @@ Graph
 
 .. autofunction:: add_metapaths
 
-.. autofunction:: filter_edges_by_weight
+.. autofunction:: add_metapaths_by_weight
