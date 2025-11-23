@@ -173,6 +173,39 @@ def test_directed_variants_and_bridge(small_points: gpd.GeoDataFrame) -> None:
     assert len(b_rad) == 2
 
 
+def test_bridge_nodes_type_filters(small_points: gpd.GeoDataFrame) -> None:
+    """bridge_nodes can restrict sources/targets when filters are provided."""
+    layers = {
+        "a": small_points.iloc[[0]],
+        "b": small_points.iloc[[1]],
+        "c": small_points.iloc[[2]],
+    }
+
+    _, all_edges = bridge_nodes(layers, k=1)
+    assert set(all_edges) == {
+        ("a", "is_nearby", "b"),
+        ("a", "is_nearby", "c"),
+        ("b", "is_nearby", "a"),
+        ("b", "is_nearby", "c"),
+        ("c", "is_nearby", "a"),
+        ("c", "is_nearby", "b"),
+    }
+
+    _, filtered = bridge_nodes(
+        layers,
+        k=1,
+        source_node_types=["a"],
+        target_node_types=["b", "c"],
+    )
+    assert set(filtered) == {("a", "is_nearby", "b"), ("a", "is_nearby", "c")}
+
+    _, target_only = bridge_nodes(layers, k=1, target_node_types=["b"])
+    assert set(target_only) == {("a", "is_nearby", "b"), ("c", "is_nearby", "b")}
+
+    with pytest.raises(ValueError, match="Unknown source node types"):
+        bridge_nodes(layers, k=1, source_node_types=["missing"])
+
+
 def test_directed_network_variants(
     small_points: gpd.GeoDataFrame, network_edges: gpd.GeoDataFrame
 ) -> None:
