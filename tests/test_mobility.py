@@ -5,6 +5,7 @@ repeated patterns via parametrization, while preserving coverage.
 """
 
 from typing import TYPE_CHECKING
+from typing import Any
 from typing import cast
 
 import geopandas as gpd
@@ -657,8 +658,14 @@ class TestODMatrixToGraph:
     def test_adjacency_wrong_type_raises(self, od_zones_gdf: gpd.GeoDataFrame) -> None:
         """Passing an unsupported type for adjacency matrix raises TypeError."""
         bad = [[0, 1, 0], [0, 0, 0], [0, 0, 0]]  # list, not DataFrame/ndarray
+        bad_input: Any = bad
         try:
-            od_matrix_to_graph(bad, od_zones_gdf, zone_id_col="zone_id", matrix_type="adjacency")  # type: ignore[arg-type]
+            od_matrix_to_graph(
+                bad_input,
+                od_zones_gdf,
+                zone_id_col="zone_id",
+                matrix_type="adjacency",
+            )
         except TypeError:
             pass
         else:

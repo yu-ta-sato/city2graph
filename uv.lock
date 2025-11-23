@@ -425,6 +425,7 @@ dependencies = [
     { name = "osmnx" },
     { name = "overturemaps" },
     { name = "rustworkx" },
+    { name = "scipy" },
     { name = "shapely" },
 ]
 
@@ -508,6 +509,7 @@ requires-dist = [
     { name = "osmnx", specifier = ">=2.0.3" },
     { name = "overturemaps", specifier = ">=0.17.0" },
     { name = "rustworkx", specifier = ">=0.17.1" },
+    { name = "scipy", specifier = ">=1.10.0" },
     { name = "shapely", specifier = ">=2.1.0" },
     { name = "torch", marker = "(sys_platform == 'linux' and extra == 'cu118') or (sys_platform == 'win32' and extra == 'cu118')", specifier = ">=2.6.0", index = "https://download.pytorch.org/whl/cu118", conflict = { package = "city2graph", extra = "cu118" } },
     { name = "torch", marker = "(sys_platform == 'linux' and extra == 'cu124') or (sys_platform == 'win32' and extra == 'cu124')", specifier = ">=2.6.0", index = "https://download.pytorch.org/whl/cu124", conflict = { package = "city2graph", extra = "cu124" } },
