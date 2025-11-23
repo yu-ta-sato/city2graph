@@ -16,10 +16,13 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 from itertools import combinations
-from itertools import permutations
+from typing import TYPE_CHECKING
 from typing import Any
 from typing import Literal
 from typing import cast
+
+if TYPE_CHECKING:  # Only needed for typing annotations
+    from collections.abc import Iterable
 
 # Third-party imports
 import geopandas as gpd
@@ -1180,12 +1183,53 @@ def waxman_graph(
     return builder.to_output(as_nx)
 
 
+def _normalize_layer_types(
+    values: Iterable[str] | None,
+    label: str,
+    node_order: tuple[str, ...],
+    node_set: set[str],
+) -> list[str]:
+    """
+    Return requested node types if they are defined.
+
+    The helper validates requested node types against the available set and
+    preserves the original ordering to maintain deterministic layer pairing.
+
+    Parameters
+    ----------
+    values : Iterable[str] | None
+        Requested node types (``None`` means all types).
+    label : str
+        Role label used for error messaging.
+    node_order : tuple[str, ...]
+        Ordered tuple of available node types.
+    node_set : set[str]
+        Lookup set for validating requested node types.
+
+    Returns
+    -------
+    list[str]
+        Ordered list of validated node types.
+    """
+    if values is None:
+        return list(node_order)
+    unique_values = list(dict.fromkeys(values))
+    missing = [v for v in unique_values if v not in node_set]
+    if missing:
+        sorted_missing = ", ".join(sorted(missing))
+        msg = f"Unknown {label} node types: {sorted_missing}"
+        raise ValueError(msg)
+    return unique_values
+
+
 def bridge_nodes(
     nodes_dict: dict[str, gpd.GeoDataFrame],
     proximity_method: str = "knn",
     *,
     multigraph: bool = False,
     as_nx: bool = False,
+    source_node_types: Iterable[str] | None = None,
+    target_node_types: Iterable[str] | None = None,
     **kwargs: float | str | bool,
 ) -> tuple[dict[str, gpd.GeoDataFrame], dict[tuple[str, str, str], gpd.GeoDataFrame]] | nx.Graph:
     r"""
@@ -1217,6 +1261,12 @@ def bridge_nodes(
     as_nx : bool, default False
         If True, returns a NetworkX graph object containing all nodes and
         inter-layer edges. Otherwise, returns dictionaries of GeoDataFrames.
+    source_node_types : Iterable[str], optional
+        Node types from ``nodes_dict`` that should act as sources. When None, all
+        node types are considered sources.
+    target_node_types : Iterable[str], optional
+        Node types from ``nodes_dict`` that should act as targets. When None, all
+        node types are considered targets.
     **kwargs : Any
         Additional keyword arguments passed to the underlying proximity method:
 
@@ -1258,6 +1308,7 @@ def bridge_nodes(
         If `nodes_dict` contains fewer than two layers.
         If `proximity_method` is not "knn" or "fixed_radius".
         If `proximity_method` is "fixed_radius" but `radius` is not provided in kwargs.
+        If unknown node types are provided via ``source_node_types`` or ``target_node_types``.
 
     See Also
     --------
@@ -1294,21 +1345,39 @@ def bridge_nodes(
     # Extract param
     param = float(kwargs.get("k", 1)) if method == "knn" else float(kwargs["radius"])
 
-    for src_type, dst_type in permutations(nodes_dict.keys(), 2):
-        src_gdf = nodes_dict[src_type]
-        dst_gdf = nodes_dict[dst_type]
+    node_order = tuple(nodes_dict.keys())
+    node_set = set(node_order)
 
-        _, edges_gdf = _directed_graph(
-            src_gdf=src_gdf,
-            dst_gdf=dst_gdf,
-            distance_metric=metric_name,
-            method=method,
-            param=param,
-            as_nx=False,
-            network_gdf=net_gdf,
-            return_nodes=False,
-        )
-        edge_dict[(src_type, "is_nearby", dst_type)] = edges_gdf
+    source_types = _normalize_layer_types(source_node_types, "source", node_order, node_set)
+    target_types = _normalize_layer_types(target_node_types, "target", node_order, node_set)
+
+    for src_type in source_types:
+        for dst_type in target_types:
+            if src_type == dst_type:
+                continue
+
+            src_gdf = nodes_dict[src_type]
+            dst_gdf = nodes_dict[dst_type]
+
+            _, edges_gdf = _directed_graph(
+                src_gdf=src_gdf,
+                dst_gdf=dst_gdf,
+                distance_metric=metric_name,
+                method=method,
+                param=param,
+                as_nx=False,
+                network_gdf=net_gdf,
+                return_nodes=False,
+            )
+
+            # Strip the ("src", id) and ("dst", id) wrappers to return original IDs
+            if not edges_gdf.empty:
+                src_ids = [s[1] for s in edges_gdf.index.get_level_values(0)]
+                dst_ids = [d[1] for d in edges_gdf.index.get_level_values(1)]
+                edges_gdf.index = pd.MultiIndex.from_arrays(
+                    [src_ids, dst_ids], names=["source", "target"]
+                )
+            edge_dict[(src_type, "is_nearby", dst_type)] = edges_gdf
 
     if as_nx:
         return gdf_to_nx(nodes=nodes_dict, edges=edge_dict, multigraph=multigraph, directed=True)
