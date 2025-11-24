@@ -16,6 +16,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 from itertools import combinations
+from numbers import Real
 from typing import TYPE_CHECKING
 from typing import Any
 from typing import Literal
@@ -60,6 +61,75 @@ __all__ = [
 # Simple type alias for readability
 EdgePair = tuple[Any, Any]
 
+AUTO_NETWORK_LENGTH_ATTR = "__c2g_edge_length"
+
+
+def _resolve_network_weight_attribute(
+    graph: nx.Graph,
+    pos: dict[Any, tuple[float, float]],
+    preferred_attr: str | None,
+) -> str:
+    """
+    Return edge weight attribute, computing lengths when unspecified.
+
+    This helper function determines which edge attribute to use for network
+    distance calculations. If a preferred attribute is specified, it validates
+    that all edges have numeric values for that attribute. Otherwise, it
+    computes edge lengths automatically from geometries or node positions.
+
+    Parameters
+    ----------
+    graph : networkx.Graph
+        The network graph containing edges.
+    pos : dict[Any, tuple[float, float]]
+        Mapping from node IDs to (x, y) coordinate tuples.
+    preferred_attr : str or None
+        Preferred edge attribute name to use as weight. If None, lengths
+        are computed automatically.
+
+    Returns
+    -------
+    str
+        Name of the edge attribute to use for network weights.
+
+    Raises
+    ------
+    ValueError
+        If preferred_attr is specified but some edges are missing this
+        attribute or have non-numeric values.
+    """
+    if preferred_attr:
+        missing = [
+            (u, v)
+            for u, v, data in graph.edges(data=True)
+            if not isinstance(data.get(preferred_attr), Real)
+        ]
+        if missing:
+            sample = ", ".join(map(str, missing[:3]))
+            msg = (
+                f"Edges missing numeric '{preferred_attr}' attribute required for network weights;"
+                f" examples: {sample}"
+            )
+            raise ValueError(msg)
+        return preferred_attr
+
+    for u, v, data in graph.edges(data=True):
+        existing = data.get(AUTO_NETWORK_LENGTH_ATTR)
+        if isinstance(existing, Real):
+            continue
+        geom = data.get("geometry")
+        if geom is not None and hasattr(geom, "length"):
+            candidate = float(getattr(geom, "length", 0.0))
+        elif u in pos and v in pos:
+            ux, uy = pos[u]
+            vx, vy = pos[v]
+            candidate = float(np.hypot(vx - ux, vy - uy))
+        else:
+            candidate = 0.0
+        data[AUTO_NETWORK_LENGTH_ATTR] = candidate
+
+    return AUTO_NETWORK_LENGTH_ATTR
+
 
 class DistanceMetric:
     """
@@ -77,9 +147,17 @@ class DistanceMetric:
         Raw metric name (``euclidean``, ``manhattan``, or ``network``).
     network_gdf : geopandas.GeoDataFrame, optional
         Auxiliary network edges required when ``metric`` equals ``network``.
+    network_weight : str, optional
+        Edge attribute present in ``network_gdf`` to use as the shortest-path weight.
+        Defaults to automatically computed geometry lengths when omitted.
     """
 
-    def __init__(self, metric: str, network_gdf: gpd.GeoDataFrame | None = None) -> None:
+    def __init__(
+        self,
+        metric: str,
+        network_gdf: gpd.GeoDataFrame | None = None,
+        network_weight: str | None = None,
+    ) -> None:
         """
         Initialize the distance metric configuration.
 
@@ -92,12 +170,26 @@ class DistanceMetric:
             Raw metric name (``euclidean``, ``manhattan``, or ``network``).
         network_gdf : geopandas.GeoDataFrame, optional
             Auxiliary network edges required when ``metric`` equals ``network``.
+        network_weight : str, optional
+            Edge attribute inside ``network_gdf`` that supplies weights for network
+            distances. When omitted, lengths are derived from edge geometries.
         """
         self.name = self._normalize_metric(metric)
         if self.name not in {"euclidean", "manhattan", "network"}:
             msg = f"Unknown distance metric: {metric}"
             raise ValueError(msg)
         self.network_gdf = network_gdf
+        self.network_weight = network_weight
+        self._network_cache: (
+            tuple[
+                nx.Graph,
+                dict[Any, tuple[float, float]],
+                npt.NDArray[np.floating],
+                list[Any],
+                str,
+            ]
+            | None
+        ) = None
 
     def validate(self, crs: object) -> None:
         """
@@ -151,6 +243,49 @@ class DistanceMetric:
         if self.name == "network":
             return self._network_dm(coords)
         return self._euclidean_dm(coords)
+
+    def _get_network_support(
+        self,
+    ) -> tuple[nx.Graph, dict[Any, tuple[float, float]], npt.NDArray[np.floating], list[Any], str]:
+        """
+        Return cached NetworkX graph plus positional helpers.
+
+        This method builds and caches the network support infrastructure needed
+        for network-based distance calculations. It converts the network GeoDataFrame
+        to a NetworkX graph, extracts node positions, and resolves the weight attribute
+        to use for shortest path calculations.
+
+        Returns
+        -------
+        tuple[networkx.Graph, dict[Any, tuple[float, float]], numpy.ndarray, list[Any], str]
+            A 5-tuple containing:
+            - NetworkX graph representation of the network
+            - Dictionary mapping node IDs to (x, y) positions
+            - NumPy array of network node coordinates
+            - List of network node IDs
+            - str Weight attribute name for shortest path calculations
+
+        Raises
+        ------
+        ValueError
+            If network_gdf is None or if the network lacks valid node positions.
+        """
+        if self.network_gdf is None:
+            msg = "network_gdf is required for network distance metric"
+            raise ValueError(msg)
+
+        if self._network_cache is None:
+            net_nx = gdf_to_nx(edges=self.network_gdf)
+            pos = nx.get_node_attributes(net_nx, "pos")
+            if not pos:
+                msg = "network_gdf must include geometries with valid node positions"
+                raise ValueError(msg)
+            weight_attr = _resolve_network_weight_attribute(net_nx, pos, self.network_weight)
+            net_coords = np.asarray(list(pos.values()), dtype=float)
+            net_ids = list(pos.keys())
+            self._network_cache = (net_nx, pos, net_coords, net_ids, weight_attr)
+
+        return self._network_cache
 
     @staticmethod
     def _normalize_metric(metric: object) -> str:
@@ -233,11 +368,7 @@ class DistanceMetric:
         npt.NDArray[np.floating]
             Network distance matrix.
         """
-        # Convert edge GDF to NetworkX
-        net_nx = gdf_to_nx(edges=self.network_gdf)
-        pos = nx.get_node_attributes(net_nx, "pos")
-        net_coords: npt.NDArray[np.floating] = np.asarray(list(pos.values()))
-        net_ids = list(pos.keys())
+        net_nx, _pos, net_coords, net_ids, weight_attr = self._get_network_support()
 
         # Map sample points to nearest network nodes
         nn = NearestNeighbors(n_neighbors=1).fit(net_coords)
@@ -250,7 +381,7 @@ class DistanceMetric:
         np.fill_diagonal(dm, 0)
 
         # Calculate all-pairs shortest paths
-        use_weight = "length" if any("length" in d for _, _, d in net_nx.edges(data=True)) else None
+        use_weight = weight_attr
 
         for i in range(n):
             lengths = nx.single_source_dijkstra_path_length(net_nx, nearest[i], weight=use_weight)
@@ -359,7 +490,6 @@ class GraphBuilder:
         self.G.add_edges_from(edge_list)
 
         assert self.coords is not None
-
         assert self.node_ids is not None
 
         weights, geoms = self._compute_edge_data(edge_list)
@@ -442,10 +572,7 @@ class GraphBuilder:
         assert self.coords is not None
         assert self.node_ids is not None
 
-        net_nx = gdf_to_nx(edges=self.metric.network_gdf)
-        pos = nx.get_node_attributes(net_nx, "pos")
-        net_coords = np.asarray(list(pos.values()))
-        net_ids_list = list(pos.keys())
+        net_nx, pos, net_coords, net_ids_list, weight_attr = self.metric._get_network_support()
 
         nn = NearestNeighbors(n_neighbors=1).fit(net_coords)
         _, idxs = nn.kneighbors(self.coords)
@@ -455,7 +582,7 @@ class GraphBuilder:
         for i, (u, _v) in enumerate(edges):
             edges_by_src.setdefault(u, []).append(i)
 
-        use_weight = "length" if any("length" in d for *_, d in net_nx.edges(data=True)) else None
+        use_weight = weight_attr
         weights = [0.0] * len(edges)
         geoms = [LineString()] * len(edges)
 
@@ -510,6 +637,7 @@ def knn_graph(
     k: int = 5,
     distance_metric: str = "euclidean",
     network_gdf: gpd.GeoDataFrame | None = None,
+    network_weight: str | None = None,
     *,
     target_gdf: gpd.GeoDataFrame | None = None,
     as_nx: bool = False,
@@ -538,6 +666,9 @@ def knn_graph(
     network_gdf : geopandas.GeoDataFrame, optional
         A GeoDataFrame representing a network (e.g., roads, paths) to use for "network"
         distance calculations. Required if `distance_metric` is "network".
+    network_weight : str, optional
+        Edge attribute name in `network_gdf` to use as the network distance weight.
+        When omitted, weights default to the geometry length of each network edge.
     target_gdf : geopandas.GeoDataFrame, optional
         If provided, creates a directed graph where edges connect nodes from `gdf` to
         their k nearest neighbors in `target_gdf`. If None, creates an undirected graph
@@ -570,9 +701,10 @@ def knn_graph(
             param=k,
             as_nx=as_nx,
             network_gdf=network_gdf,
+            network_weight=network_weight,
         )
 
-    metric = DistanceMetric(distance_metric, network_gdf)
+    metric = DistanceMetric(distance_metric, network_gdf, network_weight)
     builder = GraphBuilder(gdf, metric)
     builder.prepare_nodes()
     assert builder.coords is not None
@@ -612,6 +744,7 @@ def delaunay_graph(
     gdf: gpd.GeoDataFrame,
     distance_metric: str = "euclidean",
     network_gdf: gpd.GeoDataFrame | None = None,
+    network_weight: str | None = None,
     *,
     as_nx: bool = False,
 ) -> tuple[gpd.GeoDataFrame, gpd.GeoDataFrame] | nx.Graph:
@@ -633,6 +766,9 @@ def delaunay_graph(
     network_gdf : geopandas.GeoDataFrame, optional
         A GeoDataFrame representing a network (e.g., roads) to use for "network"
         distance calculations. Required if `distance_metric` is "network".
+    network_weight : str, optional
+        Edge attribute name in `network_gdf` used as the path weight when
+        `distance_metric` is ``"network"``. Defaults to geometry length.
     as_nx : bool, default False
         If True, returns a NetworkX graph object. Otherwise, returns a tuple of
         GeoDataFrames (nodes, edges).
@@ -670,7 +806,7 @@ def delaunay_graph(
        Delaunay triangulation. International Journal of Computer & Information Sciences, 9(3),
        219-242. https://doi.org/10.1007/BF00977785
     """
-    metric = DistanceMetric(distance_metric, network_gdf)
+    metric = DistanceMetric(distance_metric, network_gdf, network_weight)
     builder = GraphBuilder(gdf, metric)
     builder.prepare_nodes()
     assert builder.coords is not None
@@ -694,6 +830,7 @@ def gabriel_graph(
     gdf: gpd.GeoDataFrame,
     distance_metric: str = "euclidean",
     network_gdf: gpd.GeoDataFrame | None = None,
+    network_weight: str | None = None,
     *,
     as_nx: bool = False,
 ) -> tuple[gpd.GeoDataFrame, gpd.GeoDataFrame] | nx.Graph:
@@ -711,6 +848,9 @@ def gabriel_graph(
         Metric used for edge weights / geometries (see the other generators).
     network_gdf : geopandas.GeoDataFrame, optional
         Required when `distance_metric='network'`.
+    network_weight : str, optional
+        Edge attribute in `network_gdf` that supplies weights for network distances.
+        Defaults to geometry length when not provided.
     as_nx : bool, default False
         If True return a NetworkX graph, otherwise return two GeoDataFrames (nodes, edges)
         via `nx_to_gdf`.
@@ -738,7 +878,7 @@ def gabriel_graph(
        variation analysis. Systematic zoology, 18(3), 259-278.
        https://doi.org/10.2307/2412323
     """
-    metric = DistanceMetric(distance_metric, network_gdf)
+    metric = DistanceMetric(distance_metric, network_gdf, network_weight)
     builder = GraphBuilder(gdf, metric)
     builder.prepare_nodes()
     assert builder.coords is not None
@@ -779,6 +919,7 @@ def relative_neighborhood_graph(
     gdf: gpd.GeoDataFrame,
     distance_metric: str = "euclidean",
     network_gdf: gpd.GeoDataFrame | None = None,
+    network_weight: str | None = None,
     *,
     as_nx: bool = False,
 ) -> tuple[gpd.GeoDataFrame, gpd.GeoDataFrame] | nx.Graph:
@@ -797,6 +938,9 @@ def relative_neighborhood_graph(
         Metric used to attach edge weights / geometries (see the other generators).
     network_gdf : geopandas.GeoDataFrame, optional
         Required when `distance_metric='network'`.
+    network_weight : str, optional
+        Edge attribute in `network_gdf` used for network distances. Defaults to
+        geometry length when omitted.
     as_nx : bool, default False
         If True return a NetworkX graph, otherwise return two GeoDataFrames (nodes, edges)
         via `nx_to_gdf`.
@@ -823,7 +967,7 @@ def relative_neighborhood_graph(
        set. Pattern recognition, 12(4), 261-268.
        https://doi.org/10.1016/0031-3203(80)90066-7
     """
-    metric = DistanceMetric(distance_metric, network_gdf)
+    metric = DistanceMetric(distance_metric, network_gdf, network_weight)
     builder = GraphBuilder(gdf, metric)
     builder.prepare_nodes()
     assert builder.coords is not None
@@ -861,6 +1005,7 @@ def euclidean_minimum_spanning_tree(
     gdf: gpd.GeoDataFrame,
     distance_metric: str = "euclidean",
     network_gdf: gpd.GeoDataFrame | None = None,
+    network_weight: str | None = None,
     *,
     as_nx: bool = False,
 ) -> tuple[gpd.GeoDataFrame, gpd.GeoDataFrame] | nx.Graph:
@@ -885,6 +1030,9 @@ def euclidean_minimum_spanning_tree(
     network_gdf : geopandas.GeoDataFrame, optional
         Required when `distance_metric='network'`. Must contain the network arcs with
         valid pos attributes on its nodes.
+    network_weight : str, optional
+        Edge attribute name in `network_gdf` used for weighting shortest paths when
+        `distance_metric='network'`. Defaults to geometry length.
     as_nx : bool, default False
         If True return a NetworkX graph, otherwise return two GeoDataFrames (nodes, edges)
         via `nx_to_gdf`.
@@ -918,7 +1066,7 @@ def euclidean_minimum_spanning_tree(
        SIGKDD international conference on Knowledge discovery and data mining (pp.
        603-612). https://doi.org/10.1145/1835804.1835882
     """
-    metric = DistanceMetric(distance_metric, network_gdf)
+    metric = DistanceMetric(distance_metric, network_gdf, network_weight)
     builder = GraphBuilder(gdf, metric)
     builder.prepare_nodes()
     assert builder.coords is not None
@@ -954,6 +1102,7 @@ def fixed_radius_graph(
     radius: float,
     distance_metric: str = "euclidean",
     network_gdf: gpd.GeoDataFrame | None = None,
+    network_weight: str | None = None,
     *,
     target_gdf: gpd.GeoDataFrame | None = None,
     as_nx: bool = False,
@@ -982,6 +1131,9 @@ def fixed_radius_graph(
     network_gdf : geopandas.GeoDataFrame, optional
         A GeoDataFrame representing a network (e.g., roads) to use for "network"
         distance calculations. Required if `distance_metric` is "network".
+    network_weight : str, optional
+        Edge attribute in `network_gdf` used as path weights when
+        `distance_metric="network"`. Defaults to geometry length when not provided.
     target_gdf : geopandas.GeoDataFrame, optional
         If provided, creates a directed graph where edges connect nodes from `gdf` to
         nodes in `target_gdf` within the specified radius. If None, creates an undirected
@@ -1033,9 +1185,10 @@ def fixed_radius_graph(
             param=radius,
             as_nx=as_nx,
             network_gdf=network_gdf,
+            network_weight=network_weight,
         )
 
-    metric = DistanceMetric(distance_metric, network_gdf)
+    metric = DistanceMetric(distance_metric, network_gdf, network_weight)
     builder = GraphBuilder(gdf, metric)
     builder.prepare_nodes()
     assert builder.coords is not None
@@ -1077,6 +1230,7 @@ def waxman_graph(
     seed: int | None = None,
     distance_metric: Literal["euclidean", "manhattan", "network"] = "euclidean",
     network_gdf: gpd.GeoDataFrame | None = None,
+    network_weight: str | None = None,
     *,
     as_nx: bool = False,
 ) -> tuple[gpd.GeoDataFrame, gpd.GeoDataFrame] | nx.Graph:
@@ -1117,6 +1271,9 @@ def waxman_graph(
     network_gdf : geopandas.GeoDataFrame, optional
         A GeoDataFrame representing a network (e.g., roads) to use for "network"
         distance calculations. Required if `distance_metric` is "network".
+    network_weight : str, optional
+        Edge attribute name in `network_gdf` used for network distances. Defaults to
+        geometry length when omitted.
     as_nx : bool, default False
         If True, returns a NetworkX graph object. Otherwise, returns a tuple of
         GeoDataFrames (nodes, edges).
@@ -1157,7 +1314,7 @@ def waxman_graph(
        https://doi.org/10.1109/49.12889
     """
     rng = np.random.default_rng(seed)
-    metric = DistanceMetric(distance_metric, network_gdf)
+    metric = DistanceMetric(distance_metric, network_gdf, network_weight)
     builder = GraphBuilder(gdf, metric)
     builder.prepare_nodes()
     assert builder.coords is not None
@@ -1277,6 +1434,8 @@ def bridge_nodes(
               Distance metric ("euclidean", "manhattan", "network")
             - network_gdf : geopandas.GeoDataFrame, optional
               Network for "network" distance calculations
+                        - network_weight : str, optional
+                            Edge attribute used as shortest-path weight when ``distance_metric='network'``
 
         For `proximity_method="fixed_radius"`:
             - radius : float, required
@@ -1285,6 +1444,8 @@ def bridge_nodes(
               Distance metric ("euclidean", "manhattan", "network")
             - network_gdf : geopandas.GeoDataFrame, optional
               Network for "network" distance calculations
+                        - network_weight : str, optional
+                            Edge attribute used as shortest-path weight when ``distance_metric='network'``
 
     Returns
     -------
@@ -1341,6 +1502,8 @@ def bridge_nodes(
     method = proximity_method.lower()
     metric_name = str(kwargs.get("distance_metric", "euclidean"))
     net_gdf = kwargs.get("network_gdf")
+    net_weight_raw = kwargs.get("network_weight")
+    net_weight: str | None = net_weight_raw if isinstance(net_weight_raw, str) else None
 
     # Extract param
     param = float(kwargs.get("k", 1)) if method == "knn" else float(kwargs["radius"])
@@ -1367,6 +1530,7 @@ def bridge_nodes(
                 param=param,
                 as_nx=False,
                 network_gdf=net_gdf,
+                network_weight=net_weight,
                 return_nodes=False,
             )
 
@@ -1390,6 +1554,7 @@ def group_nodes(
     *,
     distance_metric: Literal["euclidean", "manhattan", "network"] = "euclidean",
     network_gdf: gpd.GeoDataFrame | None = None,
+    network_weight: str | None = None,
     predicate: str = "covered_by",
     as_nx: bool = False,
 ) -> tuple[dict[str, gpd.GeoDataFrame], dict[tuple[str, str, str], gpd.GeoDataFrame]] | nx.Graph:
@@ -1418,6 +1583,9 @@ def group_nodes(
         along the provided `network_gdf` and uses shortest-path distances.
     network_gdf : geopandas.GeoDataFrame, optional
         Required when `distance_metric="network"`. Must share the same CRS as the inputs.
+    network_weight : str, optional
+        Edge attribute in `network_gdf` supplying network path weights. Defaults to
+        geometry length when omitted.
     predicate : str, default "covered_by"
         Spatial predicate used to determine containment in a vectorized spatial join
         (e.g., "covered_by", "within", "contains", "intersects"). The default includes
@@ -1451,7 +1619,7 @@ def group_nodes(
       proximity functions.
     """
     relation = _relation_from_predicate(predicate)
-    metric = DistanceMetric(distance_metric, network_gdf)
+    metric = DistanceMetric(distance_metric, network_gdf, network_weight)
 
     # Validate CRS
     poly_crs = polygons_gdf.crs
@@ -1493,6 +1661,7 @@ def contiguity_graph(
     *,
     distance_metric: str = "euclidean",
     network_gdf: gpd.GeoDataFrame | None = None,
+    network_weight: str | None = None,
     as_nx: bool = False,
 ) -> tuple[gpd.GeoDataFrame, gpd.GeoDataFrame] | nx.Graph:
     r"""
@@ -1535,6 +1704,9 @@ def contiguity_graph(
         Metric used to compute edge weights and geometries.
     network_gdf : geopandas.GeoDataFrame, optional
         Required when `distance_metric='network'`. A line-based network whose CRS matches `gdf`.
+    network_weight : str, optional
+        Edge attribute in `network_gdf` to use for shortest-path weights. Defaults to
+        geometry length when omitted.
     as_nx : bool, default False
         Output format control. If True, returns a NetworkX Graph object with spatial
         attributes. If False, returns a tuple of GeoDataFrames for nodes and edges,
@@ -1568,7 +1740,7 @@ def contiguity_graph(
     waxman_graph : Generate probabilistic Waxman graphs.
     """
     _validate_contiguity_input(gdf, contiguity)
-    metric = DistanceMetric(distance_metric, network_gdf)
+    metric = DistanceMetric(distance_metric, network_gdf, network_weight)
     metric.validate(gdf.crs)
 
     if gdf.empty:
@@ -1629,6 +1801,7 @@ def _directed_graph(
     param: float,
     as_nx: bool,
     network_gdf: gpd.GeoDataFrame | None = None,
+    network_weight: str | None = None,
     return_nodes: bool = True,
 ) -> tuple[gpd.GeoDataFrame, gpd.GeoDataFrame] | nx.Graph:
     """
@@ -1651,6 +1824,9 @@ def _directed_graph(
         If True, return a NetworkX graph instead of GeoDataFrames.
     network_gdf : geopandas.GeoDataFrame, optional
         Supporting network data required for ``network`` metric.
+    network_weight : str, optional
+        Edge attribute used as weight when ``distance_metric`` equals ``"network"``.
+        Defaults to geometry-derived lengths.
     return_nodes : bool, default True
         When False, only the edge GeoDataFrame is produced.
 
@@ -1663,7 +1839,7 @@ def _directed_graph(
         msg = "CRS mismatch between source and target GeoDataFrames"
         raise ValueError(msg)
 
-    metric = DistanceMetric(distance_metric, network_gdf)
+    metric = DistanceMetric(distance_metric, network_gdf, network_weight)
     metric.validate(src_gdf.crs)
 
     src_coords = np.column_stack([src_gdf.geometry.centroid.x, src_gdf.geometry.centroid.y])
