@@ -27,6 +27,13 @@ if TYPE_CHECKING:
 SKIP_EXCEPTIONS = (NotImplementedError, AttributeError, NameError, ImportError)
 TOLERANCE = 1e-6
 
+try:
+    import torch  # noqa: F401
+
+    TORCH_AVAILABLE = True
+except ImportError:
+    TORCH_AVAILABLE = False
+
 
 # ----------------------------------------------------------------------------
 # Execution helper
@@ -244,6 +251,162 @@ def make_connectors_gdf(
         {"id": ids, "geometry": [Point(xy) for xy in coords]},
         crs=crs,
     )
+
+
+# ----------------------------------------------------------------------------
+# Proximity-specific test helpers
+# ----------------------------------------------------------------------------
+
+
+def make_points_simple(
+    coords: list[tuple[float, float]], crs: str = "EPSG:27700"
+) -> gpd.GeoDataFrame:
+    """Create a simple points GeoDataFrame with sequential integer IDs.
+
+    Lightweight wrapper for proximity tests that need minimal setup.
+    """
+    return gpd.GeoDataFrame(
+        {"id": list(range(len(coords)))},
+        geometry=[Point(x, y) for x, y in coords],
+        crs=crs,
+    ).set_index("id")
+
+
+def make_single_point(crs: str = "EPSG:27700") -> gpd.GeoDataFrame:
+    """Create a single-point GeoDataFrame for early-exit test cases."""
+    return gpd.GeoDataFrame({"id": [0]}, geometry=[Point(0, 0)], crs=crs).set_index("id")
+
+
+def make_poly_points_pair(
+    crs: str = "EPSG:3857",
+) -> tuple[gpd.GeoDataFrame, gpd.GeoDataFrame]:
+    """Create polygon/points pair for group_nodes testing.
+
+    Returns
+    -------
+        Tuple of (polygons_gdf, points_gdf) where:
+        - polygons: single 2x2 square at origin with index "A"
+        - points: three points, two inside polygon, one outside
+    """
+    poly = Polygon([(0, 0), (2, 0), (2, 2), (0, 2)])
+    polys = gpd.GeoDataFrame({"name": ["A"]}, geometry=[poly], crs=crs).set_index(
+        pd.Index(["A"], name="zone")
+    )
+    pts = gpd.GeoDataFrame(
+        {"pid": [1, 2, 3]},
+        geometry=[Point(1, 1), Point(2, 1), Point(3, 3)],
+        crs=crs,
+    ).set_index("pid")
+    return polys, pts
+
+
+def make_square_polygons(crs: str = "EPSG:3857") -> gpd.GeoDataFrame:
+    """Create a small grid of adjacent square polygons for contiguity tests.
+
+    Returns 4 unit squares arranged as:
+    - Poly 0: (0,0) to (1,1)
+    - Poly 1: (1,0) to (2,1) - touches poly 0
+    - Poly 2: (0,1) to (1,2) - touches poly 0
+    - Poly 3: (2,0) to (3,1) - touches poly 1 only
+    """
+    polys = [
+        Polygon([(0, 0), (1, 0), (1, 1), (0, 1)]),  # 0
+        Polygon([(1, 0), (2, 0), (2, 1), (1, 1)]),  # 1 (touches 0)
+        Polygon([(0, 1), (1, 1), (1, 2), (0, 2)]),  # 2 (touches 0)
+        Polygon([(2, 0), (3, 0), (3, 1), (2, 1)]),  # 3 (touches 1 only)
+    ]
+    return gpd.GeoDataFrame({"val": range(len(polys))}, geometry=polys, crs=crs).set_index(
+        pd.Index(range(len(polys)), name="pid")
+    )
+
+
+def make_network_edges(
+    src_ids: list[int],
+    dst_ids: list[int],
+    geometries: list[LineString],
+    crs: str = "EPSG:27700",
+    extra_attrs: dict[str, list[object]] | None = None,
+) -> gpd.GeoDataFrame:
+    """Create a network edges GeoDataFrame with proper MultiIndex.
+
+    Parameters
+    ----------
+    src_ids : list[int]
+        Source node IDs
+    dst_ids : list[int]
+        Destination node IDs
+    geometries : list[LineString]
+        Edge geometries
+    crs : str, optional
+        Coordinate reference system, by default "EPSG:27700"
+    extra_attrs : dict[str, list] | None, optional
+        Additional columns as {column_name: values_list}, by default None
+
+    Returns
+    -------
+    gpd.GeoDataFrame
+        Network edges with MultiIndex (source_id, target_id)
+    """
+    mi = pd.MultiIndex.from_arrays([src_ids, dst_ids], names=("source_id", "target_id"))
+    data: dict[str, object] = {
+        "source_id": src_ids,
+        "target_id": dst_ids,
+        "geometry": geometries,
+    }
+    if extra_attrs:
+        data.update(extra_attrs)
+    return gpd.GeoDataFrame(data, index=mi, crs=crs)
+
+
+def assert_valid_proximity_result(
+    nodes: gpd.GeoDataFrame,
+    edges: gpd.GeoDataFrame,
+    expected_node_count: int,
+    check_edge_schema: bool = True,
+    allow_empty_edges: bool = True,
+) -> None:
+    """Assert nodes/edges have expected proximity graph structure.
+
+    Parameters
+    ----------
+    nodes : gpd.GeoDataFrame
+        Node GeoDataFrame to validate
+    edges : gpd.GeoDataFrame
+        Edge GeoDataFrame to validate
+    expected_node_count : int
+        Expected number of nodes
+    check_edge_schema : bool, optional
+        Whether to check for weight/geometry columns in edges, by default True
+    allow_empty_edges : bool, optional
+        Whether empty edges are acceptable (e.g., for single point graphs), by default True
+    """
+    assert len(nodes) == expected_node_count
+
+    if not allow_empty_edges:
+        assert not edges.empty
+
+    if check_edge_schema and not edges.empty:
+        assert {"weight", "geometry"}.issubset(edges.columns)
+
+
+def assert_network_metric_requires_network_gdf(
+    func: Callable[..., object],
+    gdf: gpd.GeoDataFrame,
+    **kwargs: object,
+) -> None:
+    """Assert function raises when network metric used without network_gdf.
+
+    Parameters
+    ----------
+    func : Callable
+        Proximity function to test
+    gdf : gpd.GeoDataFrame
+        GeoDataFrame to pass as first argument
+    **kwargs
+        Additional keyword arguments for the function
+    """
+    with pytest.raises(ValueError, match="network_gdf is required"):
+        func(gdf, distance_metric="network", **kwargs)
 
 
 # ----------------------------------------------------------------------------
