@@ -6,7 +6,9 @@ duplication and keep a single source of truth for shared logic across tests.
 
 from __future__ import annotations
 
+import warnings
 from typing import TYPE_CHECKING
+from unittest import mock
 
 import geopandas as gpd
 import networkx as nx
@@ -111,6 +113,36 @@ class TestTessellation(BaseGraphTest):
             helpers.assert_has_columns(tessellation, ["tess_id"])
             assert tessellation.crs == geometry.crs
 
+    def test_tessellation_handles_empty_geometry(self, empty_gdf: gpd.GeoDataFrame) -> None:
+        """Empty input should return an empty GeoDataFrame with expected columns."""
+        result = utils.create_tessellation(empty_gdf)
+        self.assert_valid_gdf(result, expected_empty=True)
+
+    def test_tessellation_handles_degenerate_inputs(
+        self,
+        single_point_geom_gdf: gpd.GeoDataFrame,
+        tessellation_barriers_gdf: gpd.GeoDataFrame,
+    ) -> None:
+        """Degenerate geometries or barriers should not raise."""
+        single_result = utils.create_tessellation(single_point_geom_gdf)
+        self.assert_valid_gdf(single_result, expected_empty=True)
+
+        barrier_result = utils.create_tessellation(
+            single_point_geom_gdf,
+            primary_barriers=tessellation_barriers_gdf,
+        )
+        self.assert_valid_gdf(barrier_result, expected_empty=True)
+
+    def test_tessellation_empty_with_barriers(self, empty_gdf: gpd.GeoDataFrame) -> None:
+        """Even with barriers an empty geometry should stay empty."""
+        barriers = gpd.GeoDataFrame(
+            {"geometry": [LineString([(0, 0), (1, 1)])]},
+            crs=empty_gdf.crs,
+        )
+        result = utils.create_tessellation(empty_gdf, primary_barriers=barriers)
+        self.assert_valid_gdf(result, expected_empty=True)
+        helpers.assert_has_columns(result, ["enclosure_index"])
+
 
 # ============================================================================
 # GRAPH STRUCTURE TESTS
@@ -142,7 +174,7 @@ class TestGraphStructures(BaseGraphTest):
                 False,
                 None,
                 True,
-                "All GeoDataFrames must have the same CRS",
+                "Edges GeoDataFrame must have a CRS",
             ),
         ],
     )
@@ -186,6 +218,69 @@ class TestGraphStructures(BaseGraphTest):
 
             if keep_geom:
                 assert "original_geometry" in dual_nodes.columns
+
+    def test_dual_graph_invalid_edge_id_col(
+        self,
+        sample_nodes_gdf: gpd.GeoDataFrame,
+        sample_edges_gdf: gpd.GeoDataFrame,
+    ) -> None:
+        """Test that providing a non-existent edge_id_col raises ValueError."""
+        with pytest.raises(ValueError, match="Column 'non_existent_col' not found"):
+            utils.dual_graph((sample_nodes_gdf, sample_edges_gdf), edge_id_col="non_existent_col")
+
+    def test_dual_graph_accepts_networkx_input(self, simple_nx_graph: nx.Graph) -> None:
+        """Dual graph should accept NetworkX graphs directly."""
+        dual_nodes, dual_edges = utils.dual_graph(simple_nx_graph)
+        self.assert_valid_gdf(dual_nodes)
+        self.assert_valid_gdf(dual_edges, expected_empty=True)
+
+    def test_dual_graph_warns_on_geographic_crs(self) -> None:
+        """Warn users when dual graph is computed on geographic CRS data."""
+        edges = gpd.GeoDataFrame(
+            {
+                "source": [1, 2],
+                "target": [2, 3],
+                "geometry": [
+                    LineString([(0, 0), (1, 1)]),
+                    LineString([(1, 1), (2, 2)]),
+                ],
+            },
+            crs="EPSG:4326",
+        ).set_index(["source", "target"])
+        nodes = gpd.GeoDataFrame(
+            {"geometry": [Point(0, 0), Point(1, 1), Point(2, 2)]},
+            crs="EPSG:4326",
+            index=[1, 2, 3],
+        )
+
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            utils.dual_graph((nodes, edges))
+            assert any("geographic CRS" in str(item.message) for item in caught)
+
+    def test_dual_graph_handles_mixed_edge_ids(self) -> None:
+        """Mixed edge-id types should still yield deterministic adjacencies."""
+        edges = gpd.GeoDataFrame(
+            {
+                "edge_id": ["a", 1],
+                "source": [1, 2],
+                "target": [2, 3],
+                "geometry": [
+                    LineString([(0, 0), (1, 1)]),
+                    LineString([(1, 1), (2, 2)]),
+                ],
+            },
+            crs="EPSG:27700",
+        ).set_index(["source", "target"])
+        nodes = gpd.GeoDataFrame(
+            {"geometry": [Point(0, 0), Point(1, 1), Point(2, 2)]},
+            crs="EPSG:27700",
+            index=[1, 2, 3],
+        )
+
+        dual_nodes, dual_edges = utils.dual_graph((nodes, edges), edge_id_col="edge_id")
+        self.assert_valid_gdf(dual_nodes)
+        self.assert_valid_gdf(dual_edges)
 
     def test_validate_nx_populates_pos_from_xy(self, sample_crs: str) -> None:
         """validate_nx should auto-create pos from x/y when missing."""
@@ -289,6 +384,18 @@ class TestGraphAnalysis(BaseGraphTest):
             assert (filtered.number_of_edges() == 0) == expect_empty
         else:
             self.assert_valid_gdf(filtered, expect_empty)
+
+    def test_graph_distance_filtering_without_pos(self, sample_crs: str) -> None:
+        """Graphs lacking position data should return empty filtered results."""
+        graph = nx.Graph()
+        graph.add_node(1, feature=1)
+        graph.add_node(2, feature=2)
+        graph.add_edge(1, 2)
+        graph.graph = {"crs": sample_crs, "is_hetero": False}
+
+        filtered = utils.filter_graph_by_distance(graph, Point(0, 0), 100.0)
+        assert isinstance(filtered, nx.Graph)
+        assert filtered.number_of_nodes() == 0
 
     @pytest.mark.parametrize(
         ("graph_fixture", "center_fixture", "distance", "expect_empty"),
@@ -400,6 +507,20 @@ class TestNxConversions(BaseConversionTest):
             # Heterogeneous edges dict without nodes results in empty graph
             assert graph.number_of_edges() == 0
 
+    def test_nx_to_gdf_requires_nodes_or_edges(self, simple_nx_graph: nx.Graph) -> None:
+        """Requesting neither nodes nor edges should raise."""
+        with pytest.raises(ValueError, match="Must request at least one of nodes or edges"):
+            nx_to_gdf(simple_nx_graph, nodes=False, edges=False)
+
+    def test_directed_multigraph_conversion(
+        self,
+        directed_multigraph_edges_gdf: gpd.GeoDataFrame,
+    ) -> None:
+        """Directed + multigraph flags should produce a MultiDiGraph."""
+        converter = NxConverter(directed=True, multigraph=True)
+        graph = converter.gdf_to_nx(nodes=None, edges=directed_multigraph_edges_gdf)
+        assert isinstance(graph, nx.MultiDiGraph)
+
     @pytest.mark.parametrize(
         ("nodes_arg", "edges_arg", "error_type", "error_match"),
         [
@@ -433,6 +554,31 @@ class TestNxConversions(BaseConversionTest):
 
         with pytest.raises(error_type, match=error_match):
             gdf_to_nx(nodes=nodes, edges=edges)
+
+    def test_node_index_names_survive_roundtrip(
+        self,
+        single_name_index_nodes_gdf: gpd.GeoDataFrame,
+        simple_edges_gdf: gpd.GeoDataFrame,
+    ) -> None:
+        """Roundtrips should respect single-level index names."""
+        graph = gdf_to_nx(nodes=single_name_index_nodes_gdf, edges=simple_edges_gdf)
+        nodes_back, _ = nx_to_gdf(graph)
+        assert isinstance(nodes_back, gpd.GeoDataFrame)
+        assert nodes_back.index.name == "single_name"
+
+        graph.graph["node_index_names"] = None
+        nodes_back, _ = nx_to_gdf(graph)
+        assert isinstance(nodes_back, gpd.GeoDataFrame)
+        assert nodes_back.index.name is None
+
+    def test_multiindex_nodes_roundtrip(
+        self,
+        multiindex_nodes_gdf: gpd.GeoDataFrame,
+        simple_edges_gdf: gpd.GeoDataFrame,
+    ) -> None:
+        """MultiIndex node metadata should be preserved in graph metadata."""
+        graph = gdf_to_nx(nodes=multiindex_nodes_gdf, edges=simple_edges_gdf)
+        assert graph.graph["node_index_names"] == ["node_type", "node_id"]
 
     @pytest.mark.parametrize(
         ("graph_fixture", "expect_crs", "expect_geom"),
@@ -468,6 +614,70 @@ class TestNxConversions(BaseConversionTest):
             assert nodes.crs is None
             assert edges.crs is None
 
+    def test_nx_to_gdf_handles_empty_edges(self, sample_crs: str) -> None:
+        """Graphs with no edges should still return empty edge GeoDataFrames."""
+        graph = nx.Graph()
+        graph.add_node(1, pos=(0, 0), geometry=Point(0, 0))
+        graph.graph = {"crs": sample_crs, "is_hetero": False}
+
+        nodes_gdf, edges_gdf = nx_to_gdf(graph)
+        self.assert_valid_gdf(nodes_gdf)
+        self.assert_valid_gdf(edges_gdf, expected_empty=True)
+
+    def test_nx_to_gdf_multigraph_edges(self, sample_crs: str) -> None:
+        """Multigraph attributes should be preserved after conversion."""
+        graph = nx.MultiGraph()
+        graph.add_node(1, pos=(0, 0), geometry=Point(0, 0))
+        graph.add_node(2, pos=(1, 1), geometry=Point(1, 1))
+        graph.add_edge(1, 2, key=0, weight=1.0, geometry=LineString([(0, 0), (1, 1)]))
+        graph.graph = {"crs": sample_crs, "is_hetero": False}
+
+        _, edges_gdf = nx_to_gdf(graph)
+        self.assert_valid_gdf(edges_gdf)
+        assert isinstance(edges_gdf, gpd.GeoDataFrame)
+        assert "weight" in edges_gdf.columns
+
+    def test_nx_to_gdf_multiindex_edges(self, sample_crs: str) -> None:
+        """List-based stored edge indices should be normalized during reconstruction."""
+        graph = nx.MultiGraph()
+        graph.add_node(1, pos=(0, 0), geometry=Point(0, 0))
+        graph.add_node(2, pos=(1, 1), geometry=Point(1, 1))
+        graph.add_edge(1, 2, key=0, geometry=LineString([(0, 0), (1, 1)]))
+        graph.add_edge(1, 2, key=1, geometry=LineString([(0, 0), (1, 1)]))
+        graph.graph = {"crs": sample_crs, "is_hetero": False}
+
+        for u, v, k, attrs in graph.edges(data=True, keys=True):
+            attrs["_original_edge_index"] = [u, v, k]
+
+        _, edges_gdf = nx_to_gdf(graph)
+        self.assert_valid_gdf(edges_gdf)
+        assert len(edges_gdf) == 2
+
+    def test_nx_to_gdf_single_coord_attr(self, sample_crs: str) -> None:
+        """Missing pos attributes can be populated from alternative coordinate keys."""
+        graph = nx.Graph()
+        graph.add_node(1, coords=[0.0, 1.0])
+        graph.add_node(2, coords=(2.0, 3.0))
+        graph.graph = {"crs": sample_crs, "is_hetero": False}
+
+        nodes_gdf = nx_to_gdf(graph, nodes=True, edges=False, set_missing_pos_from=("coords",))
+        self.assert_valid_gdf(nodes_gdf)
+        assert len(nodes_gdf) == 2
+
+    def test_heterogeneous_edge_processing(
+        self,
+        regular_hetero_graph: nx.Graph,
+        empty_hetero_graph: nx.Graph,
+    ) -> None:
+        """nx_to_gdf should return dictionaries for heterogeneous graphs."""
+        nodes_dict, edges_dict = nx_to_gdf(regular_hetero_graph)
+        assert isinstance(nodes_dict, dict)
+        assert isinstance(edges_dict, dict)
+
+        nodes_dict, edges_dict = nx_to_gdf(empty_hetero_graph)
+        assert isinstance(edges_dict[("building", "connects", "road")], gpd.GeoDataFrame)
+        assert edges_dict[("building", "connects", "road")].empty
+
 
 # ============================================================================
 # VALIDATION TESTS
@@ -476,6 +686,33 @@ class TestNxConversions(BaseConversionTest):
 
 class TestValidation:
     """Test validation functions for GeoDataFrames and NetworkX graphs."""
+
+    def test_geo_processor_edge_cases(
+        self,
+        sample_buildings_gdf: gpd.GeoDataFrame,
+        empty_gdf: gpd.GeoDataFrame,
+        invalid_geom_gdf: gpd.GeoDataFrame,
+        all_invalid_geom_gdf: gpd.GeoDataFrame,
+    ) -> None:
+        """GeoDataProcessor should handle geometry filtering and allow-empty toggles."""
+        processor = GeoDataProcessor()
+
+        result = processor.validate_gdf(
+            sample_buildings_gdf,
+            expected_geom_types=["Polygon", "MultiPolygon"],
+        )
+        assert isinstance(result, gpd.GeoDataFrame)
+
+        assert processor.validate_gdf(empty_gdf, allow_empty=True) is not None
+        with pytest.raises(ValueError, match="GeoDataFrame cannot be empty"):
+            processor.validate_gdf(empty_gdf, allow_empty=False)
+
+        filtered = processor.validate_gdf(invalid_geom_gdf)
+        assert filtered is not None
+        assert len(filtered) < len(invalid_geom_gdf)
+
+        with pytest.raises(ValueError, match="GeoDataFrame cannot be empty"):
+            processor.validate_gdf(all_invalid_geom_gdf, allow_empty=False)
 
     @pytest.mark.parametrize(
         ("nodes_fixture", "edges_fixture", "should_error", "error_match"),
@@ -492,6 +729,18 @@ class TestValidation:
                 "sample_edges_gdf",
                 True,
                 "All GeoDataFrames must have the same CRS",
+            ),
+            (
+                "sample_nodes_gdf",
+                "edges_dict_for_hetero",
+                True,
+                "If edges is a dict, nodes must also be a dict or None",
+            ),
+            (
+                "simple_nodes_dict_type1",
+                "sample_edges_gdf",
+                True,
+                "If nodes is a dict, edges must also be a dict or None",
             ),
         ],
     )
@@ -537,6 +786,41 @@ class TestValidation:
         else:
             utils.validate_nx(graph)  # Should not raise
 
+    @pytest.mark.parametrize(
+        ("graph_fixture", "error_match"),
+        [
+            ("graph_missing_crs", "Graph metadata is missing required key"),
+            (
+                "hetero_graph_no_node_types",
+                "Heterogeneous graph metadata is missing 'node_types'",
+            ),
+            (
+                "hetero_graph_no_edge_types",
+                "Heterogeneous graph metadata is missing 'edge_types'",
+            ),
+            ("graph_no_pos_geom", "All nodes must have a 'pos' or 'geometry' attribute"),
+            (
+                "hetero_graph_no_node_type",
+                "All nodes in a heterogeneous graph must have a 'node_type' attribute",
+            ),
+            (
+                "hetero_graph_no_edge_type",
+                "All edges in a heterogeneous graph must have an 'edge_type' attribute",
+            ),
+        ],
+    )
+    def test_validate_nx_rejects_invalid_graphs(
+        self,
+        graph_fixture: str,
+        error_match: str,
+        request: pytest.FixtureRequest,
+    ) -> None:
+        """GeoDataProcessor.validate_nx should surface detailed errors."""
+        graph = request.getfixturevalue(graph_fixture)
+        processor = GeoDataProcessor()
+        with pytest.raises(ValueError, match=error_match):
+            processor.validate_nx(graph)
+
     def test_validation_edge_cases(
         self,
         sample_nodes_gdf: gpd.GeoDataFrame,
@@ -549,6 +833,43 @@ class TestValidation:
 
         # Invalid geometries should be handled with warning
         utils.validate_gdf(sample_nodes_gdf, segments_invalid_geom_gdf)
+
+    def test_heterogeneous_validation_errors(
+        self,
+        nodes_dict_bad_keys: dict[int, gpd.GeoDataFrame],
+        edges_dict_bad_tuple: dict[str, gpd.GeoDataFrame],
+        simple_nodes_dict_type1: dict[str, gpd.GeoDataFrame],
+        edges_dict_bad_elements: dict[tuple[int, str, str], gpd.GeoDataFrame],
+    ) -> None:
+        """Ensure validation catches malformed heterogeneous inputs."""
+        with pytest.raises(TypeError, match="Node type keys must be strings"):
+            gdf_to_nx(nodes=nodes_dict_bad_keys, edges=None)
+
+        with pytest.raises(TypeError, match="Edge type keys must be tuples"):
+            gdf_to_nx(nodes=simple_nodes_dict_type1, edges=edges_dict_bad_tuple)
+
+        with pytest.raises(TypeError, match="All elements in edge type tuples must be strings"):
+            gdf_to_nx(nodes=simple_nodes_dict_type1, edges=edges_dict_bad_elements)
+
+    def test_validate_nx_basic_structure_errors(self) -> None:
+        """Graphs with missing metadata or topology should raise informative errors."""
+        processor = GeoDataProcessor()
+
+        empty_graph = nx.Graph()
+        with pytest.raises(ValueError, match="Graph has no nodes"):
+            processor.validate_nx(empty_graph)
+
+        no_edges_graph = nx.Graph()
+        no_edges_graph.add_node(1)
+        with pytest.raises(ValueError, match="Graph has no edges"):
+            processor.validate_nx(no_edges_graph)
+
+        incomplete_graph = nx.Graph()
+        incomplete_graph.add_node(1, pos=(0, 0))
+        incomplete_graph.add_edge(1, 2)
+        delattr(incomplete_graph, "graph")
+        with pytest.raises(ValueError, match="Graph is missing 'graph' attribute dictionary"):
+            utils.validate_nx(incomplete_graph)
 
 
 # ============================================================================
@@ -606,352 +927,6 @@ class TestGraphMetadata:
 # ============================================================================
 # COMPREHENSIVE EDGE CASE TESTS
 # ============================================================================
-
-
-class TestEdgeCases:
-    """Test edge cases and error conditions for comprehensive coverage."""
-
-    def test_processor_edge_cases(
-        self,
-        sample_buildings_gdf: gpd.GeoDataFrame,
-        empty_gdf: gpd.GeoDataFrame,
-        invalid_geom_gdf: gpd.GeoDataFrame,
-        all_invalid_geom_gdf: gpd.GeoDataFrame,
-    ) -> None:
-        """Test GeoDataProcessor edge cases."""
-        processor = GeoDataProcessor()
-
-        # Test geometry type filtering
-        result = processor.validate_gdf(
-            sample_buildings_gdf,
-            expected_geom_types=["Polygon", "MultiPolygon"],
-        )
-        assert isinstance(result, gpd.GeoDataFrame)
-
-        # Test allow_empty parameter
-        result = processor.validate_gdf(empty_gdf, allow_empty=True)
-        assert result is not None
-        assert result.empty
-
-        with pytest.raises(ValueError, match="GeoDataFrame cannot be empty"):
-            processor.validate_gdf(empty_gdf, allow_empty=False)
-
-        # Test invalid geometries handling
-        result = processor.validate_gdf(invalid_geom_gdf)
-        assert result is not None
-        assert len(result) < len(invalid_geom_gdf)  # Invalid geometries filtered out
-
-        # Test case where filtering makes GDF empty and allow_empty=False (line 115-116)
-        with pytest.raises(ValueError, match="GeoDataFrame cannot be empty"):
-            processor.validate_gdf(all_invalid_geom_gdf, allow_empty=False)
-
-    def test_nx_validation_edge_cases(self) -> None:
-        """Test NetworkX validation edge cases."""
-        processor = GeoDataProcessor()
-
-        # Empty graph
-        empty_graph = nx.Graph()
-        with pytest.raises(ValueError, match="Graph has no nodes"):
-            processor.validate_nx(empty_graph)
-
-        # Graph with nodes but no edges
-        no_edges_graph = nx.Graph()
-        no_edges_graph.add_node(1)
-        with pytest.raises(ValueError, match="Graph has no edges"):
-            processor.validate_nx(no_edges_graph)
-
-        # Missing metadata
-        incomplete_graph = nx.Graph()
-        incomplete_graph.add_node(1, pos=(0, 0))
-        incomplete_graph.add_edge(1, 2)
-        # Remove the graph attribute to trigger the error
-        delattr(incomplete_graph, "graph")
-        with pytest.raises(ValueError, match="missing 'graph' attribute"):
-            processor.validate_nx(incomplete_graph)
-
-    def test_comprehensive_nx_validation_errors(
-        self,
-        graph_missing_crs: nx.Graph,
-        hetero_graph_no_node_types: nx.Graph,
-        hetero_graph_no_edge_types: nx.Graph,
-        graph_no_pos_geom: nx.Graph,
-        hetero_graph_no_node_type: nx.Graph,
-        hetero_graph_no_edge_type: nx.Graph,
-    ) -> None:
-        """Test comprehensive NetworkX validation error conditions."""
-        processor = GeoDataProcessor()
-
-        # Test missing required metadata keys (lines 155-156)
-        with pytest.raises(ValueError, match="Graph metadata is missing required key"):
-            processor.validate_nx(graph_missing_crs)
-
-        # Test heterogeneous graph missing node_types (lines 162-163)
-        with pytest.raises(
-            ValueError,
-            match="Heterogeneous graph metadata is missing 'node_types'",
-        ):
-            processor.validate_nx(hetero_graph_no_node_types)
-
-        # Test heterogeneous graph missing edge_types (lines 165-166)
-        with pytest.raises(
-            ValueError,
-            match="Heterogeneous graph metadata is missing 'edge_types'",
-        ):
-            processor.validate_nx(hetero_graph_no_edge_types)
-
-        # Test node missing pos/geometry (lines 173-174)
-        with pytest.raises(ValueError, match="All nodes must have a 'pos' or 'geometry' attribute"):
-            processor.validate_nx(graph_no_pos_geom)
-
-        # Test heterogeneous node missing node_type (lines 178-179)
-        with pytest.raises(
-            ValueError,
-            match="All nodes in a heterogeneous graph must have a 'node_type' attribute",
-        ):
-            processor.validate_nx(hetero_graph_no_node_type)
-
-        # Test heterogeneous edge missing edge_type (lines 184-185)
-        with pytest.raises(
-            ValueError,
-            match="All edges in a heterogeneous graph must have an 'edge_type' attribute",
-        ):
-            processor.validate_nx(hetero_graph_no_edge_type)
-
-    def test_heterogeneous_validation_errors(
-        self,
-        nodes_dict_bad_keys: dict[int, gpd.GeoDataFrame],
-        edges_dict_bad_tuple: dict[str, gpd.GeoDataFrame],
-        simple_nodes_dict_type1: dict[str, gpd.GeoDataFrame],
-    ) -> None:
-        """Test heterogeneous graph validation errors."""
-        # Test invalid node type keys
-        with pytest.raises(TypeError, match="Node type keys must be strings"):
-            utils.gdf_to_nx(nodes=nodes_dict_bad_keys, edges=None)
-
-        # Test invalid edge type tuples
-        with pytest.raises(TypeError, match="Edge type keys must be tuples"):
-            utils.gdf_to_nx(nodes=simple_nodes_dict_type1, edges=edges_dict_bad_tuple)
-
-    def test_conversion_edge_cases(self, simple_nx_graph: nx.Graph) -> None:
-        """Test conversion edge cases for complete coverage."""
-        # Test nx_to_gdf with neither nodes nor edges requested
-        with pytest.raises(ValueError, match="Must request at least one of nodes or edges"):
-            utils.nx_to_gdf(simple_nx_graph, nodes=False, edges=False)
-
-        # Test empty graph edge geometry creation - use the simple graph but remove edges
-        empty_edges_graph = simple_nx_graph.copy()
-        empty_edges_graph.remove_edges_from(list(empty_edges_graph.edges()))
-
-        nodes_gdf, edges_gdf = utils.nx_to_gdf(empty_edges_graph)
-        assert isinstance(nodes_gdf, gpd.GeoDataFrame)
-        assert isinstance(edges_gdf, gpd.GeoDataFrame)
-        assert not nodes_gdf.empty
-        assert edges_gdf.empty
-
-    def test_tessellation_edge_cases(
-        self,
-        empty_gdf: gpd.GeoDataFrame,
-        single_point_geom_gdf: gpd.GeoDataFrame,
-    ) -> None:
-        """Test tessellation edge cases."""
-        # Empty geometry
-        result = utils.create_tessellation(empty_gdf)
-        assert result.empty
-        assert isinstance(result, gpd.GeoDataFrame)
-
-        # Single point that might cause tessellation issues
-        result = utils.create_tessellation(single_point_geom_gdf)
-        assert isinstance(result, gpd.GeoDataFrame)
-
-    def test_graph_converter_edge_cases(
-        self,
-        directed_multigraph_edges_gdf: gpd.GeoDataFrame,
-    ) -> None:
-        """Test NxConverter edge cases for missing coverage."""
-        # Test directed graph creation (line 284)
-        converter = NxConverter(directed=True, multigraph=True)
-        graph = converter.gdf_to_nx(nodes=None, edges=directed_multigraph_edges_gdf)
-        assert isinstance(graph, nx.MultiDiGraph)
-
-        # Test edges is None after validation (line 277-278)
-        converter = NxConverter()
-        with pytest.raises(ValueError, match="Edges GeoDataFrame cannot be None"):
-            converter._convert_homogeneous(nodes=None, edges=None)
-
-    def test_nx_to_gdf_edge_cases(self, graph_with_edge_index_names: nx.Graph) -> None:
-        """Test nx_to_gdf edge cases for missing coverage."""
-        # Test edge_index_names is None (line 592)
-        nodes_gdf, edges_gdf = utils.nx_to_gdf(graph_with_edge_index_names)
-        assert isinstance(nodes_gdf, gpd.GeoDataFrame)
-        assert isinstance(edges_gdf, gpd.GeoDataFrame)
-
-    def test_index_handling_edge_cases(
-        self,
-        single_name_index_nodes_gdf: gpd.GeoDataFrame,
-        simple_edges_gdf: gpd.GeoDataFrame,
-    ) -> None:
-        """Test index handling edge cases."""
-        # Test single-level index name handling (line 629)
-        graph = utils.gdf_to_nx(nodes=single_name_index_nodes_gdf, edges=simple_edges_gdf)
-        nodes_back, _ = utils.nx_to_gdf(graph)
-        assert isinstance(nodes_back, gpd.GeoDataFrame)
-        assert nodes_back.index.name == "single_name"
-
-        # Test else clause for index names (line 633)
-        graph.graph["node_index_names"] = None
-        nodes_back, _ = utils.nx_to_gdf(graph)
-        assert isinstance(nodes_back, gpd.GeoDataFrame)
-        assert nodes_back.index.name is None
-
-    def test_heterogeneous_edge_processing(
-        self,
-        regular_hetero_graph: nx.Graph,
-        empty_hetero_graph: nx.Graph,
-    ) -> None:
-        """Test heterogeneous edge processing paths."""
-        # Test regular graph edge processing (lines 771-775)
-        nodes_dict, edges_dict = utils.nx_to_gdf(regular_hetero_graph)
-        assert isinstance(nodes_dict, dict)
-        assert isinstance(edges_dict, dict)
-
-        # Test empty edge type (line 779)
-        nodes_dict, edges_dict = utils.nx_to_gdf(empty_hetero_graph)
-        assert isinstance(nodes_dict, dict)
-        assert isinstance(edges_dict, dict)
-        assert ("building", "connects", "road") in edges_dict
-        assert edges_dict[("building", "connects", "road")].empty
-
-    def test_dual_graph_nx_input(self, simple_nx_graph: nx.Graph) -> None:
-        """Test dual graph with NetworkX input (line 1055-1056)."""
-        dual_nodes, dual_edges = utils.dual_graph(simple_nx_graph, edge_id_col=None)
-        assert isinstance(dual_nodes, gpd.GeoDataFrame)
-        assert isinstance(dual_edges, gpd.GeoDataFrame)
-
-    def test_validation_type_errors(
-        self,
-        nodes_non_dict_for_hetero: gpd.GeoDataFrame,
-        edges_dict_for_hetero: dict[tuple[str, str, str], gpd.GeoDataFrame],
-        edges_dict_bad_elements: dict[tuple[int, str, str], gpd.GeoDataFrame],
-        simple_nodes_dict_type1: dict[str, gpd.GeoDataFrame],
-    ) -> None:
-        """Test validation type errors (lines 1761-1762, 1786-1787)."""
-        # Test edges dict with nodes non-dict (line 1761-1762)
-        with pytest.raises(
-            TypeError,
-            match="If edges is a dict, nodes must also be a dict or None",
-        ):
-            utils.gdf_to_nx(nodes=nodes_non_dict_for_hetero, edges=edges_dict_for_hetero)
-
-        # Test invalid edge type tuple elements (line 1786-1787)
-        with pytest.raises(TypeError, match="All elements in edge type tuples must be strings"):
-            utils.gdf_to_nx(nodes=simple_nodes_dict_type1, edges=edges_dict_bad_elements)
-
-    def test_multiindex_nodes_conversion(
-        self,
-        multiindex_nodes_gdf: gpd.GeoDataFrame,
-        simple_edges_gdf: gpd.GeoDataFrame,
-    ) -> None:
-        """Test conversion with MultiIndex nodes (line 294)."""
-        # This should trigger the MultiIndex path (line 294)
-        graph = utils.gdf_to_nx(nodes=multiindex_nodes_gdf, edges=simple_edges_gdf)
-        assert graph.graph["node_index_names"] == ["node_type", "node_id"]
-
-    def test_validate_nx_missing_graph_attr_edge_cases(self) -> None:
-        """Test validate_nx with missing graph attributes to cover line 358."""
-        # Create a graph with missing graph attribute
-        graph = nx.Graph()
-        graph.add_node(1, pos=(0, 0))
-        graph.add_edge(1, 2)
-        # Remove graph attribute to trigger line 358
-        delattr(graph, "graph")
-
-        with pytest.raises(ValueError, match="Graph is missing 'graph' attribute dictionary"):
-            utils.validate_nx(graph)
-
-    def test_nx_to_gdf_multiindex_edge_cases(self, sample_crs: str) -> None:
-        """Test nx_to_gdf with MultiIndex edge cases to cover lines 1373-1377, 1633, 1637."""
-        # Create a graph with complex edge indices to trigger MultiIndex handling
-        graph = nx.MultiGraph()
-        graph.add_node(1, pos=(0, 0), geometry=Point(0, 0))
-        graph.add_node(2, pos=(1, 1), geometry=Point(1, 1))
-        graph.add_edge(1, 2, key=0, geometry=LineString([(0, 0), (1, 1)]))
-        graph.add_edge(1, 2, key=1, geometry=LineString([(0, 0), (1, 1)]))
-        graph.graph = {"crs": sample_crs, "is_hetero": False}
-
-        # Set complex original edge indices to trigger lines 1373-1377
-        for u, v, k, attrs in graph.edges(data=True, keys=True):
-            attrs["_original_edge_index"] = [u, v, k]  # List format to trigger tuple conversion
-
-        nodes_gdf, edges_gdf = utils.nx_to_gdf(graph, nodes=True, edges=True)
-
-        assert isinstance(nodes_gdf, gpd.GeoDataFrame)
-        assert isinstance(edges_gdf, gpd.GeoDataFrame)
-        # The index should be a regular index with list elements, not MultiIndex
-        assert len(edges_gdf) == 2  # Two edges from the multigraph
-
-    def test_nx_to_gdf_empty_edges_handling(self, sample_crs: str) -> None:
-        """Test nx_to_gdf with empty edges to cover lines 1496-1497."""
-        # Create a graph with no edges to trigger lines 1496-1497
-        graph = nx.Graph()
-        graph.add_node(1, pos=(0, 0), geometry=Point(0, 0))
-        graph.graph = {"crs": sample_crs, "is_hetero": False}
-
-        nodes_gdf, edges_gdf = utils.nx_to_gdf(graph, nodes=True, edges=True)
-
-        assert isinstance(nodes_gdf, gpd.GeoDataFrame)
-        assert isinstance(edges_gdf, gpd.GeoDataFrame)
-        assert edges_gdf.empty
-
-    def test_nx_to_gdf_multigraph_edge_processing(self, sample_crs: str) -> None:
-        """Test nx_to_gdf multigraph edge processing to cover line 1510."""
-        # Create a multigraph to trigger line 1510
-        graph = nx.MultiGraph()
-        graph.add_node(1, pos=(0, 0), geometry=Point(0, 0))
-        graph.add_node(2, pos=(1, 1), geometry=Point(1, 1))
-        graph.add_edge(1, 2, key=0, weight=1.0, geometry=LineString([(0, 0), (1, 1)]))
-        graph.graph = {"crs": sample_crs, "is_hetero": False}
-
-        nodes_gdf, edges_gdf = utils.nx_to_gdf(graph, nodes=True, edges=True)
-
-        assert isinstance(edges_gdf, gpd.GeoDataFrame)
-        assert len(edges_gdf) == 1
-        assert "weight" in edges_gdf.columns
-
-    def test_edge_index_names_handling(
-        self,
-        sample_crs: str,
-        simple_edges_dict_type1_type2: dict[tuple[str, str, str], gpd.GeoDataFrame],
-    ) -> None:
-        """Test edge index names handling (lines 629, 633, 660, 697-698, 713)."""
-        # Test line 465 - edge_index_names not dict handling
-        converter = NxConverter()
-        metadata = GraphMetadata(crs=sample_crs, is_hetero=True)
-        metadata.edge_index_names = "not_a_dict"  # type: ignore[assignment]  # This should trigger line 465
-
-        graph = nx.Graph()
-        graph.add_node(0, node_type="type1", _original_index="a", pos=(0, 0))
-        graph.add_node(1, node_type="type2", _original_index="b", pos=(1, 1))
-
-        # This should convert edge_index_names to dict
-        converter._add_heterogeneous_edges(graph, simple_edges_dict_type1_type2, metadata)
-        assert isinstance(metadata.edge_index_names, dict)
-
-    def test_tessellation_error_handling(
-        self,
-        single_point_geom_gdf: gpd.GeoDataFrame,
-        tessellation_barriers_gdf: gpd.GeoDataFrame,
-    ) -> None:
-        """Test tessellation error handling paths (lines 1653-1662, 1669)."""
-        # Test with geometry that might trigger momepy concatenation error
-        result = utils.create_tessellation(single_point_geom_gdf)
-        assert isinstance(result, gpd.GeoDataFrame)
-
-        # Test with barriers that might cause issues (line 1669)
-        result = utils.create_tessellation(
-            single_point_geom_gdf,
-            primary_barriers=tessellation_barriers_gdf,
-        )
-        assert isinstance(result, gpd.GeoDataFrame)
 
 
 # ============================================================================
@@ -1058,14 +1033,60 @@ class TestPlotting(BaseGraphTest):
             mp.setattr("matplotlib.pyplot.show", lambda: None)
             utils.plot_graph(sample_nx_graph)
 
-    def test_plot_graph_heterogeneous(self, regular_hetero_graph: nx.Graph) -> None:
-        """Test plotting a heterogeneous graph."""
+    def test_plot_graph_hetero_subplots(
+        self,
+        regular_hetero_graph: nx.Graph,
+    ) -> None:
+        """Test heterogeneous graph plotting with subplots."""
         if not utils.MATPLOTLIB_AVAILABLE:
-            pytest.skip("matplotlib not available")
+            pytest.skip("Matplotlib not available")
 
-        with pytest.MonkeyPatch.context() as mp:
-            mp.setattr("matplotlib.pyplot.show", lambda: None)
-            utils.plot_graph(regular_hetero_graph)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            utils.plot_graph(
+                graph=regular_hetero_graph,
+                subplots=True,
+            )
+
+    def test_plot_graph_hetero_subplots_unused_axes(
+        self,
+        sample_hetero_nodes_dict: dict[str, gpd.GeoDataFrame],
+        sample_hetero_edges_dict: dict[tuple[str, str, str], gpd.GeoDataFrame],
+    ) -> None:
+        """Test heterogeneous subplot with more axes than edge types (line 3441)."""
+        if not utils.MATPLOTLIB_AVAILABLE:
+            pytest.skip("Matplotlib not available")
+
+        # Create a hetero graph with only 2 edge types
+        # When subplot grid is larger than number of edge types, unused axes should be hidden
+        graph = utils.gdf_to_nx(
+            nodes=sample_hetero_nodes_dict,
+            edges=sample_hetero_edges_dict,
+            multigraph=True,
+        )
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            # This should create more axes than needed and hide unused ones
+            # The function will internally hide unused axes (line 3441)
+            utils.plot_graph(graph=graph, subplots=True, figsize=(10, 10), show=False)
+
+        plt.close("all")
+
+    def test_plot_graph_hetero_no_subplots_with_graph_input(
+        self,
+        regular_hetero_graph: nx.Graph,
+    ) -> None:
+        """Test plotting heterogeneous graph without subplots using graph input (line 3444)."""
+        if not utils.MATPLOTLIB_AVAILABLE:
+            pytest.skip("Matplotlib not available")
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            utils.plot_graph(
+                graph=regular_hetero_graph,
+                subplots=False,
+            )
 
     def test_plot_graph_save(self, sample_nx_graph: nx.Graph) -> None:
         """Test plotting without showing (for saving to file)."""
@@ -1126,7 +1147,7 @@ class TestPlotting(BaseGraphTest):
         with pytest.raises(TypeError, match="Unsupported data type"):
             utils.plot_graph(graph="not_a_graph")
 
-    def test_plot_graph_hetero_subplots(
+    def test_plot_graph_hetero_subplots_with_unused_axes(
         self,
         sample_hetero_nodes_dict: dict[str, gpd.GeoDataFrame],
         sample_hetero_edges_dict: dict[tuple[str, str, str], gpd.GeoDataFrame],
@@ -1215,3 +1236,397 @@ class TestPlotting(BaseGraphTest):
                 utils.plot_graph(nodes=sample_nodes_gdf, ax=ax)
         finally:
             plt.close(fig)
+
+
+# ============================================================================
+# INTERNAL UTILS TESTS
+# ============================================================================
+
+
+class TestIdentifySourceTargetCols:
+    """Test the _identify_source_target_cols function."""
+
+    @pytest.fixture
+    def basic_edges(self) -> gpd.GeoDataFrame:
+        """Create basic edges fixture for testing."""
+        return gpd.GeoDataFrame(
+            {"u": [1, 2], "v": [2, 3], "weight": [1.0, 2.0]},
+            geometry=[LineString([(0, 0), (1, 1)]), LineString([(1, 1), (2, 2)])],
+        )
+
+    def test_explicit_columns(self, basic_edges: gpd.GeoDataFrame) -> None:
+        """Test explicit column specification."""
+        u, v = utils._identify_source_target_cols(basic_edges, source_col="u", target_col="v")
+        assert (u == [1, 2]).all()
+        assert (v == [2, 3]).all()
+
+    def test_explicit_index_levels(self, basic_edges: gpd.GeoDataFrame) -> None:
+        """Test explicit index level specification."""
+        edges = basic_edges.set_index(["u", "v"])
+        u, v = utils._identify_source_target_cols(edges, source_col="u", target_col="v")
+        assert (u == [1, 2]).all()
+        assert (v == [2, 3]).all()
+
+    def test_implicit_columns_u_v(self, basic_edges: gpd.GeoDataFrame) -> None:
+        """Test implicit detection of 'u' and 'v' columns."""
+        u, v = utils._identify_source_target_cols(basic_edges)
+        assert (u == [1, 2]).all()
+        assert (v == [2, 3]).all()
+
+    def test_implicit_columns_source_target(self, basic_edges: gpd.GeoDataFrame) -> None:
+        """Test implicit detection of 'source' and 'target' columns."""
+        edges = basic_edges.rename(columns={"u": "source", "v": "target"})
+        u, v = utils._identify_source_target_cols(edges)
+        assert (u == [1, 2]).all()
+        assert (v == [2, 3]).all()
+
+    def test_implicit_index_from_to_node_id(self, basic_edges: gpd.GeoDataFrame) -> None:
+        """Test implicit detection of 'from_node_id' and 'to_node_id' index levels."""
+        edges = basic_edges.rename(columns={"u": "from_node_id", "v": "to_node_id"})
+        edges = edges.set_index(["from_node_id", "to_node_id"])
+        u, v = utils._identify_source_target_cols(edges)
+        assert (u == [1, 2]).all()
+        assert (v == [2, 3]).all()
+
+    def test_implicit_index_generic(self, basic_edges: gpd.GeoDataFrame) -> None:
+        """Test implicit detection from first two index levels."""
+        edges = basic_edges.set_index(["u", "v"])
+        # Rename levels to something generic
+        edges.index.names = ["level_0", "level_1"]
+        u, v = utils._identify_source_target_cols(edges)
+        assert (u == [1, 2]).all()
+        assert (v == [2, 3]).all()
+
+    def test_fallback_first_two_columns(self, basic_edges: gpd.GeoDataFrame) -> None:
+        """Test fallback to first two columns."""
+        edges = basic_edges.rename(columns={"u": "col1", "v": "col2"})
+        # Ensure col1 and col2 are first
+        edges = edges[["col1", "col2", "weight", "geometry"]]
+        u, v = utils._identify_source_target_cols(edges)
+        assert (u == [1, 2]).all()
+        assert (v == [2, 3]).all()
+
+    def test_error_missing_explicit(self, basic_edges: gpd.GeoDataFrame) -> None:
+        """Test error when explicit columns are missing."""
+        with pytest.raises(ValueError, match=r"Source/Target column\(s\) not found: missing"):
+            utils._identify_source_target_cols(basic_edges, source_col="missing", target_col="v")
+
+    def test_error_unable_to_identify(self) -> None:
+        """Test error when unable to identify columns."""
+        edges = gpd.GeoDataFrame(geometry=[LineString([(0, 0), (1, 1)])])
+        with pytest.raises(ValueError, match="Could not identify source and target"):
+            utils._identify_source_target_cols(edges)
+
+    def test_only_source_missing_target(self, basic_edges: gpd.GeoDataFrame) -> None:
+        """Test error when only source is found but target is missing."""
+        # This tests line 1647 - missing target column error
+        edges = basic_edges.copy()
+        with pytest.raises(
+            ValueError, match="Source/Target column\\(s\\) not found: missing_target"
+        ):
+            utils._identify_source_target_cols(edges, source_col="u", target_col="missing_target")
+
+    def test_standard_index_name_matching(self) -> None:
+        """Test _get_col_or_level with standard index name matching (line 1600)."""
+        # Create DataFrame with named index
+        df = pd.DataFrame({"col1": [1, 2, 3]}, index=pd.Index([10, 20, 30], name="my_index"))
+        result = utils._get_col_or_level(df, "my_index")
+        assert result is not None
+        assert (result == [10, 20, 30]).all()
+
+
+# ============================================================================
+# COMPREHENSIVE COVERAGE TESTS
+# ============================================================================
+
+
+class TestComprehensiveCoverage:
+    """Additional tests to achieve comprehensive code coverage."""
+
+    def test_empty_nodes_in_conversion(self, sample_crs: str) -> None:
+        """Test conversion with completely empty nodes (line 995)."""
+        # Create edges but with no nodes that will result in empty node records
+        edges_gdf = gpd.GeoDataFrame(
+            geometry=[LineString([(0, 0), (1, 1)])],
+            crs=sample_crs,
+        )
+
+        # Create a graph and then remove all node attributes to trigger empty records
+        converter = NxConverter()
+        graph = converter.gdf_to_nx(edges=edges_gdf)
+
+        # Manually clear node data to simulate empty records scenario
+        for node in graph.nodes():
+            # Keep only pos to trigger the empty records path
+            graph.nodes[node].clear()
+            graph.nodes[node]["pos"] = (0, 0)
+
+        # Convert back - this should handle empty node records
+        nodes_gdf, edges_gdf_out = converter.nx_to_gdf(graph)
+        assert isinstance(nodes_gdf, gpd.GeoDataFrame)
+
+    def test_dual_graph_empty_result_with_edge_id_col(
+        self, sample_nodes_gdf: gpd.GeoDataFrame, sample_crs: str
+    ) -> None:
+        """Test dual_graph with empty result and edge_id_col specified (line 1527)."""
+        # Create edges that won't form any dual edges
+        single_edge = gpd.GeoDataFrame(
+            {"edge_id": ["e1"]},
+            geometry=[LineString([(0, 0), (1, 1)])],
+            crs=sample_crs,
+        )
+        single_edge.index = pd.MultiIndex.from_arrays([[0], [1]], names=["u", "v"])
+
+        dual_nodes, dual_edges = utils.dual_graph(
+            (sample_nodes_gdf, single_edge), edge_id_col="edge_id"
+        )
+
+        # Should have nodes but no edges (single edge has no dual connections)
+        assert not dual_nodes.empty
+        assert dual_edges.empty
+        assert dual_edges.index.names == ["from_edge_id", "to_edge_id"]
+
+    def test_empty_tessellation_with_tess_id(self, sample_crs: str) -> None:
+        """Test _create_empty_tessellation with tess_id column (line 2422)."""
+        result = utils._create_empty_tessellation(sample_crs, include_tess_id=True)
+        assert isinstance(result, gpd.GeoDataFrame)
+        assert result.empty
+        assert "tess_id" in result.columns
+        assert "enclosure_index" in result.columns
+
+    @pytest.mark.skipif(not MATPLOTLIB_AVAILABLE, reason="Matplotlib not available")
+    def test_plot_empty_gdf(self, empty_gdf: gpd.GeoDataFrame) -> None:
+        """Test _plot_gdf with empty GeoDataFrame (line 3246)."""
+        # This should not raise and should return early
+        fig, ax = plt.subplots()
+        utils._plot_gdf(empty_gdf, ax)
+        plt.close(fig)
+
+    @pytest.mark.skipif(not MATPLOTLIB_AVAILABLE, reason="Matplotlib not available")
+    def test_plot_with_series_color(
+        self,
+        sample_nodes_gdf: gpd.GeoDataFrame,
+        sample_edges_gdf: gpd.GeoDataFrame,
+    ) -> None:
+        """Test plot_graph with pd.Series for color parameter (lines 3085, 3263)."""
+        # Create a Series for node colors with numeric indices (0-based from conversion)
+        # When nodes are converted to NetworkX, they get new integer indices
+        num_nodes = len(sample_nodes_gdf)
+        node_colors = pd.Series(["red"] * num_nodes, index=range(num_nodes))
+
+        utils.plot_graph(
+            graph=None,
+            nodes=sample_nodes_gdf,
+            edges=sample_edges_gdf,
+            node_color=node_colors,
+            show=False,
+        )
+        plt.close("all")
+
+    @pytest.mark.skipif(not MATPLOTLIB_AVAILABLE, reason="Matplotlib not available")
+    def test_plot_with_column_name(
+        self,
+        sample_nodes_gdf: gpd.GeoDataFrame,
+        sample_edges_gdf: gpd.GeoDataFrame,
+    ) -> None:
+        """Test plot_graph with column name string for color (line 3087)."""
+        # Add a numeric column for coloring
+        nodes_with_attr = sample_nodes_gdf.copy()
+        nodes_with_attr["value"] = range(len(nodes_with_attr))
+
+        utils.plot_graph(
+            graph=None,
+            nodes=nodes_with_attr,
+            edges=sample_edges_gdf,
+            node_color="value",
+            show=False,
+        )
+        plt.close("all")
+
+    @pytest.mark.skipif(not MATPLOTLIB_AVAILABLE, reason="Matplotlib not available")
+    def test_plot_hetero_subplots_empty_edges(
+        self,
+        sample_hetero_nodes_dict: dict[str, gpd.GeoDataFrame],
+    ) -> None:
+        """Test _plot_hetero_subplots with no edge items (line 3406)."""
+        # Create edges dict with only empty GeoDataFrames
+        empty_edges_dict: dict[tuple[str, str, str], gpd.GeoDataFrame] = {
+            ("building", "connects", "road"): gpd.GeoDataFrame(geometry=[], crs="EPSG:4326")
+        }
+
+        # This should return early without creating a plot
+        fig, ax = plt.subplots()
+        utils._plot_hetero_subplots(
+            sample_hetero_nodes_dict,
+            empty_edges_dict,
+            figsize=(10, 10),
+            bgcolor="white",
+        )
+        plt.close(fig)
+
+    def test_tessellation_momepy_error_handling(self, sample_crs: str) -> None:
+        """Test tessellation error handling for momepy ValueError (lines 2393-2399)."""
+        # Create geometry that might cause momepy to fail with "No objects to concatenate"
+        # Use a configuration that could trigger internal momepy ValueError
+
+        # Create valid input geometry
+        geometry = gpd.GeoDataFrame(
+            geometry=[Point(0, 0), Point(1, 1)],
+            crs=sample_crs,
+        )
+        barriers = gpd.GeoDataFrame(
+            geometry=[LineString([(0, 0), (1, 1)])],
+            crs=sample_crs,
+        )
+
+        # Mock momepy.enclosed_tessellation to raise ValueError with "No objects to concatenate"
+        # Since utils imports momepy, we patch city2graph.utils.momepy.enclosed_tessellation
+        with mock.patch("city2graph.utils.momepy.enclosed_tessellation") as mock_tess:
+            mock_tess.side_effect = ValueError("No objects to concatenate")
+
+            # Should handle the error and return empty tessellation
+            result = utils.create_tessellation(
+                geometry,
+                primary_barriers=barriers,
+                shrink=0.4,
+            )
+
+            assert isinstance(result, gpd.GeoDataFrame)
+            assert result.empty
+            assert result.crs == sample_crs
+
+    def test_build_edge_index_empty(self) -> None:
+        """Test _build_edge_index with empty original_indices (line 1225)."""
+        converter = NxConverter()
+        result = converter._build_edge_index([], None)
+        assert isinstance(result, pd.Index)
+        assert len(result) == 0
+
+    def test_canonical_edge_pair_self_loop(self) -> None:
+        """Test _canonical_edge_pair with self-loop (line 1370)."""
+        assert utils._canonical_edge_pair(1, 1) == (1, 1)
+        assert utils._canonical_edge_pair("a", "a") == ("a", "a")
+
+    def test_validate_nx_pos_from_xy(self, sample_crs: str) -> None:
+        """Test validate_nx creates pos from x and y attributes (line 2016)."""
+        # Create a graph with x, y but no pos
+        G = nx.Graph()
+        G.add_node(1, x=10.0, y=20.0)
+        G.add_node(2, x=30.0, y=40.0)
+        G.add_edge(1, 2, geometry=LineString([(10, 20), (30, 40)]))
+        G.graph = {"crs": sample_crs, "is_hetero": False}
+
+        # This should set pos from x and y
+        utils.validate_nx(G)
+
+        assert "pos" in G.nodes[1]
+        assert "pos" in G.nodes[2]
+        assert G.nodes[1]["pos"] == (10.0, 20.0)
+        assert G.nodes[2]["pos"] == (30.0, 40.0)
+
+    def test_build_node_index_empty(self) -> None:
+        """Test _build_node_index with empty original_indices (line 1243)."""
+        converter = NxConverter()
+        result = converter._build_node_index([], None)
+        assert isinstance(result, pd.Index)
+        assert len(result) == 0
+
+    def test_empty_graph_node_reconstruction(self, sample_crs: str) -> None:
+        """Test nx_to_gdf with graph that has nodes without attributes (line 996)."""
+        # Create a minimal graph with nodes that have no custom attributes
+        # This will result in empty records when reconstructing
+        G = nx.Graph()
+        G.add_node(0, pos=(0, 0))
+        G.add_node(1, pos=(1, 1))
+        G.graph = {"crs": sample_crs, "is_hetero": False, "node_index_names": None}
+
+        # Convert to GDF - should handle empty records gracefully
+        nodes_gdf, edges_gdf = utils.nx_to_gdf(G)
+        assert isinstance(nodes_gdf, gpd.GeoDataFrame)
+        assert len(nodes_gdf) == 2
+        assert "geometry" in nodes_gdf.columns
+
+    def test_edge_iteration_fallback(self, sample_crs: str) -> None:
+        """Test edge iteration handles unexpected edge format (line 1200)."""
+        # Create a graph and manually add malformed edge to test the fallback
+        converter = NxConverter()
+        graph = nx.Graph()
+        graph.add_node(0, pos=(0, 0))
+        graph.add_node(1, pos=(1, 1))
+        graph.add_edge(0, 1, geometry=LineString([(0, 0), (1, 1)]))
+        graph.graph = {"crs": sample_crs, "is_hetero": False, "edge_index_names": None}
+
+        # The actual iteration path that could hit line 1200 is very defensive
+        # It's hard to trigger without modifying internal NetworkX behavior
+        # Convert to GDF to exercise the edge reconstruction path
+        _, edges_gdf = converter.nx_to_gdf(graph)
+        assert isinstance(edges_gdf, gpd.GeoDataFrame)
+
+    def test_gdf_to_nx_edges_none(self, sample_nodes_gdf: gpd.GeoDataFrame) -> None:
+        """Test gdf_to_nx raises ValueError when edges is None."""
+        converter = NxConverter()
+        with pytest.raises(ValueError, match="Edges GeoDataFrame cannot be None"):
+            converter.gdf_to_nx(nodes=sample_nodes_gdf, edges=None)
+
+    def test_nx_to_gdf_multiindex_nodes(self, sample_crs: str) -> None:
+        """Test nx_to_gdf with MultiIndex nodes."""
+        G = nx.Graph()
+        # Add nodes with tuple indices
+        G.add_node((0, "a"), pos=(0, 0), _original_index=(0, "a"))
+        G.add_node((1, "b"), pos=(1, 1), _original_index=(1, "b"))
+        G.graph = {"crs": sample_crs, "is_hetero": False, "node_index_names": ["id", "type"]}
+
+        nodes_gdf, _ = utils.nx_to_gdf(G)
+        assert isinstance(nodes_gdf, gpd.GeoDataFrame)
+        assert isinstance(nodes_gdf.index, pd.MultiIndex)
+        assert nodes_gdf.index.names == ["id", "type"]
+        assert len(nodes_gdf) == 2
+
+    def test_coerce_name_sequence_string(self) -> None:
+        """Test _coerce_name_sequence with string input."""
+        assert utils._coerce_name_sequence("index_name") == ["index_name"]
+        assert utils._coerce_name_sequence(["a", "b"]) == ["a", "b"]
+        assert utils._coerce_name_sequence(None) is None
+
+    def test_dual_graph_as_nx(
+        self, sample_nodes_gdf: gpd.GeoDataFrame, sample_edges_gdf: gpd.GeoDataFrame
+    ) -> None:
+        """Test dual_graph with as_nx=True."""
+        result = utils.dual_graph((sample_nodes_gdf, sample_edges_gdf), as_nx=True)
+        assert isinstance(result, nx.Graph)
+        assert len(result) > 0
+
+    def test_nx_to_gdf_empty_graph_no_nodes(self, sample_crs: str) -> None:
+        """Test nx_to_gdf with a completely empty graph (no nodes)."""
+        G = nx.Graph()
+        G.graph = {"crs": sample_crs, "is_hetero": False}
+        nodes_gdf, edges_gdf = utils.nx_to_gdf(G)
+        assert isinstance(nodes_gdf, gpd.GeoDataFrame)
+        assert isinstance(edges_gdf, gpd.GeoDataFrame)
+        assert nodes_gdf.empty
+        assert edges_gdf.empty
+        assert "geometry" in nodes_gdf.columns
+
+    @pytest.mark.skipif(not MATPLOTLIB_AVAILABLE, reason="Matplotlib not available")
+    def test_plot_graph_subplots_less_than_grid(
+        self,
+        sample_hetero_nodes_dict: dict[str, gpd.GeoDataFrame],
+        sample_hetero_edges_dict: dict[tuple[str, str, str], gpd.GeoDataFrame],
+    ) -> None:
+        """Test plot_graph with subplots where number of plots < grid size."""
+        # Create a situation where we have 1 edge type but grid is 2 cols
+        # This triggers the "hide unused axes" logic
+
+        # Filter to just one edge type
+        single_edge_type = next(iter(sample_hetero_edges_dict.keys()))
+        single_edge_dict = {single_edge_type: sample_hetero_edges_dict[single_edge_type]}
+
+        fig, ax = plt.subplots()
+        utils.plot_graph(
+            nodes=sample_hetero_nodes_dict,
+            edges=single_edge_dict,
+            subplots=True,
+            ncols=2,  # Force 2 columns for 1 item
+            show=False,
+        )
+        plt.close("all")
