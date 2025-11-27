@@ -295,6 +295,24 @@ class TestIndividualGraphFunctions(TestMorphologyBase):
         self.validate_basic_output(nodes, edges)
         self.validate_edge_columns(edges, ["from_private_id", "to_private_id"])
 
+    def test_private_to_private_duplicate_index(
+        self, sample_tessellation_gdf: gpd.GeoDataFrame
+    ) -> None:
+        """Test private-to-private graph with duplicate indices in input GDF."""
+        # Create a GDF with duplicate indices
+        gdf_duplicate = sample_tessellation_gdf.copy()
+        # Set index to be all 0s (or any duplicate values)
+        gdf_duplicate.index = [0] * len(gdf_duplicate)
+
+        # This should not raise ValueError: The argument to the ids parameter contains duplicate entries
+        nodes, edges = private_to_private_graph(gdf_duplicate)
+
+        self.validate_basic_output(nodes, edges)
+        assert not edges.empty
+        # Ensure the from/to columns contain the actual private_ids, not the duplicate index values
+        assert edges["from_private_id"].isin(sample_tessellation_gdf["private_id"]).all()
+        assert edges["to_private_id"].isin(sample_tessellation_gdf["private_id"]).all()
+
     def test_private_to_private_invalid_contiguity(
         self,
         sample_tessellation_gdf: gpd.GeoDataFrame,
