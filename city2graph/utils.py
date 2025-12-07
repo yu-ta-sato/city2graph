@@ -18,6 +18,7 @@ from collections import defaultdict
 from collections.abc import Iterable
 from collections.abc import Sequence
 from itertools import combinations
+from typing import TYPE_CHECKING
 from typing import Any
 from typing import Literal
 
@@ -42,6 +43,10 @@ try:
     MATPLOTLIB_AVAILABLE = True
 except ImportError:  # pragma: no cover
     MATPLOTLIB_AVAILABLE = False
+
+if TYPE_CHECKING:
+    import matplotlib.axes
+
 
 # Import foundational classes from base module
 from .base import BaseGraphConverter
@@ -4031,7 +4036,7 @@ def plot_graph(  # noqa: PLR0913
     graph: nx.Graph | nx.MultiGraph | None = None,
     nodes: gpd.GeoDataFrame | dict[str, gpd.GeoDataFrame] | None = None,
     edges: gpd.GeoDataFrame | dict[tuple[str, str, str], gpd.GeoDataFrame] | None = None,
-    ax: Any | None = None,  # noqa: ANN401
+    ax: "matplotlib.axes.Axes | np.ndarray | None" = None,
     bgcolor: str = "#000000",
     figsize: tuple[float, float] = (12, 12),
     subplots: bool = True,
@@ -4049,7 +4054,7 @@ def plot_graph(  # noqa: PLR0913
     edge_alpha: float | pd.Series | dict[tuple[str, str, str], Any] | None = None,
     edge_zorder: int | pd.Series | dict[tuple[str, str, str], Any] | None = None,
     **kwargs: Any,  # noqa: ANN401
-) -> None:
+) -> "matplotlib.axes.Axes | np.ndarray | None":
     """
     Plot a graph with a unified interface.
 
@@ -4069,7 +4074,7 @@ def plot_graph(  # noqa: PLR0913
     edges : geopandas.GeoDataFrame or dict[tuple[str, str, str], geopandas.GeoDataFrame], optional
         Edges to plot. Can be a single GeoDataFrame (homogeneous) or a dictionary
         mapping edge type tuples (src_type, rel_type, dst_type) to GeoDataFrames (heterogeneous).
-    ax : matplotlib.axes.Axes, optional
+    ax : matplotlib.axes.Axes or numpy.ndarray, optional
         The axes on which to plot. If None, a new figure and axes are created.
     bgcolor : str, default "#000000"
         Background color for the plot (Black theme).
@@ -4131,8 +4136,8 @@ def plot_graph(  # noqa: PLR0913
 
     Returns
     -------
-    None
-        This function does not return a value.
+    matplotlib.axes.Axes or numpy.ndarray or None
+        The axes object(s) used for plotting.
 
     Raises
     ------
@@ -4196,13 +4201,14 @@ def plot_graph(  # noqa: PLR0913
     is_hetero = isinstance(nodes, dict) or isinstance(edges, dict)
 
     if subplots and is_hetero:
-        _plot_hetero_subplots(nodes, edges, figsize, bgcolor, ax=ax, ncols=ncols, **style_kwargs)
-        return
+        return _plot_hetero_subplots(
+            nodes, edges, figsize, bgcolor, ax=ax, ncols=ncols, **style_kwargs
+        )
 
     # Setup figure and axes
     if ax is None:
         ax = _setup_plot_axes(figsize, bgcolor)
-    else:
+    elif not isinstance(ax, np.ndarray):
         # Apply bgcolor to provided axes
         ax.set_facecolor(bgcolor)
         ax.set_axis_off()
@@ -4216,11 +4222,13 @@ def plot_graph(  # noqa: PLR0913
     else:
         _plot_homo_graph(nodes, edges, ax, **style_kwargs)
 
+    return ax
+
 
 def _setup_plot_axes(
     figsize: tuple[float, float],
     bgcolor: str,
-) -> Any:  # noqa: ANN401
+) -> "matplotlib.axes.Axes":
     """
     Create and return a matplotlib axes configured for C2G plots.
 
@@ -4598,10 +4606,10 @@ def _plot_hetero_subplots(
     edges: dict[tuple[str, str, str], gpd.GeoDataFrame] | None,
     figsize: tuple[float, float],
     bgcolor: str,
-    ax: Any | None = None,  # noqa: ANN401
+    ax: "matplotlib.axes.Axes | np.ndarray | None" = None,
     ncols: int | None = None,
     **kwargs: Any,  # noqa: ANN401
-) -> None:
+) -> "matplotlib.axes.Axes | np.ndarray | None":
     """
     Plot heterogeneous graph components in separate subplots.
 
@@ -4617,19 +4625,26 @@ def _plot_hetero_subplots(
         Figure size (width, height) in inches.
     bgcolor : str
         Background color for figure and axes.
-    ax : Any, optional
+    ax : matplotlib.axes.Axes or numpy.ndarray, optional
         Existing axes to plot on. Can be a single axis or an array of axes.
     ncols : int, optional
         Number of columns in the subplot grid. If None, defaults to
         min(3, number_of_edge_types).
     **kwargs : Any
         Additional styling arguments.
+
+    Returns
+    -------
+    matplotlib.axes.Axes or numpy.ndarray or None
+        The axes object(s) used for plotting.
     """
     # Collect non-empty edge types to plot
     edge_items = [(k, v) for k, v in (edges or {}).items() if not v.empty]
     n_items = len(edge_items)
     if n_items == 0:
-        return
+        return None
+
+    returned_axes: matplotlib.axes.Axes | np.ndarray | None = None
 
     if ax is None:
         # Calculate grid layout
@@ -4640,10 +4655,13 @@ def _plot_hetero_subplots(
         fig, axes = plt.subplots(rows, cols, figsize=figsize)
         fig.patch.set_facecolor(bgcolor)
 
+        returned_axes = axes
+
         # Ensure axes is iterable
         axes_flat = [axes] if n_items == 1 else axes.flatten()
     else:
         # Use provided axes
+        returned_axes = ax
         if hasattr(ax, "flatten"):
             axes_flat = ax.flatten()
         elif isinstance(ax, (list, tuple)):
@@ -4683,6 +4701,8 @@ def _plot_hetero_subplots(
     # Hide unused axes
     for j in range(len(edge_items), len(axes_flat)):
         axes_flat[j].set_visible(False)
+
+    return returned_axes
 
 
 def _calculate_total_bounds(
