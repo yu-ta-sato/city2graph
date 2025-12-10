@@ -2,7 +2,7 @@
 description: City2Graph is a Python library for converting geospatial datasets into graphs for Graph Neural Networks (GNN) and spatial analysis.
 keywords: GeoAI, Graph Neural Networks, GNN, PyTorch Geometric, Geospatial Analysis, Urban Analytics, Spatial Data Science, Urban Mobility, Transportation Networks, Geospatial Foundation Models, Digital Twin, Urban Informatics, Geographic Data Science, Graph Representation Learning, Urban Planning, Urban Morphology, Accessibility Analysis
 hide:
-  - navigation
+  navigation
 ---
 
 # City2Graph
@@ -174,7 +174,7 @@ fixed_radius_graph = c2g.fixed_radius_graph(poi_gdf, radius=100)
 ```
 
 <p align="center">
-  <video style="width:100%; max-width:800px;" controls>
+  <video class="desktop-limit-width" controls>
     <source src="assets/videos/gilbert_graph.mp4" type="video/mp4">
     Your browser does not support the video tag.
   </video>

@@ -176,7 +176,7 @@ extra:
   version:
     provider: mike
 
-# Navigation Structure (You must manually map your rst files here)
+# Navigation Structure
 nav:
   - Home: index.md
   - Installation: installation.md
