@@ -1,6 +1,6 @@
 # City2Graph: GeoAI with Graph Neural Networks (GNNs) and Spatial Network Analysis
 
-[![City2Graph](http://city2graph.net/assets/logos/social_preview_city2graph.png)](http://city2graph.net/assets/logos/social_preview_city2graph.png)
+[![City2Graph](http://city2graph.net/latest/assets/logos/social_preview_city2graph.png)](http://city2graph.net/latest/assets/logos/social_preview_city2graph.png)
 
 **City2Graph** is a Python library for converting geospatial datasets into graph representations, providing an integrated interface for [GeoPandas](https://geopandas.org/), [NetworkX](https://networkx.org/), and [PyTorch Geometric](https://pytorch-geometric.readthedocs.io/en/latest/) across multiple domains (e.g. streets, transportations, OD matrices, POI proximities, etc.). It enables researchers and practitioners to seamlessly develop advanced GeoAI and geographic data science applications. For more information, please visit the [documentation](https://city2graph.net).
 
@@ -10,7 +10,7 @@
 
 ## Features
 
-[![scope](http://city2graph.net/assets/figures/scope.png)](http://city2graph.net/assets/figures/scope.png)
+[![scope](http://city2graph.net/latest/assets/figures/scope.png)](http://city2graph.net/latest/assets/figures/scope.png)
 
 - **Graph Construction for GeoAI:** Build graphs from diverse urban datasets, including buildings, streets, and land use, to power GeoAI and GNN applications.
 - **Transportation Network Modeling:** Analyze public transport systems (buses, trams, trains) by constructing detailed transportation graphs with support of GTFS format.
