@@ -14,7 +14,7 @@ hide:
 **City2Graph** is a Python library for converting geospatial datasets into graphs for GNN with integrated interface of [GeoPandas](https://geopandas.org/), [NetworkX](https://networkx.org/), and [Pytorch Geometric](https://pytorch-geometric.readthedocs.io/en/latest/) across multiple domains (e.g. streets, transportations, OD matrices, POI proximities, etc.). It enables researchers and practitioners to seamlessly develop advanced GeoAI and geographic data science applications.
 
 <p align="center">
-  <img src="assets/figures/scope.png" alt="Overview scope of City2Graph">
+  <img src="assets/figures/scope.png" alt="Overview scope of City2Graph" class="desktop-limit-width">
 </p>
 
 ## Features
@@ -25,7 +25,7 @@ hide:
 - Construct graphs from mobility datasets (e.g. bike-sharing, migration, and pedestrian flows)
 - Convert geospatial data (GeoPandas / NetworkX) into tensors (PyTorch Geometric's Data and HeteroData) for graph representation learning, such as Graph Neural Networks (GNNs)
 
-**City2Graph** empowers researchers and practitioners in GeoAI, Urban Analytics, and Spatial Data Science to build advanced applications. It bridges the gap between traditional GIS and modern Graph Neural Networks (GNNs), facilitating research in Urban Mobility, Transportation Networks, and Digital Twins. By supporting standard libraries like PyTorch Geometric, it enables seamless integration into deep learning workflows for Graph Representation Learning.
+**City2Graph** empowers researchers and practitioners in GeoAI, Urban Analytics, and Spatial Data Science to build advanced applications. A key distinction of this library is its ability to model complex urban systems by handling multiple geospatial relations as **heterogeneous graphs**. It bridges the gap between traditional GIS and modern Graph Neural Networks (GNNs) for a variety of applications. By supporting standard libraries like PyTorch Geometric, it enables seamless integration into deep learning workflows for Graph Representation Learning. With its versatile graph construction interface, this library can also be used for network analysis of urban systems from multiple geospatial relations, such as multi-modal accessibility (e.g. isochrone with street networks + public transport networks).
 
 [![GitHub Stars](https://img.shields.io/github/stars/c2g-dev/city2graph)](https://github.com/c2g-dev/city2graph)
 [![PyPI version](https://badge.fury.io/py/city2graph.svg)](https://badge.fury.io/py/city2graph)
@@ -74,7 +74,7 @@ conda install -c conda-forge pytorch_geometric
 ```
 
 !!! warning
-    As conda is not officially supported by PyTorch and PyTorch Geometric anymore, pip is recommended for full PyTorch support. See [Installation](installation.md) for details.
+    As conda is not officially supported by PyTorch and PyTorch Geometric anymore, pip is recommended for full PyTorch support. See [Installation](latest/installation.md) for details.
 
 ## Examples
 
@@ -104,10 +104,10 @@ nodes_with_metapaths, edges_with_metapaths = c2g.add_metapaths(
 ```
 
 <p align="center">
-  <img src="assets/figures/metapath.gif" alt="Animation showing metapath connections between amenities through street segments in Soho, London">
+  <img src="assets/figures/metapath.gif" alt="Animation showing metapath connections between amenities through street segments in Soho, London" class="desktop-limit-width">
 </p>
 
-For details, see [Examples](examples/add_metapaths.ipynb)
+For details, see [Examples](latest/examples/add_metapaths.ipynb)
 
 **Morphology**
 
@@ -121,7 +121,7 @@ morphological_nodes, morphological_edges = c2g.morphological_graph(
 ```
 
 <p align="center">
-  <img src="assets/figures/morph_net_overview.png" alt="A morphological graph of 500m walking distance in Liverpool">
+  <img src="assets/figures/morph_net_overview.png" alt="A morphological graph of 500m walking distance in Liverpool" class="desktop-limit-width">
 </p>
 
 For details, see [Examples](examples/morphological_graph_from_overturemaps.ipynb)
@@ -137,10 +137,10 @@ travel_summary_nodes, travel_summary_edges = c2g.travel_summary_graph(
 ```
 
 <p align="center">
-  <img src="assets/figures/trav_sum_network_overview.png" alt="A bus transportation graph in London">
+  <img src="assets/figures/trav_sum_network_overview.png" alt="A bus transportation graph in London" class="desktop-limit-width">
 </p>
 
-For details, see [Examples](examples/gtfs.ipynb)
+For details, see [Examples](latest/examples/gtfs.ipynb)
 
 **Mobility**
 
@@ -162,10 +162,10 @@ od_nodes, od_edges = c2g.od_matrix_to_graph(
 ```
 
 <p align="center">
-  <img src="assets/figures/od_matrix_to_graph_uk.png" alt="An OD matrix graph showing migration flows and degree centrality in England and Wales">
+  <img src="assets/figures/od_matrix_to_graph_uk.png" alt="An OD matrix graph showing migration flows and degree centrality in England and Wales" class="desktop-limit-width">
 </p>
 
-For details, see [Examples](examples/generating_graphs_from_od_matrix.ipynb)
+For details, see [Examples](latest/examples/generating_graphs_from_od_matrix.ipynb)
 
 **Proximity**
 
@@ -199,7 +199,7 @@ wax_net_nodes, wax_net_edges = c2g.waxman_graph(poi_gdf,
 ```
 
 <p align="center">
-  <img src="assets/figures/waxman_graph.png" alt="Waxman graph of points of interest in Liverpool">
+  <img src="assets/figures/waxman_graph.png" alt="Waxman graph of points of interest in Liverpool" class="desktop-limit-width">
 </p>
 
 ```python
@@ -219,7 +219,7 @@ proximity_nodes, proximity_edges = c2g.bridge_nodes(
 ```
 
 <p align="center">
-  <img src="assets/figures/bridge_nodes.png" alt="Bridge nodes connecting different layers of POIs">
+  <img src="assets/figures/bridge_nodes.png" alt="Bridge nodes connecting different layers of POIs" class="desktop-limit-width">
 </p>
 
 ```python
@@ -257,10 +257,10 @@ hetero_graph = c2g.gdf_to_pyg(combined_nodes, combined_edges)
 ```
 
 <p align="center">
-  <img src="assets/figures/contiguity_graph.png" alt="Contiguity graph of wards (MSOA) with grouped connections of bus stations in London">
+  <img src="assets/figures/contiguity_graph.png" alt="Contiguity graph of wards (MSOA) with grouped connections of bus stations in London" class="desktop-limit-width">
 </p>
 
-For details, see [Examples](examples/generating_graphs_by_proximity.ipynb)
+For details, see [Examples](latest/examples/generating_graphs_by_proximity.ipynb)
 
 ## Citation
 
@@ -276,16 +276,14 @@ If you use City2Graph in your research, please cite it as follows:
 }
 ```
 
-You can also use the DOI to cite a specific version: [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.15858845.svg)](https://doi.org/10.5281/zenodo.15858845)
-
-Alternatively, you can find the citation information in the [CITATION.cff](https://github.com/c2g-dev/city2graph/blob/main/CITATION.cff) file in the repository, which follows the Citation File Format standard.
+You can also find the citation information in the [CITATION.cff](https://github.com/c2g-dev/city2graph/blob/main/CITATION.cff) file in the repository, which follows the Citation File Format standard.
 
 ## Documentation
 
-- [Installation](installation.md)
-- [Examples](examples/index.md)
-- [API Reference](api/index.md)
-- [Contributing](contributing.md)
+- [Installation](latest/installation.md)
+- [Examples](latest/examples/index.md)
+- [API Reference](latest/api/index.md)
+- [Contributing](latest/contributing.md)
 
 <p align="center">
   <a href="https://www.liverpool.ac.uk/geographic-data-science/">

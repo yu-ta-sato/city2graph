@@ -577,6 +577,15 @@ h2 {
   display: block;
 }
 
+/* Limit width on desktop for specific images */
+@media screen and (min-width: 60em) {
+  .md-typeset p > img.desktop-limit-width:only-of-type,
+  .md-typeset p > a > img.desktop-limit-width:only-of-type {
+    width: 65% !important;
+    margin: 0 auto;
+  }
+}
+
 /* --- Tables --- */
 .md-typeset table:not([class]) {
   background: var(--glass-bg);
