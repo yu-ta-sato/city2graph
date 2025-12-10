@@ -46,7 +46,7 @@
   --link-hover-color: var(--md-primary-fg-color--dark);
 
   /* Layout */
-  --doc-max-width: 68rem;
+  --doc-max-width: 60rem;
   --doc-content-padding: 2.5rem;
 
   /* Components */
@@ -580,10 +580,20 @@ h2 {
 /* Limit width on desktop for specific images */
 @media screen and (min-width: 60em) {
   .md-typeset p > img.desktop-limit-width:only-of-type,
-  .md-typeset p > a > img.desktop-limit-width:only-of-type {
-    width: 65% !important;
+  .md-typeset p > a > img.desktop-limit-width:only-of-type,
+  .md-typeset video.desktop-limit-width {
+    max-width: 800px !important;
+    width: 100% !important;
+    height: auto;
     margin: 0 auto;
+    display: block;
   }
+}
+
+/* Limit text width utility */
+.limit-text-width {
+  max-width: 800px;
+  margin: 0 auto;
 }
 
 /* --- Tables --- */
