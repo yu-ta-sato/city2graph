@@ -140,6 +140,15 @@ docs = [
     "cairosvg",
     "toml",
     "mike",
+    "sphinx",
+    "pydata-sphinx-theme",
+    "myst-parser",
+    "nbsphinx",
+    "numpydoc",
+    "sphinx-autodoc-typehints",
+    "sphinxext-opengraph[social-cards] >=0.10.0",
+    "sphinx-plotly-directive",
+    "sphinx-sitemap",
     "black",
 ]
 dev = [
