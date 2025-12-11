@@ -1181,14 +1181,71 @@ h2 {
    17. READTHEDOCS OVERRIDES
    ========================================================================== */
 
-/* Limit ReadTheDocs flyout version list height */
-.rst-versions .rst-other-versions {
-  max-height: 300px;
-  overflow-y: auto;
+/* Fix for oversized RTD flyout */
+.rst-versions {
+  font-size: 12px !important;
+  line-height: normal !important;
+  width: 300px !important;
+  z-index: 9999 !important;
+  position: fixed !important;
+  bottom: 0 !important;
+  right: 0 !important;
 }
 
-/* Limit Material theme version list height */
-.md-version__list {
-  max-height: 300px;
-  overflow-y: auto;
+.rst-versions .rst-badge {
+  font-size: 12px !important;
+  border-radius: 0 !important;
+  font-family: Lato, "Helvetica Neue", Arial, Helvetica, sans-serif !important;
+}
+
+.rst-versions .rst-current-version {
+  font-size: 12px !important;
+  padding: 8px !important;
+  background-color: #2980b9 !important;
+  color: #fcfcfc !important;
+  line-height: normal !important;
+  text-align: right !important;
+  cursor: pointer !important;
+}
+
+/* Fix dropdown content */
+.rst-versions .rst-other-versions {
+  font-size: 12px !important;
+  line-height: 1.5 !important;
+  padding: 12px !important;
+}
+
+.rst-versions dl {
+  margin-bottom: 0 !important;
+}
+
+.rst-versions dt {
+  color: #555 !important;
+  font-weight: bold !important;
+  font-size: 12px !important;
+  margin-top: 5px !important;
+}
+
+.rst-versions dd {
+  display: inline-block !important;
+  margin: 0 !important;
+}
+
+.rst-versions a {
+  color: #2980b9 !important;
+  text-decoration: none !important;
+  display: inline-block !important;
+  padding: 2px 4px !important;
+}
+
+.rst-versions a:hover {
+  text-decoration: underline !important;
+  color: #1abc9c !important;
+}
+
+/* Ensure the icon is visible and sized correctly */
+.rst-versions .fa-book {
+  font-size: 14px !important;
+  vertical-align: middle !important;
+  margin-right: 4px !important;
 }
