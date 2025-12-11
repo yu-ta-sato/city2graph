@@ -60,6 +60,10 @@
   --code-border: rgba(0, 0, 0, 0.05);
   --code-text: #1d1d1f;
   --inline-code-bg: rgba(var(--md-primary-fg-color--rgb), 0.1);
+
+  /* ReadTheDocs Addons Overrides */
+  --readthedocs-flyout-font-size: 13px;
+  --readthedocs-flyout-z-index: 500;
 }
 
 /* ==========================================================================
@@ -1175,88 +1179,4 @@ h2 {
 [data-md-color-scheme="city2graph-dark"] .md-typeset ul li a:hover,
 [data-md-color-scheme="city2graph-dark"] .md-typeset ol li a:hover {
   color: var(--link-hover-color) !important;
-}
-
-/* ==========================================================================
-   17. READTHEDOCS OVERRIDES
-   ========================================================================== */
-
-/* Fix for oversized RTD flyout */
-.rst-versions {
-  font-size: 12px !important;
-  line-height: 1.2 !important;
-  width: auto !important;
-  max-width: 300px !important;
-  z-index: 99999 !important;
-  position: fixed !important;
-  bottom: 0 !important;
-  right: 0 !important;
-  font-family: "Lato", "Helvetica Neue", Helvetica, Arial, sans-serif !important;
-  background-color: #2980b9 !important; /* Default RTD color to ensure visibility */
-  color: #fcfcfc !important;
-  box-shadow: 0 0 10px rgba(0,0,0,0.2) !important;
-}
-
-/* Reset all children to avoid inheriting theme styles */
-.rst-versions * {
-  font-size: 12px !important;
-  line-height: normal !important;
-  box-sizing: border-box !important;
-}
-
-.rst-versions .rst-badge {
-  background: none !important;
-  color: inherit !important;
-  display: inline-block !important;
-  padding: 8px !important;
-  font-family: inherit !important;
-}
-
-.rst-versions .rst-current-version {
-  background-color: #2980b9 !important;
-  color: #fcfcfc !important;
-  padding: 8px 12px !important;
-  display: block !important;
-  text-align: right !important;
-  cursor: pointer !important;
-}
-
-/* Dropdown styling */
-.rst-versions .rst-other-versions {
-  font-size: 12px !important;
-  padding: 12px !important;
-  background-color: #1a1a1a !important; /* Dark background for dropdown */
-  color: #fcfcfc !important;
-  display: none; /* Controlled by JS, but set base styles */
-  text-align: left !important;
-}
-
-.rst-versions.shift-up .rst-other-versions {
-  display: block !important;
-}
-
-.rst-versions .rst-other-versions dl {
-  margin-bottom: 0 !important;
-}
-
-.rst-versions .rst-other-versions dt {
-  color: #888 !important;
-  font-weight: bold !important;
-  margin: 5px 0 !important;
-}
-
-.rst-versions .rst-other-versions dd {
-  display: inline-block !important;
-  margin-left: 0 !important;
-  margin-right: 5px !important;
-}
-
-.rst-versions .rst-other-versions a {
-  color: #2980b9 !important;
-  text-decoration: none !important;
-  padding: 2px 4px !important;
-}
-
-.rst-versions .rst-other-versions a:hover {
-  color: #4096ee !important;
 }
