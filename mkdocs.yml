@@ -173,9 +173,7 @@ extra:
   analytics:
     provider: google
     property: G-YLJ6HSS8C4
-  version:
-    provider: mike
-    default: latest
+
 
 # Navigation Structure
 nav:

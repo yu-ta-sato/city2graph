@@ -18,6 +18,15 @@
 - **Mobility Flow Analysis:** Model and analyze urban mobility patterns from various data sources like bike-sharing, migration, and pedestrian flows.
 - **PyTorch Geometric Integration:** Seamlessly convert geospatial data into PyTorch tensors for GNNs.
 
+## Documentation
+
+City2Graph uses **MkDocs** for current documentation (v0.2.0+) and keeps **Sphinx** for legacy releases (v0.1.0–v0.1.7).
+
+- **Legacy tags** (`v0.1.*`): Read the Docs builds `docs/source` via Sphinx.
+- **Everything else** (branches / newer tags): Read the Docs builds via MkDocs (`mkdocs.yml`).
+
+This is controlled in `.readthedocs.yaml` using `READTHEDOCS_VERSION_TYPE` and `READTHEDOCS_VERSION_NAME`.
+
 
 ## Installation
 
