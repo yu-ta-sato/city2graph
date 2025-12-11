@@ -1176,3 +1176,19 @@ h2 {
 [data-md-color-scheme="city2graph-dark"] .md-typeset ol li a:hover {
   color: var(--link-hover-color) !important;
 }
+
+/* ==========================================================================
+   17. READTHEDOCS OVERRIDES
+   ========================================================================== */
+
+/* Limit ReadTheDocs flyout version list height */
+.rst-versions .rst-other-versions {
+  max-height: 300px;
+  overflow-y: auto;
+}
+
+/* Limit Material theme version list height */
+.md-version__list {
+  max-height: 300px;
+  overflow-y: auto;
+}
