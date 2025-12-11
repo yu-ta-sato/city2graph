@@ -1184,68 +1184,79 @@ h2 {
 /* Fix for oversized RTD flyout */
 .rst-versions {
   font-size: 12px !important;
-  line-height: normal !important;
-  width: 300px !important;
-  z-index: 9999 !important;
+  line-height: 1.2 !important;
+  width: auto !important;
+  max-width: 300px !important;
+  z-index: 99999 !important;
   position: fixed !important;
   bottom: 0 !important;
   right: 0 !important;
+  font-family: "Lato", "Helvetica Neue", Helvetica, Arial, sans-serif !important;
+  background-color: #2980b9 !important; /* Default RTD color to ensure visibility */
+  color: #fcfcfc !important;
+  box-shadow: 0 0 10px rgba(0,0,0,0.2) !important;
+}
+
+/* Reset all children to avoid inheriting theme styles */
+.rst-versions * {
+  font-size: 12px !important;
+  line-height: normal !important;
+  box-sizing: border-box !important;
 }
 
 .rst-versions .rst-badge {
-  font-size: 12px !important;
-  border-radius: 0 !important;
-  font-family: Lato, "Helvetica Neue", Arial, Helvetica, sans-serif !important;
+  background: none !important;
+  color: inherit !important;
+  display: inline-block !important;
+  padding: 8px !important;
+  font-family: inherit !important;
 }
 
 .rst-versions .rst-current-version {
-  font-size: 12px !important;
-  padding: 8px !important;
   background-color: #2980b9 !important;
   color: #fcfcfc !important;
-  line-height: normal !important;
+  padding: 8px 12px !important;
+  display: block !important;
   text-align: right !important;
   cursor: pointer !important;
 }
 
-/* Fix dropdown content */
+/* Dropdown styling */
 .rst-versions .rst-other-versions {
   font-size: 12px !important;
-  line-height: 1.5 !important;
   padding: 12px !important;
+  background-color: #1a1a1a !important; /* Dark background for dropdown */
+  color: #fcfcfc !important;
+  display: none; /* Controlled by JS, but set base styles */
+  text-align: left !important;
 }
 
-.rst-versions dl {
+.rst-versions.shift-up .rst-other-versions {
+  display: block !important;
+}
+
+.rst-versions .rst-other-versions dl {
   margin-bottom: 0 !important;
 }
 
-.rst-versions dt {
-  color: #555 !important;
+.rst-versions .rst-other-versions dt {
+  color: #888 !important;
   font-weight: bold !important;
-  font-size: 12px !important;
-  margin-top: 5px !important;
+  margin: 5px 0 !important;
 }
 
-.rst-versions dd {
+.rst-versions .rst-other-versions dd {
   display: inline-block !important;
-  margin: 0 !important;
+  margin-left: 0 !important;
+  margin-right: 5px !important;
 }
 
-.rst-versions a {
+.rst-versions .rst-other-versions a {
   color: #2980b9 !important;
   text-decoration: none !important;
-  display: inline-block !important;
   padding: 2px 4px !important;
 }
 
-.rst-versions a:hover {
-  text-decoration: underline !important;
-  color: #1abc9c !important;
-}
-
-/* Ensure the icon is visible and sized correctly */
-.rst-versions .fa-book {
-  font-size: 14px !important;
-  vertical-align: middle !important;
-  margin-right: 4px !important;
+.rst-versions .rst-other-versions a:hover {
+  color: #4096ee !important;
 }
