@@ -74,7 +74,7 @@ conda install -c conda-forge pytorch_geometric
 ```
 
 !!! warning
-    As conda is not officially supported by PyTorch and PyTorch Geometric anymore, pip is recommended for full PyTorch support. See [Installation](latest/installation.md) for details.
+    As conda is not officially supported by PyTorch and PyTorch Geometric anymore, pip is recommended for full PyTorch support. See [Installation](installation.md) for details.
 
 ## Examples
 
@@ -107,7 +107,7 @@ nodes_with_metapaths, edges_with_metapaths = c2g.add_metapaths(
   <img src="assets/figures/metapath.gif" alt="Animation showing metapath connections between amenities through street segments in Soho, London" class="desktop-limit-width">
 </p>
 
-For details, see [Examples](latest/examples/add_metapaths.ipynb)
+For details, see [Examples](examples/add_metapaths.ipynb)
 
 **Morphology**
 
@@ -140,7 +140,7 @@ travel_summary_nodes, travel_summary_edges = c2g.travel_summary_graph(
   <img src="assets/figures/trav_sum_network_overview.png" alt="A bus transportation graph in London" class="desktop-limit-width">
 </p>
 
-For details, see [Examples](latest/examples/gtfs.ipynb)
+For details, see [Examples](examples/gtfs.ipynb)
 
 **Mobility**
 
@@ -165,7 +165,7 @@ od_nodes, od_edges = c2g.od_matrix_to_graph(
   <img src="assets/figures/od_matrix_to_graph_uk.png" alt="An OD matrix graph showing migration flows and degree centrality in England and Wales" class="desktop-limit-width">
 </p>
 
-For details, see [Examples](latest/examples/generating_graphs_from_od_matrix.ipynb)
+For details, see [Examples](examples/generating_graphs_from_od_matrix.ipynb)
 
 **Proximity**
 
@@ -260,7 +260,7 @@ hetero_graph = c2g.gdf_to_pyg(combined_nodes, combined_edges)
   <img src="assets/figures/contiguity_graph.png" alt="Contiguity graph of wards (MSOA) with grouped connections of bus stations in London" class="desktop-limit-width">
 </p>
 
-For details, see [Examples](latest/examples/generating_graphs_by_proximity.ipynb)
+For details, see [Examples](examples/generating_graphs_by_proximity.ipynb)
 
 ## Citation
 
@@ -280,10 +280,10 @@ You can also find the citation information in the [CITATION.cff](https://github.
 
 ## Documentation
 
-- [Installation](latest/installation.md)
-- [Examples](latest/examples/index.md)
-- [API Reference](latest/api/index.md)
-- [Contributing](latest/contributing.md)
+- [Installation](installation.md)
+- [Examples](examples/index.md)
+- [API Reference](api/index.md)
+- [Contributing](contributing.md)
 
 <p align="center">
   <a href="https://www.liverpool.ac.uk/geographic-data-science/">

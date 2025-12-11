@@ -1,33 +1,22 @@
-name: Publish Docs
+name: Test Documentation
 
 on:
   push:
     branches:
       - main
-    tags:
-      - v*
-  workflow_dispatch:
-    inputs:
-      version:
-        description: Documentation version
-        required: true
-        default: dev
-      alias:
-        description: Alias (e.g., latest)
-        required: true
-        default: latest
+  pull_request:
+    branches:
+      - main
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  deploy:
+  build:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
 
       - name: Install uv
         uses: astral-sh/setup-uv@v5
@@ -41,33 +30,6 @@ jobs:
         run: |
           uv sync --group docs --extra cpu
 
-      - name: Configure Git user
+      - name: Build documentation
         run: |
-          git config --local user.email "github-actions[bot]@users.noreply.github.com"
-          git config --local user.name "github-actions[bot]"
-
-      # ---------------------------------------------------------
-      # Case 1: main branch -> deploy as 'dev'
-      # ---------------------------------------------------------
-      - name: Deploy dev version
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-        run: |
-          uv run mike deploy dev --update-aliases --push
-
-      # ---------------------------------------------------------
-      # Case 2: tag -> deploy as version number
-      # ---------------------------------------------------------
-      - name: Deploy tagged version
-        if: startsWith(github.ref, 'refs/tags/')
-        run: |
-          # Delete 'latest' if it exists as a version to avoid conflict
-          uv run mike delete latest --push || true
-
-          # Extract tag name (e.g., v1.0.0)
-          GIT_TAG=${GITHUB_REF#refs/tags/}
-
-          # Deploy with version name and update 'latest' alias
-          uv run mike deploy $GIT_TAG latest --update-aliases --push
-
-          # Set default version to 'latest'
-          uv run mike set-default latest --push
+          uv run mkdocs build
