@@ -6,6 +6,16 @@ on:
       - main
     tags:
       - v*
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Documentation version
+        required: true
+        default: dev
+      alias:
+        description: Alias (e.g., latest)
+        required: true
+        default: latest
 
 permissions:
   contents: write
@@ -40,7 +50,7 @@ jobs:
       # Case 1: main branch -> deploy as 'dev'
       # ---------------------------------------------------------
       - name: Deploy dev version
-        if: github.ref == 'refs/heads/main'
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         run: |
           uv run mike deploy dev --update-aliases --push
 
