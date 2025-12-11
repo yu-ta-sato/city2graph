@@ -42,7 +42,7 @@ jobs:
       - name: Deploy dev version
         if: github.ref == 'refs/heads/main'
         run: |
-          uv run mike deploy dev --push
+          uv run mike deploy dev --update-aliases --push
 
       # ---------------------------------------------------------
       # Case 2: tag -> deploy as version number
