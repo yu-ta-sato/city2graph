@@ -663,6 +663,35 @@ def test_contiguity_network_length_weight_branch() -> None:
     assert set(edges.columns) >= {"weight", "geometry"}
 
 
+def test_contiguity_node_geom_col_override() -> None:
+    """Custom node geometry column overrides centroid-based positions."""
+    gdf = gpd.GeoDataFrame(
+        {
+            "val": [0, 1],
+            "node_pts": [Point(0, 0), Point(10, 0)],
+            "geometry": [
+                Polygon([(0, 0), (1, 0), (1, 1), (0, 1)]),
+                Polygon([(1, 0), (2, 0), (2, 1), (1, 1)]),
+            ],
+        },
+        crs="EPSG:3857",
+    ).set_index(pd.Index([0, 1], name="pid"))
+
+    nodes, edges = contiguity_graph(gdf, node_geom_col="node_pts")
+    assert len(nodes) == 2
+    assert len(edges) == 1
+    edge = edges.iloc[0]
+    assert pytest.approx(edge.weight, rel=1e-6) == 10.0
+    assert pytest.approx(edge.geometry.length, rel=1e-6) == 10.0
+
+
+def test_contiguity_node_geom_col_missing() -> None:
+    """Missing node_geom_col raises a clear error."""
+    gdf = make_square_polygons()
+    with pytest.raises(ValueError, match="node_geom_col 'missing' not found"):
+        contiguity_graph(gdf, node_geom_col="missing")
+
+
 def test_contiguity_edges_unique_undirected_path() -> None:
     """Ensure unique undirected edges path in _generate_contiguity_edges is exercised."""
     gdf = make_square_polygons()
