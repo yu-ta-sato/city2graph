@@ -1564,6 +1564,8 @@ def group_nodes(
     network_gdf: gpd.GeoDataFrame | None = None,
     network_weight: str | None = None,
     predicate: str = "covered_by",
+    node_geom_col: str | None = None,
+    set_point_nodes: bool = False,
     as_nx: bool = False,
 ) -> tuple[dict[str, gpd.GeoDataFrame], dict[tuple[str, str, str], gpd.GeoDataFrame]] | nx.Graph:
     r"""
@@ -1598,6 +1600,12 @@ def group_nodes(
         Spatial predicate used to determine containment in a vectorized spatial join
         (e.g., "covered_by", "within", "contains", "intersects"). The default includes
         points on polygon boundaries.
+    node_geom_col : str, optional
+        Column in ``polygons_gdf`` containing point geometries to use instead of polygon
+        centroids when computing weights and edge geometries.
+    set_point_nodes : bool, default False
+        When True, set polygon node geometries to points (``node_geom_col`` when provided,
+        otherwise centroids) and store original polygon geometries in ``original_geometry``.
     as_nx : bool, default False
         If False, return heterogeneous GeoDataFrame dictionaries. If True, return a
         typed heterogeneous NetworkX graph built with `gdf_to_nx`.
@@ -1644,16 +1652,39 @@ def group_nodes(
 
     metric.validate(poly_crs)
 
+    poly_point_geom = None
+    if node_geom_col is not None:
+        if node_geom_col not in polygons_gdf.columns:
+            msg = f"node_geom_col '{node_geom_col}' not found in polygons_gdf"
+            raise ValueError(msg)
+        poly_point_geom = gpd.GeoSeries(
+            polygons_gdf[node_geom_col], index=polygons_gdf.index, crs=poly_crs
+        )
+
+    poly_positions = (
+        poly_point_geom if poly_point_geom is not None else polygons_gdf.geometry.centroid
+    )
+    polygon_nodes = polygons_gdf
+    if set_point_nodes:
+        polygon_nodes = polygons_gdf.copy()
+        polygon_nodes["original_geometry"] = gpd.GeoSeries(
+            polygons_gdf.geometry, index=polygons_gdf.index, crs=polygons_gdf.crs
+        )
+        polygon_nodes["geometry"] = poly_positions
+        polygon_nodes = polygon_nodes.set_geometry("geometry")
+
     if polygons_gdf.empty or points_gdf.empty:
-        return _group_nodes_empty_result(polygons_gdf, points_gdf, relation, poly_crs, as_nx)
+        return _group_nodes_empty_result(polygon_nodes, points_gdf, relation, poly_crs, as_nx)
 
     pairs = _containment_pairs(points_gdf, polygons_gdf, predicate)
     if not pairs:
-        return _group_nodes_empty_result(polygons_gdf, points_gdf, relation, poly_crs, as_nx)
+        return _group_nodes_empty_result(polygon_nodes, points_gdf, relation, poly_crs, as_nx)
 
-    edges_gdf = _edges_gdf_from_pairs(polygons_gdf, points_gdf, pairs, metric)
+    edges_gdf = _edges_gdf_from_pairs(
+        polygon_nodes, points_gdf, pairs, metric, polygon_positions=poly_positions
+    )
 
-    nodes_dict = {"polygon": polygons_gdf, "point": points_gdf}
+    nodes_dict = {"polygon": polygon_nodes, "point": points_gdf}
     edges_dict = {("polygon", relation, "point"): edges_gdf}
 
     return (
@@ -2182,6 +2213,8 @@ def _edges_gdf_from_pairs(
     points_gdf: gpd.GeoDataFrame,
     pairs: list[tuple[Any, Any]],
     metric: DistanceMetric,
+    *,
+    polygon_positions: gpd.GeoSeries | None = None,
 ) -> gpd.GeoDataFrame:
     """
     Build an edges GeoDataFrame from ``(polygon_id, point_id)`` pairs.
@@ -2197,6 +2230,8 @@ def _edges_gdf_from_pairs(
         Iterable of polygon/point index pairs that should form edges.
     metric : DistanceMetric
         Metric wrapper used to derive weights and geometries.
+    polygon_positions : geopandas.GeoSeries, optional
+        Optional point geometries to represent polygon nodes when computing distances.
 
     Returns
     -------
@@ -2204,10 +2239,12 @@ def _edges_gdf_from_pairs(
         Edge GeoDataFrame with ``weight`` and ``geometry`` columns. The frame is
         empty when ``pairs`` does not contain any matches.
     """
-    # Build a unified temporary nodes GeoDataFrame using polygon centroids and point coordinates
-    poly_centroids = polygons_gdf.geometry.centroid
+    # Build a unified temporary nodes GeoDataFrame using polygon positions and point coordinates
+    poly_geom = (
+        polygon_positions if polygon_positions is not None else polygons_gdf.geometry.centroid
+    )
     poly_nodes = gpd.GeoDataFrame(
-        {"geometry": poly_centroids}, geometry="geometry", crs=polygons_gdf.crs
+        {"geometry": poly_geom}, geometry="geometry", crs=polygons_gdf.crs
     )
     pt_nodes = gpd.GeoDataFrame(
         {"geometry": points_gdf.geometry}, geometry="geometry", crs=points_gdf.crs
