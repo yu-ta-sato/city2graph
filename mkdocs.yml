@@ -182,18 +182,18 @@ nav:
   - Installation: installation.md
   - Examples:
       - Introduction: examples/index.md
-      - Metapaths: examples/add_metapaths.ipynb
-      - Proximity Graphs: examples/generating_graphs_by_proximity.ipynb
-      - OD Matrix: examples/generating_graphs_from_od_matrix.ipynb
-      - GTFS: examples/gtfs.ipynb
       - Morphology: examples/morphological_graph_from_overturemaps.ipynb
+      - GTFS: examples/gtfs.ipynb
+      - OD Matrix: examples/generating_graphs_from_od_matrix.ipynb
+      - Proximity Graphs: examples/generating_graphs_by_proximity.ipynb
   - API Reference:
       - Overview: api/index.md
-      - Data: api/data.md
       - Graph: api/graph.md
-      - Mobility: api/mobility.md
+      - Metapath: api/metapath.md
       - Morphology: api/morphology.md
-      - Proximity: api/proximity.md
       - Transportation: api/transportation.md
+      - Mobility: api/mobility.md
+      - Proximity: api/proximity.md
+      - Data: api/data.md
       - Utils: api/utils.md
   - Contributing: contributing.md
