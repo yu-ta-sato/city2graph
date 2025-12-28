@@ -462,6 +462,8 @@ class GraphBuilder:
             for node_id, attrs, (x, y) in zip(self.node_ids, attrs_list, self.coords, strict=False)
         )
         self.G.graph["crs"] = self.gdf.crs
+        self.G.graph["node_geom_cols"] = list(self.gdf.select_dtypes(include=["geometry"]).columns)
+        self.G.graph["node_index_names"] = list(self.gdf.index.names)
 
         # Validate metric against CRS
         self.metric.validate(self.gdf.crs)
@@ -1775,7 +1777,7 @@ def contiguity_graph(
     if set_point_nodes:
         point_geom = node_geom if node_geom is not None else gdf.geometry.centroid
         nodes_gdf = gdf.copy()
-        nodes_gdf["original_geometry"] = gdf.geometry
+        nodes_gdf["original_geometry"] = gpd.GeoSeries(gdf.geometry, index=gdf.index, crs=gdf.crs)
         nodes_gdf["geometry"] = point_geom
         nodes_gdf = nodes_gdf.set_geometry("geometry")
 
