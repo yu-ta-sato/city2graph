@@ -1669,6 +1669,7 @@ def contiguity_graph(
     network_gdf: gpd.GeoDataFrame | None = None,
     network_weight: str | None = None,
     node_geom_col: str | None = None,
+    set_point_nodes: bool = False,
     as_nx: bool = False,
 ) -> tuple[gpd.GeoDataFrame, gpd.GeoDataFrame] | nx.Graph:
     r"""
@@ -1717,6 +1718,10 @@ def contiguity_graph(
     node_geom_col : str, optional
         Column name containing per-node point geometries to use instead of polygon
         centroids when computing node positions and edge weights.
+    set_point_nodes : bool, default False
+        If True, set node geometries as points (using ``node_geom_col`` when provided,
+        otherwise polygon centroids) and store the original geometries as ``original_geometry``
+        in the returned nodes GeoDataFrame and NetworkX graph metadata.
     as_nx : bool, default False
         Output format control. If True, returns a NetworkX Graph object with spatial
         attributes. If False, returns a tuple of GeoDataFrames for nodes and edges,
@@ -1753,6 +1758,7 @@ def contiguity_graph(
     metric = DistanceMetric(distance_metric, network_gdf, network_weight)
     metric.validate(gdf.crs)
 
+    nodes_gdf = gdf
     node_geom = None
     if node_geom_col is not None:
         if node_geom_col not in gdf.columns:
@@ -1766,9 +1772,16 @@ def contiguity_graph(
     weights = _create_spatial_weights(gdf, contiguity)
     edges = _generate_contiguity_edges(weights)
 
+    if set_point_nodes:
+        point_geom = node_geom if node_geom is not None else gdf.geometry.centroid
+        nodes_gdf = gdf.copy()
+        nodes_gdf["original_geometry"] = gdf.geometry
+        nodes_gdf["geometry"] = point_geom
+        nodes_gdf = nodes_gdf.set_geometry("geometry")
+
     # Build graph using GraphBuilder
-    builder = GraphBuilder(gdf, metric)
-    builder.prepare_nodes(node_geom)
+    builder = GraphBuilder(nodes_gdf, metric)
+    builder.prepare_nodes(None if set_point_nodes else node_geom)
 
     # Convert edges from indices to node IDs
     # _generate_contiguity_edges returns indices (from gdf.index)

@@ -685,6 +685,42 @@ def test_contiguity_node_geom_col_override() -> None:
     assert pytest.approx(edge.geometry.length, rel=1e-6) == 10.0
 
 
+def test_contiguity_set_point_nodes_centroid() -> None:
+    """set_point_nodes swaps polygon geometry for centroid points in nodes layer."""
+    gdf = make_square_polygons()
+
+    nodes, _ = contiguity_graph(gdf, set_point_nodes=True)
+
+    assert set(nodes.geometry.geom_type) == {"Point"}
+    assert nodes.geometry.equals(gdf.geometry.centroid)
+    assert nodes["original_geometry"].equals(gdf.geometry)
+
+
+def test_contiguity_set_point_nodes_with_column() -> None:
+    """set_point_nodes uses custom point column for node geometry."""
+    gdf = gpd.GeoDataFrame(
+        {
+            "val": [0, 1],
+            "node_pts": [Point(0, 0), Point(10, 0)],
+            "geometry": [
+                Polygon([(0, 0), (1, 0), (1, 1), (0, 1)]),
+                Polygon([(1, 0), (2, 0), (2, 1), (1, 1)]),
+            ],
+        },
+        crs="EPSG:3857",
+    ).set_index(pd.Index([0, 1], name="pid"))
+
+    nodes, edges = contiguity_graph(gdf, node_geom_col="node_pts", set_point_nodes=True)
+
+    expected = gpd.GeoSeries(gdf["node_pts"], index=gdf.index, crs=gdf.crs)
+    assert nodes.geometry.equals(expected)
+    assert nodes["original_geometry"].equals(gdf.geometry)
+    assert len(edges) == 1
+    edge = edges.iloc[0]
+    assert pytest.approx(edge.weight, rel=1e-6) == 10.0
+    assert pytest.approx(edge.geometry.length, rel=1e-6) == 10.0
+
+
 def test_contiguity_node_geom_col_missing() -> None:
     """Missing node_geom_col raises a clear error."""
     gdf = make_square_polygons()
