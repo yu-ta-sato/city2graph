@@ -12,7 +12,7 @@ import geopandas as gpd
 import numpy as np
 import pandas as pd
 
-from city2graph import od_matrix_to_graph
+from city2graph.mobility import od_matrix_to_graph
 
 if TYPE_CHECKING:
     import networkx as nx

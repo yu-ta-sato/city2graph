@@ -11,7 +11,8 @@ from shapely.geometry import LineString
 from shapely.geometry import Point
 from shapely.geometry import Polygon
 
-from city2graph import metapath as metapath_module
+from city2graph.metapath import add_metapaths
+from city2graph.metapath import add_metapaths_by_weight
 from city2graph.utils import gdf_to_nx
 
 METAPATH = [("building", "connects_to", "road"), ("road", "links_to", "road")]
@@ -130,7 +131,7 @@ class TestMetapaths:
                 edges_with_attr[ek]["travel_time"] = vals
 
         if agg_mode == "sum":
-            nodes_out, edges_out = metapath_module.add_metapaths(
+            nodes_out, edges_out = add_metapaths(
                 (sample_hetero_nodes_dict, edges_with_attr),
                 sequence=METAPATH,
                 edge_attr="travel_time",
@@ -143,7 +144,7 @@ class TestMetapaths:
             assert "travel_time" in result.columns
             assert "geometry" in result.columns
         elif agg_mode == "mean":
-            _, edges_out = metapath_module.add_metapaths(
+            _, edges_out = add_metapaths(
                 (sample_hetero_nodes_dict, edges_with_attr),
                 sequence=METAPATH,
                 edge_attr="travel_time",
@@ -151,7 +152,7 @@ class TestMetapaths:
             )
             assert (edges_out[RESULT_KEY]["travel_time"] > 0).all()
         elif agg_mode == "callable":
-            _, edges_out = metapath_module.add_metapaths(
+            _, edges_out = add_metapaths(
                 (sample_hetero_nodes_dict, edges_with_attr),
                 sequence=METAPATH,
                 edge_attr="travel_time",
@@ -165,7 +166,7 @@ class TestMetapaths:
             edges_nan_attr = {k: v.copy() for k, v in sample_hetero_edges_dict.items()}
             for ek in list(edges_nan_attr):
                 edges_nan_attr[ek]["travel_time"] = np.nan
-            _, edges_out = metapath_module.add_metapaths(
+            _, edges_out = add_metapaths(
                 (sample_hetero_nodes_dict, edges_nan_attr),
                 sequence=METAPATH,
                 edge_attr="travel_time",
@@ -185,7 +186,7 @@ class TestMetapaths:
         for gdf in edges_with_attr.values():
             gdf["travel_time"] = 1.0
 
-        _, edges_out = metapath_module.add_metapaths(
+        _, edges_out = add_metapaths(
             (sample_hetero_nodes_dict, edges_with_attr),
             sequence=METAPATH,
             edge_attr=["travel_time"],
@@ -211,7 +212,7 @@ class TestMetapaths:
             edges_with_attr[ek]["travel_time"] = 1.0
 
         if mode == "as_nx":
-            g = metapath_module.add_metapaths(
+            g = add_metapaths(
                 (sample_hetero_nodes_dict, edges_with_attr),
                 sequence=METAPATH,
                 edge_attr="travel_time",
@@ -226,7 +227,7 @@ class TestMetapaths:
             hetero_graph = gdf_to_nx(
                 nodes=sample_hetero_nodes_dict, edges=sample_hetero_edges_dict, multigraph=True
             )
-            _, edges_out = metapath_module.add_metapaths(hetero_graph, sequence=METAPATH)
+            _, edges_out = add_metapaths(hetero_graph, sequence=METAPATH)
             assert RESULT_KEY in edges_out
         else:
 
@@ -235,8 +236,8 @@ class TestMetapaths:
                 g.graph["metapath_dict"] = {"legacy": {"tag": 1}}
                 return g
 
-            monkeypatch.setattr(metapath_module, "gdf_to_nx", fake_gdf_to_nx)
-            g = metapath_module.add_metapaths(
+            monkeypatch.setattr("city2graph.metapath.gdf_to_nx", fake_gdf_to_nx)
+            g = add_metapaths(
                 (sample_hetero_nodes_dict, sample_hetero_edges_dict),
                 sequence=METAPATH,
                 as_nx=True,
@@ -255,7 +256,7 @@ class TestMetapaths:
         for gdf in edges_no_names.values():
             gdf.index = gdf.index.set_names([None, None])
 
-        _, edges_out = metapath_module.add_metapaths(
+        _, edges_out = add_metapaths(
             (sample_hetero_nodes_dict, edges_no_names),
             sequence=METAPATH,
         )
@@ -277,12 +278,11 @@ class TestMetapaths:
         )
 
         monkeypatch.setattr(
-            metapath_module,
-            "nx_to_gdf",
+            "city2graph.metapath.nx_to_gdf",
             lambda _g: (sample_hetero_nodes_dict, None),
         )
 
-        nodes_out, edges_out = metapath_module.add_metapaths(hetero_graph, sequence=METAPATH)
+        nodes_out, edges_out = add_metapaths(hetero_graph, sequence=METAPATH)
         assert nodes_out is sample_hetero_nodes_dict
         assert edges_out == {}
 
@@ -300,13 +300,12 @@ class TestMetapaths:
         )
 
         monkeypatch.setattr(
-            metapath_module,
-            "nx_to_gdf",
+            "city2graph.metapath.nx_to_gdf",
             lambda _g: (sample_hetero_nodes_dict, [1, 2, 3]),
         )
 
         with pytest.raises(TypeError, match="typed edges"):
-            metapath_module.add_metapaths(hetero_graph, sequence=METAPATH)
+            add_metapaths(hetero_graph, sequence=METAPATH)
 
     @pytest.mark.parametrize("early", ["empty_metapaths", "empty_edges", "raw_edges_none"])
     def test_add_metapaths_input_normalization(
@@ -317,19 +316,17 @@ class TestMetapaths:
     ) -> None:
         """Validate early-return normalization paths for empty inputs and None edges."""
         if early == "empty_metapaths":
-            nodes_out, edges_out = metapath_module.add_metapaths(
+            nodes_out, edges_out = add_metapaths(
                 (sample_hetero_nodes_dict, sample_hetero_edges_dict), sequence=[]
             )
             assert nodes_out is sample_hetero_nodes_dict
             assert edges_out is sample_hetero_edges_dict
         elif early == "empty_edges":
-            nodes_out, edges_out = metapath_module.add_metapaths(
-                (sample_hetero_nodes_dict, {}), sequence=METAPATH
-            )
+            nodes_out, edges_out = add_metapaths((sample_hetero_nodes_dict, {}), sequence=METAPATH)
             assert nodes_out is sample_hetero_nodes_dict
             assert edges_out == {}
         else:
-            nodes_out, edges_out = metapath_module.add_metapaths(
+            nodes_out, edges_out = add_metapaths(
                 (sample_hetero_nodes_dict, None), sequence=METAPATH
             )
             assert nodes_out is sample_hetero_nodes_dict
@@ -346,7 +343,7 @@ class TestMetapaths:
     ) -> None:
         """Check directed lookup, reverse fallback, and directed missing-edge error."""
         if direction_case == "directed_true":
-            _, edges_out = metapath_module.add_metapaths(
+            _, edges_out = add_metapaths(
                 (sample_hetero_nodes_dict, sample_hetero_edges_dict),
                 sequence=METAPATH,
                 directed=True,
@@ -354,7 +351,7 @@ class TestMetapaths:
             assert RESULT_KEY in edges_out
         elif direction_case == "reverse_lookup":
             mp_rev = [("road", "connects_to", "building"), ("building", "connects_to", "road")]
-            _, edges_rev = metapath_module.add_metapaths(
+            _, edges_rev = add_metapaths(
                 (sample_hetero_nodes_dict, sample_hetero_edges_dict),
                 sequence=mp_rev,
                 directed=False,
@@ -363,7 +360,7 @@ class TestMetapaths:
         else:
             bad_mp = [("x", "y", "z"), ("z", "y", "x")]
             with pytest.raises(KeyError, match="Edge type .* not found"):
-                metapath_module.add_metapaths(
+                add_metapaths(
                     (sample_hetero_nodes_dict, sample_hetero_edges_dict),
                     sequence=bad_mp,
                     directed=True,
@@ -385,7 +382,7 @@ class TestMetapaths:
                 edges_empty[("road", "links_to", "road")].head(0).copy()
             )
             nodes = {"road": sample_hetero_nodes_dict["road"]}
-            _, edges_out = metapath_module.add_metapaths((nodes, edges_empty), sequence=METAPATH)
+            _, edges_out = add_metapaths((nodes, edges_empty), sequence=METAPATH)
             res = edges_out[RESULT_KEY]
             assert res.empty
             assert res.crs == sample_hetero_nodes_dict["road"].crs
@@ -396,7 +393,7 @@ class TestMetapaths:
                 [("r10", "r11"), ("r11", "r10")], names=rl.index.names
             )
             edges_disjoint[("road", "links_to", "road")] = rl
-            _, edges_out = metapath_module.add_metapaths(
+            _, edges_out = add_metapaths(
                 (sample_hetero_nodes_dict, edges_disjoint), sequence=METAPATH
             )
             assert edges_out[RESULT_KEY].empty
@@ -408,9 +405,7 @@ class TestMetapaths:
                 names=con.index.names,
             )
             edges_nan[("building", "connects_to", "road")] = con
-            _, edges_out = metapath_module.add_metapaths(
-                (sample_hetero_nodes_dict, edges_nan), sequence=METAPATH
-            )
+            _, edges_out = add_metapaths((sample_hetero_nodes_dict, edges_nan), sequence=METAPATH)
             assert edges_out[RESULT_KEY].empty
         else:
             edges_named = {k: v.copy() for k, v in sample_hetero_edges_dict.items()}
@@ -420,7 +415,7 @@ class TestMetapaths:
             e1.index = pd.MultiIndex.from_tuples(list(e1.index), names=[3, 4])
             edges_named[("building", "connects_to", "road")] = e0
             edges_named[("road", "links_to", "road")] = e1
-            _, edges_norm = metapath_module.add_metapaths(
+            _, edges_norm = add_metapaths(
                 (sample_hetero_nodes_dict, edges_named), sequence=METAPATH
             )
             res_norm = edges_norm[RESULT_KEY]
@@ -441,9 +436,7 @@ class TestMetapaths:
             nodes_geom["road"].loc["r1", "geometry"] = Polygon(
                 [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)]
             )
-            _, edges_out = metapath_module.add_metapaths(
-                (nodes_geom, sample_hetero_edges_dict), sequence=METAPATH
-            )
+            _, edges_out = add_metapaths((nodes_geom, sample_hetero_edges_dict), sequence=METAPATH)
             result = edges_out[RESULT_KEY].sort_index()
             assert result["geometry"].isna().any() or result.empty
         else:
@@ -452,7 +445,7 @@ class TestMetapaths:
             bad_nodes["building"].loc[b_first, "geometry"] = Polygon(
                 [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0)]
             )
-            _, edges_badgeom = metapath_module.add_metapaths(
+            _, edges_badgeom = add_metapaths(
                 (bad_nodes, sample_hetero_edges_dict), sequence=METAPATH
             )
             res_badgeom = edges_badgeom[RESULT_KEY]
@@ -466,7 +459,7 @@ class TestMetapaths:
     ) -> None:
         """Tuple with invalid length should trigger ValueError in normalization."""
         with pytest.raises(ValueError, match="Graph tuple must contain"):
-            metapath_module.add_metapaths(
+            add_metapaths(
                 (sample_hetero_nodes_dict, sample_hetero_edges_dict, {}), sequence=METAPATH
             )
 
@@ -476,7 +469,7 @@ class TestMetapaths:
     ) -> None:
         """Non-dict nodes argument should raise TypeError."""
         with pytest.raises(TypeError, match="nodes_dict must be a dictionary"):
-            metapath_module.add_metapaths(([1, 2, 3], sample_hetero_edges_dict), sequence=METAPATH)
+            add_metapaths(([1, 2, 3], sample_hetero_edges_dict), sequence=METAPATH)
 
     def test_add_metapaths_edges_dict_type_error(
         self,
@@ -484,7 +477,7 @@ class TestMetapaths:
     ) -> None:
         """Non-dict edges argument should raise TypeError."""
         with pytest.raises(TypeError, match="edges_dict must be a dictionary"):
-            metapath_module.add_metapaths((sample_hetero_nodes_dict, [1, 2, 3]), sequence=METAPATH)
+            add_metapaths((sample_hetero_nodes_dict, [1, 2, 3]), sequence=METAPATH)
 
     def test_add_metapaths_nx_nodes_not_dict(self) -> None:
         """Homogeneous NetworkX graph should fail due to missing typed nodes."""
@@ -495,17 +488,17 @@ class TestMetapaths:
         g.graph["is_hetero"] = False
         g.graph["crs"] = "EPSG:4326"
         with pytest.raises(TypeError, match="requires a heterogeneous graph with typed nodes"):
-            metapath_module.add_metapaths(g, sequence=METAPATH)
+            add_metapaths(g, sequence=METAPATH)
 
     def test_add_metapaths_unsupported_input_type(self) -> None:
         """Unsupported input type should raise TypeError in _ensure_hetero_dict."""
         with pytest.raises(TypeError, match="Unsupported graph input type"):
-            metapath_module.add_metapaths(12345, sequence=METAPATH)
+            add_metapaths(12345, sequence=METAPATH)
 
     def test_add_metapaths_neither_graph_nor_nodes(self) -> None:
         """Test add_metapaths raises error when neither graph nor nodes provided."""
         with pytest.raises(ValueError, match="Either 'graph' or 'nodes'"):
-            metapath_module.add_metapaths(sequence=METAPATH)
+            add_metapaths(sequence=METAPATH)
 
     def test_add_metapaths_sequence_none(
         self,
@@ -514,9 +507,7 @@ class TestMetapaths:
     ) -> None:
         """Test add_metapaths raises ValueError when sequence is None."""
         with pytest.raises(ValueError, match="sequence must be provided"):
-            metapath_module.add_metapaths(
-                (sample_hetero_nodes_dict, sample_hetero_edges_dict), sequence=None
-            )
+            add_metapaths((sample_hetero_nodes_dict, sample_hetero_edges_dict), sequence=None)
 
     def test_add_metapaths_short_metapath_error(
         self,
@@ -525,7 +516,7 @@ class TestMetapaths:
     ) -> None:
         """Metapath shorter than two hops should raise ValueError."""
         with pytest.raises(ValueError, match="at least two edge types"):
-            metapath_module.add_metapaths(
+            add_metapaths(
                 (sample_hetero_nodes_dict, sample_hetero_edges_dict), sequence=[("a", "b", "c")]
             )
 
@@ -540,14 +531,12 @@ class TestMetapaths:
         e0 = edges_bad_index[("building", "connects_to", "road")].reset_index(drop=True)
         edges_bad_index[("building", "connects_to", "road")] = e0
         with pytest.raises(ValueError, match="must have a two-level MultiIndex"):
-            metapath_module.add_metapaths(
-                (sample_hetero_nodes_dict, edges_bad_index), sequence=METAPATH
-            )
+            add_metapaths((sample_hetero_nodes_dict, edges_bad_index), sequence=METAPATH)
 
     def test_add_metapaths_by_weight_basic(self, sample_weight_graph_data: WeightGraphData) -> None:
         """Connect buildings within a threshold and materialize geometry."""
         nodes_dict, edges_dict = sample_weight_graph_data
-        nodes_out, edges_out = metapath_module.add_metapaths_by_weight(
+        nodes_out, edges_out = add_metapaths_by_weight(
             (nodes_dict, edges_dict),
             endpoint_type="building",
             weight="weight",
@@ -574,7 +563,7 @@ class TestMetapaths:
         """Threshold and min_threshold bounds should gate which pairs are emitted."""
         nodes_dict, edges_dict = sample_weight_graph_data
 
-        _, edges_threshold = metapath_module.add_metapaths_by_weight(
+        _, edges_threshold = add_metapaths_by_weight(
             (nodes_dict, edges_dict),
             endpoint_type="building",
             weight="weight",
@@ -585,7 +574,7 @@ class TestMetapaths:
         assert rel_max in edges_threshold
         assert (1, 2) in set(edges_threshold[rel_max].index.tolist())
 
-        _, edges_filtered = metapath_module.add_metapaths_by_weight(
+        _, edges_filtered = add_metapaths_by_weight(
             (nodes_dict, edges_dict),
             endpoint_type="building",
             weight="weight",
@@ -604,7 +593,7 @@ class TestMetapaths:
         """Ensure edge filters and friendly relation labels behave as expected."""
         nodes_dict, edges_dict = sample_weight_graph_data
 
-        _, edges_custom = metapath_module.add_metapaths_by_weight(
+        _, edges_custom = add_metapaths_by_weight(
             (nodes_dict, edges_dict),
             endpoint_type="building",
             weight="weight",
@@ -614,7 +603,7 @@ class TestMetapaths:
         custom_rel = ("building", "accessible", "building")
         assert custom_rel in edges_custom
 
-        _, edges_filtered = metapath_module.add_metapaths_by_weight(
+        _, edges_filtered = add_metapaths_by_weight(
             (nodes_dict, edges_dict),
             endpoint_type="building",
             weight="weight",
@@ -633,7 +622,7 @@ class TestMetapaths:
         """Cover NetworkX round-trips both as input and output."""
         nodes_dict, edges_dict = sample_weight_graph_data
 
-        nx_result = metapath_module.add_metapaths_by_weight(
+        nx_result = add_metapaths_by_weight(
             (nodes_dict, edges_dict),
             endpoint_type="building",
             weight="weight",
@@ -647,7 +636,7 @@ class TestMetapaths:
         )
 
         hetero_graph = gdf_to_nx(nodes=nodes_dict, edges=edges_dict)
-        nx_roundtrip = metapath_module.add_metapaths_by_weight(
+        nx_roundtrip = add_metapaths_by_weight(
             hetero_graph,
             endpoint_type="building",
             weight="weight",
@@ -667,7 +656,7 @@ class TestMetapaths:
         """Unknown endpoint types should short-circuit and return originals."""
         nodes_dict, edges_dict = sample_weight_graph_data
 
-        nodes_out, edges_out = metapath_module.add_metapaths_by_weight(
+        nodes_out, edges_out = add_metapaths_by_weight(
             (nodes_dict, edges_dict),
             endpoint_type="nonexistent",
             weight="weight",
@@ -684,7 +673,7 @@ class TestMetapaths:
     ) -> None:
         """Missing edge attribute at hop level should raise KeyError."""
         with pytest.raises(KeyError, match=r"Edge attribute\(s\)"):
-            metapath_module.add_metapaths(
+            add_metapaths(
                 (sample_hetero_nodes_dict, sample_hetero_edges_dict),
                 sequence=METAPATH,
                 edge_attr="missing_attr",
@@ -701,7 +690,7 @@ class TestMetapaths:
             edges_partial_attr[("building", "connects_to", "road")]
         )
         with pytest.raises(KeyError, match="missing in metapath steps"):
-            metapath_module.add_metapaths(
+            add_metapaths(
                 (sample_hetero_nodes_dict, edges_partial_attr),
                 sequence=METAPATH,
                 edge_attr="travel_time",
@@ -714,7 +703,7 @@ class TestMetapaths:
     ) -> None:
         """Unsupported string for edge_attr_agg must raise ValueError."""
         with pytest.raises(ValueError, match="Unsupported edge_attr_agg"):
-            metapath_module.add_metapaths(
+            add_metapaths(
                 (sample_hetero_nodes_dict, sample_hetero_edges_dict),
                 sequence=METAPATH,
                 edge_attr_agg="median",
@@ -727,7 +716,7 @@ class TestMetapaths:
     ) -> None:
         """Non-string, non-callable edge_attr_agg must raise TypeError."""
         with pytest.raises(TypeError, match="edge_attr_agg must be"):
-            metapath_module.add_metapaths(
+            add_metapaths(
                 (sample_hetero_nodes_dict, sample_hetero_edges_dict),
                 sequence=METAPATH,
                 edge_attr_agg=123,
@@ -741,9 +730,7 @@ class TestMetapaths:
         """Missing node GeoDataFrame for start or end types should raise KeyError."""
         nodes_missing = {k: v for k, v in sample_hetero_nodes_dict.items() if k != "road"}
         with pytest.raises(KeyError, match="Missing node GeoDataFrame"):
-            metapath_module.add_metapaths(
-                (nodes_missing, sample_hetero_edges_dict), sequence=METAPATH
-            )
+            add_metapaths((nodes_missing, sample_hetero_edges_dict), sequence=METAPATH)
 
     def test_add_metapaths_by_weight_value_errors(
         self, sample_weight_graph_data: WeightGraphData
@@ -753,7 +740,7 @@ class TestMetapaths:
 
         # Missing weight parameter
         with pytest.raises(ValueError, match="weight must be provided"):
-            metapath_module.add_metapaths_by_weight(
+            add_metapaths_by_weight(
                 (nodes_dict, edges_dict),
                 endpoint_type="building",
                 threshold=15.0,
@@ -761,7 +748,7 @@ class TestMetapaths:
 
         # Missing threshold parameter
         with pytest.raises(ValueError, match="threshold must be provided"):
-            metapath_module.add_metapaths_by_weight(
+            add_metapaths_by_weight(
                 (nodes_dict, edges_dict),
                 endpoint_type="building",
                 weight="weight",
@@ -769,7 +756,7 @@ class TestMetapaths:
 
         # Both graph and nodes provided
         with pytest.raises(ValueError, match="Cannot provide both"):
-            metapath_module.add_metapaths_by_weight(
+            add_metapaths_by_weight(
                 (nodes_dict, edges_dict),
                 nodes=nodes_dict,
                 endpoint_type="building",
@@ -779,7 +766,7 @@ class TestMetapaths:
 
         # Neither graph nor nodes provided
         with pytest.raises(ValueError, match="Either 'graph' or 'nodes'"):
-            metapath_module.add_metapaths_by_weight(
+            add_metapaths_by_weight(
                 endpoint_type="building",
                 weight="weight",
                 threshold=15.0,
@@ -792,7 +779,7 @@ class TestMetapaths:
         nodes_dict, edges_dict = sample_weight_graph_data
 
         # endpoint_type is None - should return original graph
-        nodes_out, edges_out = metapath_module.add_metapaths_by_weight(
+        nodes_out, edges_out = add_metapaths_by_weight(
             (nodes_dict, edges_dict),
             endpoint_type=None,
             weight="weight",
@@ -808,7 +795,7 @@ class TestMetapaths:
         nodes_dict, edges_dict = sample_weight_graph_data
 
         # Filter out all edges by specifying non-matching edge types
-        nodes_out, edges_out = metapath_module.add_metapaths_by_weight(
+        nodes_out, edges_out = add_metapaths_by_weight(
             (nodes_dict, edges_dict),
             endpoint_type="building",
             weight="weight",
@@ -828,7 +815,7 @@ class TestMetapaths:
         # Convert to MultiGraph
         nx_multigraph = gdf_to_nx(nodes=nodes_dict, edges=edges_dict, multigraph=True)
 
-        result = metapath_module.add_metapaths_by_weight(
+        result = add_metapaths_by_weight(
             nx_multigraph,
             endpoint_type="building",
             weight="weight",
@@ -844,7 +831,7 @@ class TestMetapaths:
         """Test add_metapaths_by_weight with as_nx=True from tuple input."""
         nodes_dict, edges_dict = sample_weight_graph_data
 
-        result = metapath_module.add_metapaths_by_weight(
+        result = add_metapaths_by_weight(
             (nodes_dict, edges_dict),
             endpoint_type="building",
             weight="weight",
@@ -861,7 +848,7 @@ class TestMetapaths:
     ) -> None:
         """Test add_metapaths raises error when both graph and nodes provided."""
         with pytest.raises(ValueError, match="Cannot provide both"):
-            metapath_module.add_metapaths(
+            add_metapaths(
                 graph=(sample_hetero_nodes_dict, sample_hetero_edges_dict),
                 nodes=sample_hetero_nodes_dict,
                 sequence=METAPATH,
@@ -873,7 +860,7 @@ class TestMetapaths:
         sample_hetero_edges_dict: dict[tuple[str, str, str], gpd.GeoDataFrame],
     ) -> None:
         """Test add_metapaths with nodes parameter only (no graph)."""
-        _, edges_out = metapath_module.add_metapaths(
+        _, edges_out = add_metapaths(
             nodes=sample_hetero_nodes_dict,
             edges=sample_hetero_edges_dict,
             sequence=METAPATH,
@@ -886,7 +873,7 @@ class TestMetapaths:
         sample_hetero_edges_dict: dict[tuple[str, str, str], gpd.GeoDataFrame],
     ) -> None:
         """Test add_metapaths with custom new_relation_name."""
-        _, edges_out = metapath_module.add_metapaths(
+        _, edges_out = add_metapaths(
             (sample_hetero_nodes_dict, sample_hetero_edges_dict),
             sequence=METAPATH,
             new_relation_name="custom_path",
@@ -901,7 +888,7 @@ class TestMetapaths:
     ) -> None:
         """Test add_metapaths with trace_path=True triggers debug logging."""
         # trace_path=True should just log and continue without error
-        _, edges_out = metapath_module.add_metapaths(
+        _, edges_out = add_metapaths(
             (sample_hetero_nodes_dict, sample_hetero_edges_dict),
             sequence=METAPATH,
             trace_path=True,
@@ -915,7 +902,7 @@ class TestMetapaths:
         nodes_dict, edges_dict = sample_weight_graph_data
 
         # Use nodes parameter instead of graph
-        nodes_out, edges_out = metapath_module.add_metapaths_by_weight(
+        nodes_out, edges_out = add_metapaths_by_weight(
             nodes=nodes_dict,
             edges=edges_dict,
             endpoint_type="building",
@@ -937,7 +924,7 @@ class TestMetapaths:
         nx_graph = gdf_to_nx(nodes=nodes_dict, edges=edges_dict, multigraph=False)
 
         # Filter to only use specific edge types
-        result = metapath_module.add_metapaths_by_weight(
+        result = add_metapaths_by_weight(
             nx_graph,
             endpoint_type="building",
             weight="weight",
