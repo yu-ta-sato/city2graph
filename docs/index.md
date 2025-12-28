@@ -85,7 +85,7 @@ import pandas as pd
 from pathlib import Path
 ```
 
-**Graph**
+**Metapath**
 
 ```python
 # Define metapath: amenity -> segment -> segment -> amenity (3-hop in this case)
