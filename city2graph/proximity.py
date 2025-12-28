@@ -434,15 +434,21 @@ class GraphBuilder:
         self.node_ids: list[Any] | None = None
         self.dm: npt.NDArray[np.floating] | None = None
 
-    def prepare_nodes(self) -> None:
+    def prepare_nodes(self, geometry: gpd.GeoSeries | None = None) -> None:
         """
         Add nodes from GeoDataFrame to the graph.
 
         This method extracts coordinates and attributes from the GeoDataFrame
         and adds them to the NetworkX graph.
+
+        Parameters
+        ----------
+        geometry : geopandas.GeoSeries, optional
+            Optional point geometries to override centroid-derived positions.
         """
         validate_gdf(nodes_gdf=self.gdf)
-        centroids = self.gdf.geometry.centroid
+        geom = geometry if geometry is not None else self.gdf.geometry
+        centroids = geom.centroid
         self.coords = np.column_stack([centroids.x, centroids.y])
         self.node_ids = list(self.gdf.index)
 
@@ -1662,6 +1668,7 @@ def contiguity_graph(
     distance_metric: str = "euclidean",
     network_gdf: gpd.GeoDataFrame | None = None,
     network_weight: str | None = None,
+    node_geom_col: str | None = None,
     as_nx: bool = False,
 ) -> tuple[gpd.GeoDataFrame, gpd.GeoDataFrame] | nx.Graph:
     r"""
@@ -1707,6 +1714,9 @@ def contiguity_graph(
     network_weight : str, optional
         Edge attribute in `network_gdf` to use for shortest-path weights. Defaults to
         geometry length when omitted.
+    node_geom_col : str, optional
+        Column name containing per-node point geometries to use instead of polygon
+        centroids when computing node positions and edge weights.
     as_nx : bool, default False
         Output format control. If True, returns a NetworkX Graph object with spatial
         attributes. If False, returns a tuple of GeoDataFrames for nodes and edges,
@@ -1743,6 +1753,13 @@ def contiguity_graph(
     metric = DistanceMetric(distance_metric, network_gdf, network_weight)
     metric.validate(gdf.crs)
 
+    node_geom = None
+    if node_geom_col is not None:
+        if node_geom_col not in gdf.columns:
+            msg = f"node_geom_col '{node_geom_col}' not found in GeoDataFrame"
+            raise ValueError(msg)
+        node_geom = gpd.GeoSeries(gdf[node_geom_col], index=gdf.index, crs=gdf.crs)
+
     if gdf.empty:
         return _empty_contiguity_result(gdf, contiguity, distance_metric=metric.name, as_nx=as_nx)
 
@@ -1751,7 +1768,7 @@ def contiguity_graph(
 
     # Build graph using GraphBuilder
     builder = GraphBuilder(gdf, metric)
-    builder.prepare_nodes()
+    builder.prepare_nodes(node_geom)
 
     # Convert edges from indices to node IDs
     # _generate_contiguity_edges returns indices (from gdf.index)
