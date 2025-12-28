@@ -651,8 +651,9 @@ def _cluster_segment_endpoints(
     # Update segment geometries
     result_gdf = segments_gdf.copy()
     for idx, row in result_gdf.iterrows():
-        if isinstance(row.geometry, LineString) and len(row.geometry.coords) >= 2:
-            coords = list(row.geometry.coords)
+        row_geom = row.get("geometry")
+        if isinstance(row_geom, LineString) and len(row_geom.coords) >= 2:
+            coords = list(row_geom.coords)
             start_coord = coord_lookup.get((idx, "start"), coords[0])
             end_coord = coord_lookup.get((idx, "end"), coords[-1])
             result_gdf.loc[idx, "geometry"] = LineString([start_coord, *coords[1:-1], end_coord])
