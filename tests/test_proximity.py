@@ -325,6 +325,36 @@ def test_group_nodes_network_metric_requires_network() -> None:
         group_nodes(polys, pts, distance_metric="network")
 
 
+def test_group_nodes_node_geom_col_missing() -> None:
+    """Missing node_geom_col should raise a clear error."""
+    polys, pts = make_poly_points_pair()
+    with pytest.raises(ValueError, match="node_geom_col 'missing' not found"):
+        group_nodes(polys, pts, node_geom_col="missing")
+
+
+def test_group_nodes_node_geom_col_override() -> None:
+    """Custom polygon point column drives edge geometries."""
+    polys, pts = make_poly_points_pair()
+    custom = Point(10, 0)
+    polys = polys.assign(node_pt=[custom])
+    _, edges = group_nodes(polys, pts, node_geom_col="node_pt")
+    edge_key = next(iter(edges))
+    geoms = edges[edge_key].geometry
+    assert all(tuple(map(float, geom.coords[0])) == (custom.x, custom.y) for geom in geoms)
+
+
+def test_group_nodes_set_point_nodes_preserves_original_geometry() -> None:
+    """set_point_nodes swaps polygon geometry to points and keeps originals."""
+    polys, pts = make_poly_points_pair()
+    nodes, edges = group_nodes(polys, pts, set_point_nodes=True)
+    poly_nodes = nodes["polygon"]
+    assert "original_geometry" in poly_nodes.columns
+    assert poly_nodes.geometry.equals(polys.geometry.centroid)
+    assert poly_nodes["original_geometry"].equals(polys.geometry)
+    edge_key = next(iter(edges))
+    assert len(edges[edge_key]) == 2
+
+
 class TestContiguityPublicAPI:
     """Retain existing public API test name for quick test task reference."""
 
@@ -340,15 +370,9 @@ class TestContiguityPublicAPI:
             assert G.has_edge(v, u)
 
 
-## End of concise suite
-
-
 # ---------------------------------------------------------------------------
 # Additional coverage tests (public API only) to reach 100% proximity coverage
 # ---------------------------------------------------------------------------
-
-
-# Helper moved to tests/helpers.py as make_single_point()
 
 
 def test_knn_single_point_early_exit() -> None:
