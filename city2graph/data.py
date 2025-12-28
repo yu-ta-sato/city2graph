@@ -578,7 +578,7 @@ def _create_segment_splits(segment: pd.Series, positions: list[float]) -> list[p
 
         if part_geom and not part_geom.is_empty:
             new_segment = segment.copy()
-            new_segment.geometry = part_geom
+            new_segment["geometry"] = part_geom
             new_segment["split_from"] = start_pct
             new_segment["split_to"] = end_pct
             new_segment["id"] = f"{original_id}_{i + 1}" if len(positions) > 2 else original_id
