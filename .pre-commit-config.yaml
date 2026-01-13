@@ -50,6 +50,6 @@ repos:
           - pandas-stubs
           - pytest
           - shapely
-          - torch
+          - types-torch
           - torch-geometric
           - types-requests
