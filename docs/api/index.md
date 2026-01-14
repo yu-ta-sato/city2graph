@@ -1,3 +1,8 @@
+---
+description: City2Graph API documentation: Modules for Urban Morphology, Public Transportation Networks, Mobility Flow Graphs, and Heterogeneous Metapath construction for geospatial machine learning.
+keywords: City2Graph API, PyTorch Geometric, Heterogeneous Graphs, Urban Morphology, Public Transport, GTFS, OD Matrices, Mobility Networks, POI Analysis, Overture Maps, Geospatial Deep Learning, GeoAI, Graph Neural Networks (GNNs)
+---
+
 # API Reference
 
 This section contains the complete API reference for the `city2graph` package.
