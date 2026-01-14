@@ -1,10 +1,13 @@
 site_name: City2Graph
 site_url: https://city2graph.net/latest/
 site_author: Yuta Sato
-site_description: Transform urban data into graphs for spatial analysis and Graph Neural Networks
+site_description: >-
+  City2Graph is a Python library to transform geospatial data (OSM, GTFS, POIs)
+  into heterogeneous graphs for Urban Network Analysis and Graph Neural Networks
+  (GNNs).
 repo_url: https://github.com/c2g-dev/city2graph
 repo_name: c2g-dev/city2graph
-copyright: Copyright &copy; 2025 Yuta Sato & City2Graph developers
+copyright: Copyright &copy; 2026 Yuta Sato & City2Graph developers
 use_directory_urls: false
 
 theme:
@@ -61,6 +64,7 @@ extra_javascript:
 # Plugins
 plugins:
   - search
+  - mike
   - social
   - git-revision-date-localized:
       enable_creation_date: true
@@ -187,12 +191,12 @@ nav:
   - Home: index.md
   - Installation: installation.md
   - Examples:
-      - Introduction: examples/index.md
-      - Metapath: examples/add_metapaths.ipynb
-      - Morphology: examples/morphological_graph_from_overturemaps.ipynb
-      - GTFS: examples/gtfs.ipynb
-      - OD Matrix: examples/generating_graphs_from_od_matrix.ipynb
-      - Proximity Graphs: examples/generating_graphs_by_proximity.ipynb
+      - Overview of City2Graph Examples: examples/index.md
+      - Metapath Construction for Heterogeneous GNNs: examples/add_metapaths.ipynb
+      - Morphological Graphs from Overture Maps & OpenStreetMap: examples/morphological_graph_from_overturemaps.ipynb  # yamllint disable-line rule:line-length
+      - GTFS to Graphs: examples/gtfs.ipynb
+      - OD Matrix to Graphs: examples/generating_graphs_from_od_matrix.ipynb
+      - Spatial Proximity Graphs: examples/generating_graphs_by_proximity.ipynb
   - API Reference:
       - Overview: api/index.md
       - Graph: api/graph.md
