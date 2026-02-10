@@ -1,6 +1,6 @@
 ---
 description: Step-by-step guide to installing City2Graph via pip or conda, including instructions for PyTorch Geometric and CUDA support for GPU acceleration.
-keywords: install city2graph, pip install, conda install, PyTorch Geometric, CUDA, GPU acceleration, Python package, conda-forge, cu118, cu124, cu126, cu128, cu130
+keywords: install city2graph, pip install, conda install, PyTorch Geometric, CUDA, GPU acceleration, Python package, conda-forge, cu126, cu128, cu130
 hide:
   - navigation
 ---
@@ -37,7 +37,7 @@ For GPU acceleration, you can install City2Graph with a specific CUDA version ex
 pip install "city2graph[cu130]"
 ```
 
-Supported CUDA versions are `cu118`, `cu124`, `cu126`, `cu128`, and `cu130`.
+Supported CUDA versions are `cu126`, `cu128`, and `cu130`.
 
 ## Using conda-forge
 
