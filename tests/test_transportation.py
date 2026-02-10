@@ -14,9 +14,42 @@ import pytest
 from shapely.geometry import LineString
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
+from city2graph.transportation import _time_to_seconds
+from city2graph.transportation import _timestamp
 from city2graph.transportation import get_od_pairs
 from city2graph.transportation import load_gtfs
 from city2graph.transportation import travel_summary_graph
+
+
+class TestTimeHelpers:
+    """Test time conversion helper functions with non-string inputs."""
+
+    def test_time_to_seconds_with_float(self) -> None:
+        """Test _time_to_seconds with a raw float value."""
+        assert _time_to_seconds(3600.0) == 3600.0
+
+    def test_time_to_seconds_with_none(self) -> None:
+        """Test _time_to_seconds with None defaults to 0."""
+        assert _time_to_seconds(None) == 0.0
+
+    def test_time_to_seconds_with_numeric_string(self) -> None:
+        """Test _time_to_seconds with a string that is not HH:MM:SS."""
+        assert _time_to_seconds("3600.0") == 3600.0
+
+    def test_timestamp_with_float(self) -> None:
+        """Test _timestamp with a raw float (seconds since midnight)."""
+        ts = _timestamp(3600.0, datetime(2024, 1, 1))
+        assert ts == datetime(2024, 1, 1, 1, 0, 0)
+
+    def test_timestamp_with_none(self) -> None:
+        """Test _timestamp with None returns midnight."""
+        ts = _timestamp(None, datetime(2024, 1, 1))
+        assert ts == datetime(2024, 1, 1, 0, 0, 0)
+
+    def test_timestamp_with_numeric_string(self) -> None:
+        """Test _timestamp with a numeric string falls back to seconds."""
+        ts = _timestamp("7200.0", datetime(2024, 1, 1))
+        assert ts == datetime(2024, 1, 1, 2, 0, 0)
 
 
 class TestLoadGtfs:
@@ -146,6 +179,11 @@ class TestGetOdPairs:
         # Create a modified GTFS with some malformed times
         gtfs_copy = sample_gtfs_dict.copy()
         stop_times = gtfs_copy["stop_times"].copy()
+
+        # Cast time columns to object dtype so we can inject non-string values
+        # (Arrow-backed string columns reject non-string assignment directly)
+        for col in ("arrival_time", "departure_time"):
+            stop_times[col] = stop_times[col].astype(object)
 
         # Replace some time values with None and numeric values to trigger line 72
         stop_times.loc[0, "departure_time"] = None

@@ -118,8 +118,12 @@ def _time_to_seconds(value: str | float | None) -> float:
         return float(value or 0)
 
     # At this point, value must be a string - parse time
-    h, m, s = map(int, value.split(":"))
-    return h * 3600 + m * 60 + s
+    try:
+        h, m, s = map(int, value.split(":"))
+        return h * 3600 + m * 60 + s
+    except (ValueError, AttributeError):
+        # Handle string representations of numeric values (e.g. "3600.0")
+        return float(value)
 
 
 def _timestamp(gtfs_time: str | float | None, service_date: datetime) -> datetime | None:
@@ -159,7 +163,13 @@ def _timestamp(gtfs_time: str | float | None, service_date: datetime) -> datetim
         day_offset, h = divmod(h, 24)
         return service_date.replace(hour=h, minute=m, second=s) + timedelta(days=day_offset)
 
-    h, m, s = map(int, gtfs_time.split(":"))
+    # Try parsing as HH:MM:SS; fall back to numeric interpretation
+    try:
+        h, m, s = map(int, gtfs_time.split(":"))
+    except (ValueError, AttributeError):
+        seconds = _time_to_seconds(gtfs_time)
+        h, remainder = divmod(int(seconds), 3600)
+        m, s = divmod(remainder, 60)
     day_offset, h = divmod(h, 24)
     return service_date.replace(hour=h, minute=m, second=s) + timedelta(days=day_offset)
 
@@ -565,6 +575,15 @@ def _create_basic_od(stop_times: pd.DataFrame) -> pd.DataFrame:
     """
     # Ensure stop_times has the necessary columns and types
     st = stop_times.copy()
+    # Coerce time columns: convert to object dtype first (to support mixed
+    # types from Arrow-backed string columns), then stringify non-string values.
+    for col in ("arrival_time", "departure_time"):
+        if col in st.columns:
+            st[col] = (
+                st[col]
+                .astype(object)
+                .map(lambda v: str(v) if pd.notna(v) and not isinstance(v, str) else v)
+            )
     st["stop_sequence"] = pd.to_numeric(st["stop_sequence"], errors="coerce")
     st = st.dropna(subset=["stop_sequence"]).sort_values(["trip_id", "stop_sequence"])
 
