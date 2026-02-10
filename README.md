@@ -50,7 +50,7 @@ For GPU acceleration, you can install City2Graph with a specific CUDA version ex
 pip install "city2graph[cu130]"
 ```
 
-Supported CUDA versions are `cu118`, `cu124`, `cu126`, `cu128`, and `cu130`.
+Supported CUDA versions are `cu126`, `cu128`, and `cu130`.
 
 ### Using conda
 

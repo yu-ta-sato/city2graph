@@ -52,7 +52,7 @@ pip install "city2graph[cpu]"  # CPU only
 pip install "city2graph[cu130]"  # For CUDA 13.0 (GPU)
 ```
 
-Supported CUDA options: cu118, cu124, cu126, cu128, cu130
+Supported CUDA options: cu126, cu128, cu130
 
 Or install with conda (core functionality only):
 
