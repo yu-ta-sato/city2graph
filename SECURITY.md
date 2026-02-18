@@ -42,8 +42,8 @@ Please include the following information in your report:
 
 | CVE | Package | Severity | Fixed In | Resolution |
 | --- | ------- | -------- | -------- | ---------- |
-| [CVE-2025-3730](https://nvd.nist.gov/vuln/detail/CVE-2025-3730) | PyTorch | Critical | v0.2.3 | Minimum `torch>=2.8.0` enforced across all install variants |
-| [CVE-2025-2953](https://nvd.nist.gov/vuln/detail/CVE-2025-2953) | PyTorch | Critical | v0.2.3 | Minimum `torch>=2.8.0` enforced; deprecated CUDA variants (`cu118`, `cu124`) removed |
+| [CVE-2025-3730](https://nvd.nist.gov/vuln/detail/CVE-2025-3730) | PyTorch | Critical | v0.2.4 | Minimum `torch>=2.8.0` enforced across all install variants |
+| [CVE-2025-2953](https://nvd.nist.gov/vuln/detail/CVE-2025-2953) | PyTorch | Critical | v0.2.4 | Minimum `torch>=2.8.0` enforced; deprecated CUDA variants (`cu118`, `cu124`) removed |
 
 As part of the fix, the following CUDA install extras were removed: `cu118`, `cu124`. The currently supported extras are: `cpu`, `cu126`, `cu128`, `cu130`.
 
