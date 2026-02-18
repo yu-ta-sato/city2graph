@@ -6,6 +6,24 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
+## 0.2.4 (2026-02-18)
+
+### Added
+- Added `get_boundaries` function to retrieve polygon boundaries using Nominatim geocoding.
+
+### Changed
+- Updated `load_overture_data` to support `place_name` parameter for automatic boundary retrieval via Nominatim geocoding.
+- Updated PyTorch dependencies to address security vulnerabilities (CVE-2025-3730, CVE-2025-2953).
+- Removed support for deprecated CUDA versions (`cu118`, `cu124`).
+- Enforced `torch>=2.8.0` across all install variants.
+
+### Fixed
+- Fixed `GeometryTypeError` in `load_overture_data` by filtering out non-LineString geometries.
+
+### Documentation
+- Updated `SECURITY.md` to reflect supported versions and resolved vulnerabilities.
+
+
 ## 0.2.3 (2026-01-07)
 
 ### Added
