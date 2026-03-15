@@ -32,7 +32,7 @@ We welcome contributions to the City2Graph project! This document provides guide
 1. Create a new branch for your changes:
 
    ```bash
-   git checkout -b feature/your-feature-name
+   git checkout -b your-feature-name
    ```
 
 2. Make your changes to the codebase.
@@ -46,7 +46,7 @@ We welcome contributions to the City2Graph project! This document provides guide
 4. Run the tests to ensure your changes don't break existing functionality:
 
    ```bash
-   uv run pytest --cov=city2graph --cov-report=html --cov-report=term
+   uv run pytest -q
    ```
 
 5. Update or add documentation as needed.
@@ -82,7 +82,7 @@ When contributing new features or making significant changes, please update the 
 1. Push your changes to your fork:
 
    ```bash
-   git push origin feature/your-feature-name
+   git push origin your-feature-name
    ```
 
 2. Open a pull request on GitHub.

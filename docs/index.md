@@ -20,10 +20,11 @@ hide:
 ## Features
 
 - Construct graphs from morphological datasets (e.g. buildings, streets, and land use from OpenStreetMap (OSM), Overture Maps, and others)
-- Construct graphs from transportation datasets (e.g. public transport of buses, trams, and trains from GTFS)
+- Construct graphs from transportation datasets (e.g. public transport of buses, trams, and trains from GTFS) with DuckDB-backed loading and aggregation
 - Construct graphs from contiguity datasets (e.g. land use, land cover, and administrative boundaries)
 - Construct graphs from mobility datasets (e.g. bike-sharing, migration, and pedestrian flows)
 - Convert geospatial data (GeoPandas / NetworkX) into tensors (PyTorch Geometric's Data and HeteroData) for graph representation learning, such as Graph Neural Networks (GNNs)
+- Build multi-center accessibility catchments and layered isochrones from network graphs
 
 **City2Graph** empowers researchers and practitioners in GeoAI, Urban Analytics, and Spatial Data Science to build advanced applications. A key distinction of this library is its ability to model complex urban systems by handling multiple geospatial relations as **heterogeneous graphs**. It bridges the gap between traditional GIS and modern Graph Neural Networks (GNNs) for a variety of applications. By supporting standard libraries like PyTorch Geometric, it enables seamless integration into deep learning workflows for Graph Representation Learning. With its versatile graph construction interface, this library can also be used for network analysis of urban systems from multiple geospatial relations, such as multi-modal accessibility (e.g. isochrone with street networks + public transport networks).
 
@@ -69,7 +70,7 @@ conda install -c conda-forge pytorch pytorch_geometric
 For CUDA-enabled PyTorch (conda):
 
 ```bash
-conda install -c conda-forge pytorch=2.7.1=*cuda128*
+conda install -c conda-forge pytorch=2.9.0=*cuda128*
 conda install -c conda-forge pytorch_geometric
 ```
 
@@ -130,10 +131,13 @@ For details, see [Examples](examples/morphological_graph_from_overturemaps.ipynb
 
 ```python
 sample_gtfs_path = Path("./itm_london_gtfs.zip")
-gtfs_data = c2g.load_gtfs(sample_gtfs_path)
+gtfs_con = c2g.load_gtfs(sample_gtfs_path)
 
 travel_summary_nodes, travel_summary_edges = c2g.travel_summary_graph(
-   gtfs_data, calendar_start="20250601", calendar_end="20250601")
+   gtfs_con,
+   calendar_start="20250601",
+   calendar_end="20250601",
+)
 ```
 
 <p align="center">
