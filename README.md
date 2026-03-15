@@ -13,8 +13,8 @@
 [![scope](http://city2graph.net/latest/assets/figures/scope.png)](http://city2graph.net/latest/assets/figures/scope.png)
 
 - **Graph Construction for GeoAI:** Build graphs from diverse urban datasets, including buildings, streets, and land use, to power GeoAI and GNN applications.
-- **Transportation Network Modeling:** Analyze public transport systems (buses, trams, trains) by constructing detailed transportation graphs with support of GTFS format.
-- **Proximity and Contiguity Analysis:** Create graphs based on spatial proximity and adjacency for applications in urban planning and environmental analysis.
+- **Transportation Network Modeling:** Query GTFS feeds through DuckDB and construct detailed transit graphs for accessibility and service analysis.
+- **Proximity and Contiguity Analysis:** Create graphs based on spatial proximity and adjacency, including multi-center distance filtering and layered isochrones.
 - **Mobility Flow Analysis:** Model and analyze urban mobility patterns from various data sources like bike-sharing, migration, and pedestrian flows.
 - **PyTorch Geometric Integration:** Seamlessly convert geospatial data into PyTorch tensors for GNNs.
 
@@ -78,14 +78,14 @@ conda install -c conda-forge pytorch pytorch_geometric
 
 #### With PyTorch + CUDA (GPU)
 
-For GPU support, you should select the appropriate PyTorch variant by specifying the version and CUDA build string. For example, to install PyTorch 2.7.1 with CUDA 12.8 support:
+For GPU support, you should select the appropriate PyTorch variant by specifying the version and CUDA build string. For example, to install PyTorch 2.9.0 with CUDA 12.8 support:
 
 ```bash
 # Install city2graph
 conda install -c conda-forge city2graph
 
 # Then install PyTorch with CUDA support
-conda install -c conda-forge pytorch=2.7.1=*cuda128*
+conda install -c conda-forge pytorch=2.9.0=*cuda128*
 conda install -c conda-forge pytorch_geometric
 ```
 
@@ -201,7 +201,7 @@ We welcome contributions to the City2Graph project! To contribute:
 
 3. **Create a feature branch:**
    ```bash
-   git checkout -b feature/your-feature-name
+   git checkout -b your-feature-name
    ```
 
 4. **Make your changes and test:**
@@ -210,12 +210,12 @@ We welcome contributions to the City2Graph project! To contribute:
    uv run pre-commit run --all-files
 
    # Run tests
-   uv run pytest --cov=city2graph --cov-report=html --cov-report=term
+   uv run pytest -q
    ```
 
 5. **Submit a pull request** with a clear description of your changes.
 
-For detailed contributing guidelines, code style requirements, and documentation standards, please see our [Contributing Guide](docs/source/contributing.rst).
+For detailed contributing guidelines, code style requirements, and documentation standards, please see our [Contributing Guide](docs/contributing.md).
 
 ## Code Quality
 

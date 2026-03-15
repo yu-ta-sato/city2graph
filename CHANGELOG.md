@@ -6,6 +6,28 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
+## 0.3.0 (2026-03-15)
+
+### Added
+- Added DuckDB-backed GTFS loading through `load_gtfs()`, returning an in-memory database connection for SQL-first transit workflows.
+- Added directed and frequency-aware options to `travel_summary_graph()` and directed OD-pair generation in `get_od_pairs()`.
+- Added support for multiple center points and multi-threshold layered output in `create_isochrone()` and `filter_graph_by_distance()`.
+
+### Changed
+- Reworked the GTFS transportation pipeline to operate on DuckDB tables instead of materialized DataFrame dictionaries.
+- Improved concave-hull isochrone generation defaults and internal performance for more stable polygon output.
+- Switched `overturemaps` dependency sourcing to the published package release instead of a Git source.
+
+### Fixed
+- Fixed `clip_graph()` CRS alignment and strict clipping of out-of-boundary endpoints.
+- Fixed `load_overture_data()` so clipped and post-processed outputs are written back to disk when saving files.
+- Fixed native ID handling and empty building-join edge cases in `morphological_graph()`.
+- Fixed heterogeneous PyG conversion edge handling, metapath empty-frame construction, and `plot_graph()` style kwargs forwarding.
+
+### Documentation
+- Updated release metadata, installation guidance, GTFS examples, and contributor docs for the `v0.3.0` release.
+
+
 ## 0.2.4 (2026-02-18)
 
 ### Added

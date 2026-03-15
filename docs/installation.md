@@ -65,14 +65,14 @@ conda install -c conda-forge pytorch pytorch_geometric
 
 ### With PyTorch + CUDA (GPU)
 
-For GPU support, you should select the appropriate PyTorch variant by specifying the version and CUDA build string. For example, to install PyTorch 2.7.1 with CUDA 12.8 support:
+For GPU support, you should select the appropriate PyTorch variant by specifying the version and CUDA build string. For example, to install PyTorch 2.9.0 with CUDA 12.8 support:
 
 ```bash
 # Install city2graph
 conda install -c conda-forge city2graph
 
 # Then install PyTorch with CUDA support
-conda install -c conda-forge pytorch=2.7.1=*cuda128*
+conda install -c conda-forge pytorch=2.9.0=*cuda128*
 conda install -c conda-forge pytorch_geometric
 ```
 
@@ -86,6 +86,7 @@ You can browse available CUDA-enabled builds on the [conda-forge PyTorch files p
 City2Graph requires the following packages:
 
 * networkx
+* duckdb
 * shapely
 * geopandas
 * libpysal
