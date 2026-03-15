@@ -82,8 +82,10 @@ conda install -c conda-forge pytorch_geometric
 ```python
 import city2graph as c2g
 import geopandas as gpd
+import networkx as nx
 import pandas as pd
 from pathlib import Path
+import rustworkx as rx
 ```
 
 **Metapath**
@@ -137,6 +139,19 @@ travel_summary_nodes, travel_summary_edges = c2g.travel_summary_graph(
    gtfs_con,
    calendar_start="20250601",
    calendar_end="20250601",
+)
+
+travel_summary_graph = c2g.gdf_to_nx(travel_summary_nodes, travel_summary_edges)
+travel_rx_graph = c2g.nx_to_rx(travel_summary_graph)
+
+import rustworkx as rx
+betweenness_centrality = rx.betweenness_centrality(travel_rx_graph)
+
+# Set the betweenness centrality as a node attribute
+nx.set_node_attributes(
+  travel_summary_graph,
+  betweenness_centrality,
+  "betweenness_centrality",
 )
 ```
 
