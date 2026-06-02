@@ -510,7 +510,7 @@ def _download_and_process_type(  # noqa: PLR0912, PLR0913, C901
 
     # Load and clip data if needed
     if output_exists:
-        gdf = gpd.read_file(output_path)
+        gdf = gpd.read_file(output_path, encoding="utf-8")
     elif not save_to_file and result.stdout and isinstance(result.stdout, str):
         # Parse GeoJSON from subprocess stdout when not saving to file
         # The CLI may output warning messages before the GeoJSON, so we need to
