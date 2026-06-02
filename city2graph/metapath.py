@@ -756,7 +756,6 @@ def _materialize_metapath(
             left_on=f"dst_{idx - 1}",
             right_on=f"src_{idx}",
             how="inner",
-            copy=False,
             suffixes=("", "_right"),
         )
         joined["path_nodes"] = [

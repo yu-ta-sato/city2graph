@@ -240,7 +240,12 @@ def _ensure_graph_sql_support(con: duckdb.DuckDBPyConnection) -> None:
 
     # Usually raises duckdb.Error if the function already exists.
     with suppress(duckdb.Error):
-        con.create_function("time_to_seconds", _time_to_seconds, ["VARCHAR"], "DOUBLE")
+        con.create_function(
+            "time_to_seconds",
+            _time_to_seconds,
+            [duckdb.sqltype("VARCHAR")],
+            duckdb.sqltype("DOUBLE"),
+        )
 
 
 def _ensure_stops_geometry(con: duckdb.DuckDBPyConnection) -> None:
@@ -517,7 +522,12 @@ def load_gtfs(path: str | Path) -> duckdb.DuckDBPyConnection:
     con.execute("INSTALL spatial; LOAD spatial;")
 
     # Register a scalar UDF used by SQL queries in this module.
-    con.create_function("time_to_seconds", _time_to_seconds, ["VARCHAR"], "DOUBLE")
+    con.create_function(
+        "time_to_seconds",
+        _time_to_seconds,
+        [duckdb.sqltype("VARCHAR")],
+        duckdb.sqltype("DOUBLE"),
+    )
 
     tmp_dir = tempfile.mkdtemp()
     has_files = False
@@ -669,8 +679,8 @@ def get_od_pairs(
         cal_df = con.execute(
             "SELECT MIN(start_date) as s, MAX(end_date) as e FROM calendar"
         ).fetchone()
-        s_dt = start_date or cal_df[0]
-        e_dt = end_date or cal_df[1]
+        s_dt = start_date or (cal_df[0] if cal_df else None)
+        e_dt = end_date or (cal_df[1] if cal_df else None)
     else:
         if not start_date or not end_date:
             return pd.DataFrame()
@@ -748,10 +758,12 @@ def get_od_pairs(
         return pd.DataFrame()
 
     od_pairs_df["departure_ts"] = od_pairs_df.apply(
-        lambda row: _timestamp(row["departure_time"], row["active_date_str"]), axis=1
+        lambda row: _timestamp(row["departure_time"], row["active_date_str"]),
+        axis=1,  # type: ignore[call-overload]
     )
     od_pairs_df["arrival_ts"] = od_pairs_df.apply(
-        lambda row: _timestamp(row["arrival_time"], row["active_date_str"]), axis=1
+        lambda row: _timestamp(row["arrival_time"], row["active_date_str"]),
+        axis=1,  # type: ignore[call-overload]
     )
 
     od_pairs_df = od_pairs_df.dropna(subset=["departure_ts", "arrival_ts"])
