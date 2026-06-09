@@ -1,6 +1,7 @@
 """Refactored test module for morphology.py with improved maintainability and reduced redundancy."""
 
 import logging
+import math
 import warnings
 from collections.abc import Callable
 from typing import Any
@@ -13,6 +14,11 @@ from shapely.geometry import LineString
 from shapely.geometry import Point
 from shapely.geometry import Polygon
 
+from city2graph.morphology import _create_and_filter_tessellation
+from city2graph.morphology import _filter_buildings_by_network_distance
+from city2graph.morphology import _filter_tessellation_by_network_distance
+from city2graph.morphology import _include_unenclosed_building_tessellation
+from city2graph.morphology import _segments_within_network_distance
 from city2graph.morphology import morphological_graph
 from city2graph.morphology import private_to_private_graph
 from city2graph.morphology import private_to_public_graph
@@ -142,7 +148,7 @@ class TestMorphologicalGraphCore(TestMorphologyBase):
             predicate: str,
         ) -> gpd.GeoDataFrame:
             assert how == "left"
-            assert predicate == "intersects"
+            assert predicate == "contains"
             return tessellation.copy()
 
         monkeypatch.setattr("city2graph.morphology.gpd.sjoin", fake_sjoin)
@@ -154,6 +160,337 @@ class TestMorphologicalGraphCore(TestMorphologyBase):
         )
 
         assert "building_geometry" in nodes["private"].columns
+
+    def test_include_unenclosed_buildings_is_opt_in(
+        self,
+        sample_crs: str,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Buildings missed by enclosed tessellation are only added when requested."""
+        buildings = gpd.GeoDataFrame(
+            {"building_id": ["inside", "unenclosed"]},
+            geometry=[
+                Polygon([(0, 0), (1, 0), (1, 1), (0, 1)]),
+                Polygon([(10, 0), (11, 0), (11, 1), (10, 1)]),
+            ],
+            crs=sample_crs,
+        )
+        segments = gpd.GeoDataFrame(
+            geometry=[LineString([(-1, -1), (2, -1)])],
+            crs=sample_crs,
+        )
+
+        def fake_create_tessellation(
+            geometry: gpd.GeoDataFrame,
+            primary_barriers: gpd.GeoDataFrame | None = None,
+        ) -> gpd.GeoDataFrame:
+            if primary_barriers is not None:
+                return gpd.GeoDataFrame(
+                    {"tess_id": ["enclosed"], "enclosure_index": [0]},
+                    geometry=[geometry.geometry.iloc[0]],
+                    crs=sample_crs,
+                )
+            msg = "fallback should not create a non-local tessellation"
+            raise AssertionError(msg)
+
+        def passthrough_filter(
+            tessellation: gpd.GeoDataFrame,
+            _segments: gpd.GeoDataFrame,
+            max_distance: float = float("inf"),
+        ) -> gpd.GeoDataFrame:
+            _ = max_distance
+            return tessellation
+
+        monkeypatch.setattr("city2graph.morphology.create_tessellation", fake_create_tessellation)
+        monkeypatch.setattr(
+            "city2graph.morphology._filter_adjacent_tessellation",
+            passthrough_filter,
+        )
+
+        default_nodes, _ = morphological_graph(buildings, segments, keep_buildings=True)
+        opt_in_nodes, _ = morphological_graph(
+            buildings,
+            segments,
+            keep_buildings=True,
+            include_unenclosed_buildings=True,
+        )
+
+        assert len(default_nodes["private"]) == 1
+        assert len(opt_in_nodes["private"]) == 2
+        assert "fallback_1" in opt_in_nodes["private"].index
+
+    def test_morphological_graph_passes_tessellation_limit(
+        self,
+        sample_crs: str,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Custom enclosure limits should propagate to tessellation creation."""
+        custom_limit = Polygon([(-10, -10), (10, -10), (10, 10), (-10, 10)])
+        buildings = gpd.GeoDataFrame(
+            geometry=[Polygon([(0, 0), (1, 0), (1, 1), (0, 1)])],
+            crs=sample_crs,
+        )
+        segments = gpd.GeoDataFrame(
+            geometry=[LineString([(-1, 0), (2, 0)])],
+            crs=sample_crs,
+        )
+        captured: dict[str, object] = {}
+
+        def fake_create_tessellation(
+            geometry: gpd.GeoDataFrame,
+            primary_barriers: gpd.GeoDataFrame | None = None,
+            **kwargs: object,
+        ) -> gpd.GeoDataFrame:
+            _ = (geometry, primary_barriers)
+            captured["limit"] = kwargs.get("limit")
+            return gpd.GeoDataFrame(
+                {"tess_id": ["cell"], "enclosure_index": [0]},
+                geometry=[buildings.geometry.iloc[0]],
+                crs=sample_crs,
+            )
+
+        monkeypatch.setattr("city2graph.morphology.create_tessellation", fake_create_tessellation)
+
+        morphological_graph(buildings, segments, limit=custom_limit)
+
+        assert captured["limit"] is custom_limit
+
+    def test_include_unenclosed_buildings_uses_prefiltered_fallback_buildings(
+        self,
+        sample_crs: str,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Fallback tessellation should use the buildings already selected for graph inclusion."""
+        buildings = gpd.GeoDataFrame(
+            {"building_id": ["enclosed", "near_missing", "far_missing"]},
+            geometry=[
+                Polygon([(0, 0), (1, 0), (1, 1), (0, 1)]),
+                Polygon([(2, 0), (3, 0), (3, 1), (2, 1)]),
+                Polygon([(9, 0), (10, 0), (10, 1), (9, 1)]),
+            ],
+            crs=sample_crs,
+        )
+        tessellation = gpd.GeoDataFrame(
+            {"private_id": ["enclosed"], "enclosure_index": [0]},
+            geometry=[buildings.geometry.iloc[0]],
+            crs=sample_crs,
+        )
+
+        def fake_create_tessellation(
+            geometry: gpd.GeoDataFrame,
+            primary_barriers: gpd.GeoDataFrame | None = None,
+        ) -> gpd.GeoDataFrame:
+            _ = (geometry, primary_barriers)
+            msg = "fallback should not create a non-local tessellation"
+            raise AssertionError(msg)
+
+        monkeypatch.setattr("city2graph.morphology.create_tessellation", fake_create_tessellation)
+
+        result = _include_unenclosed_building_tessellation(
+            tessellation,
+            buildings.iloc[:2],
+            "private_id",
+        )
+
+        assert list(result["private_id"]) == ["enclosed", "fallback_1"]
+
+    def test_keep_buildings_excludes_distance_filtered_buildings_from_fallback_cells(
+        self,
+        sample_crs: str,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Large fallback cells must not reattach buildings filtered out by distance."""
+        buildings = gpd.GeoDataFrame(
+            {"building_id": ["enclosed", "near_missing", "far_outside"]},
+            geometry=[
+                Polygon([(0, 0), (0.5, 0), (0.5, 0.5), (0, 0.5)]),
+                Polygon([(1, 0), (1.5, 0), (1.5, 0.5), (1, 0.5)]),
+                Polygon([(4, 0), (4.5, 0), (4.5, 0.5), (4, 0.5)]),
+            ],
+            crs=sample_crs,
+        )
+        segments = gpd.GeoDataFrame(
+            geometry=[LineString([(0, 0), (5, 0)])],
+            crs=sample_crs,
+        )
+
+        def fake_create_tessellation(
+            geometry: gpd.GeoDataFrame,
+            primary_barriers: gpd.GeoDataFrame | None = None,
+        ) -> gpd.GeoDataFrame:
+            if primary_barriers is not None:
+                return gpd.GeoDataFrame(
+                    {"tess_id": ["enclosed"], "enclosure_index": [0]},
+                    geometry=[geometry.geometry.iloc[0]],
+                    crs=sample_crs,
+                )
+            return gpd.GeoDataFrame(
+                {"tess_id": geometry.index.to_list()},
+                geometry=[Polygon([(0.75, -1), (5, -1), (5, 2), (0.75, 2)])],
+                crs=sample_crs,
+            )
+
+        def passthrough_filter(
+            tessellation: gpd.GeoDataFrame,
+            _segments: gpd.GeoDataFrame,
+            max_distance: float = float("inf"),
+        ) -> gpd.GeoDataFrame:
+            _ = max_distance
+            return tessellation
+
+        monkeypatch.setattr("city2graph.morphology.create_tessellation", fake_create_tessellation)
+        monkeypatch.setattr(
+            "city2graph.morphology._filter_adjacent_tessellation",
+            passthrough_filter,
+        )
+        monkeypatch.setattr(
+            "city2graph.morphology._filter_tessellation_by_network_distance",
+            lambda tessellation, *_args, **_kwargs: tessellation,
+        )
+
+        nodes, _ = morphological_graph(
+            buildings,
+            segments,
+            center_point=Point(0, 0),
+            distance=2.0,
+            keep_buildings=True,
+            include_unenclosed_buildings=True,
+        )
+
+        attached_ids = set(nodes["private"]["building_id"].dropna())
+        assert attached_ids == {"enclosed", "near_missing"}
+        assert "far_outside" not in attached_ids
+
+    def test_network_distance_filter_does_not_use_centroid_shortcuts(
+        self,
+        sample_crs: str,
+    ) -> None:
+        """Private cells should not make distant cells reachable through centroid-to-centroid edges."""
+        tessellation = gpd.GeoDataFrame(
+            {"private_id": ["near", "far"]},
+            geometry=[
+                Polygon([(0.9, -0.1), (1.1, -0.1), (1.1, 0.1), (0.9, 0.1)]),
+                Polygon([(2.9, -0.1), (3.1, -0.1), (3.1, 0.1), (2.9, 0.1)]),
+            ],
+            crs=sample_crs,
+        )
+        segments = gpd.GeoDataFrame(
+            geometry=[LineString([(0, 0), (1, 0)])],
+            crs=sample_crs,
+        )
+
+        filtered = _filter_tessellation_by_network_distance(
+            tessellation,
+            segments,
+            Point(0, 0),
+            2.2,
+        )
+
+        assert list(filtered["private_id"]) == ["near"]
+
+    def test_network_distance_projects_center_and_private_cells_to_segments(
+        self,
+        sample_crs: str,
+    ) -> None:
+        """A center and private cell near the middle of a long segment should use the segment."""
+        tessellation = gpd.GeoDataFrame(
+            {"private_id": ["near_midpoint", "too_far"]},
+            geometry=[
+                Polygon([(59, 0), (61, 0), (61, 2), (59, 2)]),
+                Polygon([(89, 0), (91, 0), (91, 2), (89, 2)]),
+            ],
+            crs=sample_crs,
+        )
+        segments = gpd.GeoDataFrame(
+            geometry=[LineString([(0, 0), (100, 0)])],
+            crs=sample_crs,
+        )
+
+        filtered = _filter_tessellation_by_network_distance(
+            tessellation,
+            segments,
+            Point(50, 0),
+            12.0,
+        )
+
+        assert list(filtered["private_id"]) == ["near_midpoint"]
+
+    def test_building_network_distance_uses_segment_projection(
+        self,
+        sample_crs: str,
+    ) -> None:
+        """Buildings should be selected by distance to the nearest point on a segment."""
+        buildings = gpd.GeoDataFrame(
+            {"building_id": ["near_midpoint", "too_far"]},
+            geometry=[
+                Polygon([(59, 0), (61, 0), (61, 2), (59, 2)]),
+                Polygon([(89, 0), (91, 0), (91, 2), (89, 2)]),
+            ],
+            crs=sample_crs,
+        )
+        segments = gpd.GeoDataFrame(
+            geometry=[LineString([(0, 0), (100, 0)])],
+            crs=sample_crs,
+        )
+
+        filtered = _filter_buildings_by_network_distance(
+            buildings,
+            segments,
+            Point(50, 0),
+            12.0,
+        )
+
+        assert list(filtered["building_id"]) == ["near_midpoint"]
+
+    def test_unenclosed_fallback_uses_projected_network_distance(
+        self,
+        sample_crs: str,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Fallback cells should include unenclosed buildings reachable along segment middles."""
+        buildings = gpd.GeoDataFrame(
+            {"building_id": ["enclosed", "near_missing", "far_missing"]},
+            geometry=[
+                Polygon([(49, 0), (51, 0), (51, 2), (49, 2)]),
+                Polygon([(59, 0), (61, 0), (61, 2), (59, 2)]),
+                Polygon([(89, 0), (91, 0), (91, 2), (89, 2)]),
+            ],
+            crs=sample_crs,
+        )
+        segments = gpd.GeoDataFrame(
+            geometry=[LineString([(0, 0), (100, 0)])],
+            crs=sample_crs,
+        )
+
+        def fake_create_tessellation(
+            geometry: gpd.GeoDataFrame,
+            primary_barriers: gpd.GeoDataFrame | None = None,
+        ) -> gpd.GeoDataFrame:
+            _ = primary_barriers
+            return gpd.GeoDataFrame(
+                {"tess_id": ["enclosed"], "enclosure_index": [0]},
+                geometry=[geometry.geometry.iloc[0]],
+                crs=sample_crs,
+            )
+
+        monkeypatch.setattr("city2graph.morphology.create_tessellation", fake_create_tessellation)
+
+        tessellation = _create_and_filter_tessellation(
+            buildings,
+            segments,
+            segments,
+            "geometry",
+            12.0,
+            math.inf,
+            Point(50, 0),
+            keep_buildings=True,
+            private_id_col="private_id",
+            include_unenclosed_buildings=True,
+            network_segments=segments,
+        )
+
+        assert set(tessellation["building_id"].dropna()) == {"enclosed", "near_missing"}
+        assert "fallback_1" in set(tessellation["private_id"])
 
     def test_distance_filter_handles_missing_center_node(
         self,
@@ -184,12 +521,13 @@ class TestMorphologicalGraphCore(TestMorphologyBase):
             _ = (segments, max_distance)
             return tessellation
 
-        def fake_find_closest_node_to_center(
-            graph: nx.Graph,
-            center_geom: gpd.GeoSeries | gpd.GeoDataFrame,
-        ) -> str:
-            _ = (graph, center_geom)
-            return "missing-node"
+        def fake_connect_point_to_nearest_edge(
+            _graph: nx.Graph,
+            _point_node_id: str,
+            _point: Point,
+            edge_records: list[tuple[Any, Any, LineString, float]],
+        ) -> tuple[tuple[Any, Any, LineString, float], float, float]:
+            return edge_records[0], 0.0, 0.0
 
         monkeypatch.setattr(
             "city2graph.morphology.create_tessellation",
@@ -200,8 +538,8 @@ class TestMorphologicalGraphCore(TestMorphologyBase):
             fake_filter_adjacent_tessellation,
         )
         monkeypatch.setattr(
-            "city2graph.morphology._find_closest_node_to_center",
-            fake_find_closest_node_to_center,
+            "city2graph.morphology._connect_point_to_nearest_edge",
+            fake_connect_point_to_nearest_edge,
         )
 
         nodes, _edges = morphological_graph(
@@ -212,6 +550,98 @@ class TestMorphologicalGraphCore(TestMorphologyBase):
         )
 
         assert nodes["private"].empty
+
+    def test_segments_use_same_reachability_field_as_cells(
+        self,
+        sample_crs: str,
+    ) -> None:
+        """Street acceptance is derived from the same projected cost field as cells."""
+        segments = gpd.GeoDataFrame(
+            geometry=[LineString([(0, 0), (50, 0)]), LineString([(50, 0), (100, 0)])],
+            crs=sample_crs,
+        )
+        tessellation = gpd.GeoDataFrame(
+            {"private_id": ["near", "far"]},
+            geometry=[
+                Polygon([(9, -1), (11, -1), (11, 1), (9, 1)]),
+                Polygon([(69, -1), (71, -1), (71, 1), (69, 1)]),
+            ],
+            crs=sample_crs,
+        )
+
+        kept_segments = _segments_within_network_distance(segments, Point(0, 0), 20.0)
+        kept_cells = _filter_tessellation_by_network_distance(
+            tessellation,
+            segments,
+            Point(0, 0),
+            20.0,
+        )
+
+        # The near segment (reachable from x=0) is kept; the far one (min endpoint
+        # cost 50) is dropped. The near cell (cost ~10) is kept while the far cell
+        # (cost ~70) is dropped, all from the single reachability metric.
+        assert len(kept_segments) == 1
+        assert list(kept_cells["private_id"]) == ["near"]
+
+    def test_segments_within_distance_keeps_boundary_straddling_segment(
+        self,
+        sample_crs: str,
+    ) -> None:
+        """A segment whose near endpoint is within budget is kept whole, not dropped."""
+        segments = gpd.GeoDataFrame(
+            {"public_id": ["straddle", "beyond"]},
+            geometry=[LineString([(0, 0), (50, 0)]), LineString([(50, 0), (100, 0)])],
+            crs=sample_crs,
+        )
+
+        kept = _segments_within_network_distance(segments, Point(0, 0), 20.0)
+
+        # "straddle" spans x=0..50 and crosses the 20 budget boundary yet is kept
+        # whole because its reachable portion is within budget; "beyond" is dropped.
+        assert list(kept["public_id"]) == ["straddle"]
+
+    def test_morphological_graph_has_no_isolated_private_nodes(
+        self,
+        sample_crs: str,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Reachability-budgeted output never contains a private cell without a faced_to edge."""
+        near = Polygon([(4, -1), (6, -1), (6, 0), (4, 0)])
+        isolated = Polygon([(4, 29), (6, 29), (6, 31), (4, 31)])
+        buildings = gpd.GeoDataFrame(geometry=[near, isolated], crs=sample_crs)
+        segments = gpd.GeoDataFrame(
+            geometry=[LineString([(0, 0), (20, 0)])],
+            crs=sample_crs,
+        )
+
+        def fake_create_tessellation(
+            geometry: gpd.GeoDataFrame,
+            primary_barriers: gpd.GeoDataFrame | None = None,
+        ) -> gpd.GeoDataFrame:
+            _ = (geometry, primary_barriers)
+            return gpd.GeoDataFrame(
+                {"tess_id": ["near", "isolated"], "enclosure_index": [0, 0]},
+                geometry=[near, isolated],
+                crs=sample_crs,
+            )
+
+        monkeypatch.setattr("city2graph.morphology.create_tessellation", fake_create_tessellation)
+
+        nodes, edges = morphological_graph(
+            buildings,
+            segments,
+            center_point=Point(0, 0),
+            distance=50.0,
+        )
+
+        faced = edges[("private", "faced_to", "public")]
+        private_ids = set(nodes["private"].index)
+        faced_private_ids = set(faced.index.get_level_values(0)) if not faced.empty else set()
+
+        # The "isolated" cell is reachable by centroid projection but faces no
+        # street, so it receives a nearest public fallback faced_to edge.
+        assert private_ids == {"near", "isolated"}
+        assert private_ids <= faced_private_ids
 
     def test_networkx_conversion(
         self,
@@ -490,8 +920,11 @@ class TestIndividualGraphFunctions(TestMorphologyBase):
         with pytest.raises(ValueError, match="Expected ID column 'public_id' not found"):
             private_to_public_graph(private_with_id, public_no_id)
 
-    def test_private_to_public_empty_join_result(self, sample_crs: str) -> None:
-        """Test case where spatial join produces no results."""
+    def test_private_to_public_nearest_fallback_for_empty_join_result(
+        self,
+        sample_crs: str,
+    ) -> None:
+        """Private spaces missed by dwithin should connect to the nearest public segment."""
         # Create non-overlapping geometries that won't intersect
         private_gdf = make_grid_polygons_gdf(1, 1, crs=sample_crs)
         private_gdf = private_gdf.reset_index().rename(columns={"id": "private_id"})
@@ -502,9 +935,21 @@ class TestIndividualGraphFunctions(TestMorphologyBase):
         )
 
         nodes, edges = private_to_public_graph(private_gdf, public_gdf, tolerance=0.1)
-        # Should return empty edges but combined nodes
-        assert edges.empty
+        assert not edges.empty
+        assert set(edges["private_id"]) == set(private_gdf["private_id"])
+        assert set(edges["public_id"]) == {1}
         assert len(nodes) == 2  # Both private and public nodes combined
+
+    def test_private_to_public_empty_public_stays_empty(self, sample_crs: str) -> None:
+        """Nearest fallback should not change empty-public behavior."""
+        private_gdf = make_grid_polygons_gdf(1, 1, crs=sample_crs)
+        private_gdf = private_gdf.reset_index().rename(columns={"id": "private_id"})
+        public_gdf = gpd.GeoDataFrame({"public_id": []}, geometry=[], crs=sample_crs)
+
+        nodes, edges = private_to_public_graph(private_gdf, public_gdf, tolerance=0.1)
+
+        assert edges.empty
+        assert len(nodes) == 1
 
     # Public-to-Public Tests
     def test_public_to_public_basic(self, sample_segments_gdf: gpd.GeoDataFrame) -> None:
@@ -631,7 +1076,7 @@ class TestInputValidationAndErrors(TestMorphologyBase):
                 for msg in warning_messages
                 if "Source node for distance filtering not found" in msg
             ]
-            # Since the str() cast bug is fixed, KDTree always returns a valid node ID
+            # The projection helper snaps the source to an edge when graph context exists.
             assert len(distance_warnings) == 0
 
         # Should still return valid (possibly empty) results

@@ -223,6 +223,79 @@ class TestTessellation(BaseGraphTest):
         assert list(result.columns) == ["geometry", "enclosure_index", "tess_id"]
         assert "returning empty GeoDataFrame" in caplog.text
 
+    def test_enclosed_tessellation_passes_explicit_limit(
+        self,
+        sample_buildings_gdf: gpd.GeoDataFrame,
+        sample_segments_gdf: gpd.GeoDataFrame,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Explicit enclosure limits should be forwarded to momepy.enclosures."""
+        custom_limit = Polygon([(-10, -10), (10, -10), (10, 10), (-10, 10)])
+        captured: dict[str, object] = {}
+
+        def fake_enclosures(**kwargs: object) -> gpd.GeoDataFrame:
+            captured["limit"] = kwargs["limit"]
+            return gpd.GeoDataFrame(
+                {"eID": [1]},
+                geometry=[custom_limit],
+                crs=sample_buildings_gdf.crs,
+            )
+
+        def fake_enclosed_tessellation(**_kwargs: object) -> gpd.GeoDataFrame:
+            return gpd.GeoDataFrame(
+                {"enclosure_index": [1]},
+                geometry=[sample_buildings_gdf.geometry.iloc[0]],
+                crs=sample_buildings_gdf.crs,
+            )
+
+        monkeypatch.setattr(momepy, "enclosures", fake_enclosures)
+        monkeypatch.setattr(momepy, "enclosed_tessellation", fake_enclosed_tessellation)
+
+        result = utils.create_tessellation(
+            sample_buildings_gdf,
+            primary_barriers=sample_segments_gdf,
+            limit=custom_limit,
+        )
+
+        assert captured["limit"] is custom_limit
+        assert not result.empty
+
+    def test_enclosed_tessellation_computes_default_limit(
+        self,
+        sample_buildings_gdf: gpd.GeoDataFrame,
+        sample_segments_gdf: gpd.GeoDataFrame,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A non-empty buffered hull limit should be computed when none is supplied."""
+        captured: dict[str, object] = {}
+
+        def fake_enclosures(**kwargs: object) -> gpd.GeoDataFrame:
+            captured["limit"] = kwargs["limit"]
+            return gpd.GeoDataFrame(
+                {"eID": [1]},
+                geometry=[kwargs["limit"]],
+                crs=sample_buildings_gdf.crs,
+            )
+
+        def fake_enclosed_tessellation(**_kwargs: object) -> gpd.GeoDataFrame:
+            return gpd.GeoDataFrame(
+                {"enclosure_index": [1]},
+                geometry=[sample_buildings_gdf.geometry.iloc[0]],
+                crs=sample_buildings_gdf.crs,
+            )
+
+        monkeypatch.setattr(momepy, "enclosures", fake_enclosures)
+        monkeypatch.setattr(momepy, "enclosed_tessellation", fake_enclosed_tessellation)
+
+        result = utils.create_tessellation(
+            sample_buildings_gdf, primary_barriers=sample_segments_gdf
+        )
+
+        limit = captured["limit"]
+        assert isinstance(limit, Polygon)
+        assert not limit.is_empty
+        assert not result.empty
+
 
 # ============================================================================
 # GRAPH STRUCTURE TESTS
