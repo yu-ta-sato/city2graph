@@ -379,11 +379,15 @@ class TestMorphologicalGraphCore(TestMorphologyBase):
             crs=sample_crs,
         )
 
+        # The "far" centroid at (3, 0) projects onto the segment endpoint (1, 0)
+        # with a 2.0 access leg; an ``extent_buffer`` below that access distance
+        # excludes it, while "near" sits on the segment (zero access).
         filtered = _filter_tessellation_by_network_distance(
             tessellation,
             segments,
             Point(0, 0),
             2.2,
+            extent_buffer=1.0,
         )
 
         assert list(filtered["private_id"]) == ["near"]
@@ -486,7 +490,6 @@ class TestMorphologicalGraphCore(TestMorphologyBase):
             keep_buildings=True,
             private_id_col="private_id",
             include_unenclosed_buildings=True,
-            network_segments=segments,
         )
 
         assert set(tessellation["building_id"].dropna()) == {"enclosed", "near_missing"}
@@ -638,10 +641,111 @@ class TestMorphologicalGraphCore(TestMorphologyBase):
         private_ids = set(nodes["private"].index)
         faced_private_ids = set(faced.index.get_level_values(0)) if not faced.empty else set()
 
-        # The "isolated" cell is reachable by centroid projection but faces no
-        # street, so it receives a nearest public fallback faced_to edge.
+        # The "isolated" cell sits 30 m from the street, within the default
+        # extent_buffer (50 m), so it receives a nearest public fallback
+        # faced_to edge and is kept rather than pruned.
         assert private_ids == {"near", "isolated"}
         assert private_ids <= faced_private_ids
+
+    def test_extent_buffer_drops_cells_beyond_access_cap(
+        self,
+        sample_crs: str,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A cell whose only reachable street is farther than extent_buffer is dropped.
+
+        Reproduces the E01006640 symptom: a cell reachable along the network but
+        separated from the only retained street by a long straight-line access
+        leg. The old summed budget (network + access) retained it; the two-cap
+        rule rejects it because the access distance exceeds ``extent_buffer``.
+        """
+        near = Polygon([(49, 1), (51, 1), (51, 3), (49, 3)])  # centroid (50, 2), 2 m access
+        far = Polygon([(49, 59), (51, 59), (51, 61), (49, 61)])  # centroid (50, 60), 60 m access
+        buildings = gpd.GeoDataFrame(geometry=[near, far], crs=sample_crs)
+        segments = gpd.GeoDataFrame(
+            geometry=[LineString([(0, 0), (100, 0)])],
+            crs=sample_crs,
+        )
+
+        def fake_create_tessellation(
+            geometry: gpd.GeoDataFrame,
+            primary_barriers: gpd.GeoDataFrame | None = None,
+        ) -> gpd.GeoDataFrame:
+            _ = (geometry, primary_barriers)
+            return gpd.GeoDataFrame(
+                {"tess_id": ["near", "far"], "enclosure_index": [0, 0]},
+                geometry=[near, far],
+                crs=sample_crs,
+            )
+
+        monkeypatch.setattr("city2graph.morphology.create_tessellation", fake_create_tessellation)
+
+        # distance budget (150) would admit "far" under a summed network+access
+        # cost (50 + 60 = 110); the access cap (50) is what excludes it.
+        nodes, edges = morphological_graph(
+            buildings,
+            segments,
+            center_point=Point(0, 0),
+            distance=150.0,
+            clipping_buffer=200.0,
+            extent_buffer=50.0,
+        )
+
+        private_ids = set(nodes["private"].index)
+        faced = edges[("private", "faced_to", "public")]
+        faced_private_ids = set(faced.index.get_level_values(0)) if not faced.empty else set()
+
+        assert private_ids == {"near"}
+        assert "far" not in faced_private_ids
+
+    def test_extent_buffer_validation(
+        self,
+        sample_buildings_gdf: gpd.GeoDataFrame,
+        sample_segments_gdf: gpd.GeoDataFrame,
+    ) -> None:
+        """extent_buffer must be non-negative and not exceed clipping_buffer."""
+        with pytest.raises(ValueError, match="clipping_buffer must be greater"):
+            morphological_graph(
+                sample_buildings_gdf,
+                sample_segments_gdf,
+                clipping_buffer=10.0,
+                extent_buffer=50.0,
+            )
+        with pytest.raises(ValueError, match="extent_buffer cannot be negative"):
+            morphological_graph(
+                sample_buildings_gdf,
+                sample_segments_gdf,
+                extent_buffer=-1.0,
+            )
+
+    def test_private_to_public_respects_max_connection_distance(
+        self,
+        sample_crs: str,
+    ) -> None:
+        """Fallback connections farther than max_connection_distance are not created."""
+        private_gdf = gpd.GeoDataFrame(
+            {"private_id": ["near", "far"]},
+            geometry=[
+                Polygon([(0, 1), (2, 1), (2, 3), (0, 3)]),  # 1 m from the segment
+                Polygon([(0, 100), (2, 100), (2, 102), (0, 102)]),  # 100 m from the segment
+            ],
+            crs=sample_crs,
+        )
+        public_gdf = gpd.GeoDataFrame(
+            {"public_id": [0]},
+            geometry=[LineString([(0, 0), (50, 0)])],
+            crs=sample_crs,
+        )
+
+        _, edges = private_to_public_graph(
+            private_gdf,
+            public_gdf,
+            max_connection_distance=10.0,
+        )
+
+        connected = set(edges["private_id"]) if not edges.empty else set()
+        assert "near" in connected
+        assert "far" not in connected
 
     def test_networkx_conversion(
         self,

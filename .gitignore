@@ -40,3 +40,9 @@ docs/examples/*.geojson
 dev/
 documents/
 temp_installation.html
+
+30daymapchallenge_data
+thumbnail.png
+generate_thumbnail.py
+gtfs_old.ipynb
+city2graph_overture.ipynb

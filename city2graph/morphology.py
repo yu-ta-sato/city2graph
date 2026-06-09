@@ -69,6 +69,7 @@ def morphological_graph(  # noqa: PLR0913
     center_point: gpd.GeoSeries | gpd.GeoDataFrame | None = None,
     distance: float | None = None,
     clipping_buffer: float = math.inf,
+    extent_buffer: float = 50.0,
     limit: gpd.GeoDataFrame | gpd.GeoSeries | BaseGeometry | None = None,
     primary_barrier_col: str | None = "barrier_geometry",
     contiguity: str = "queen",
@@ -106,7 +107,15 @@ def morphological_graph(  # noqa: PLR0913
         these segments does not exceed this value.
     clipping_buffer : float, default=math.inf
         Buffer distance to ensure adequate context for generating tessellation.
-        Must be non-negative.
+        Must be non-negative and not smaller than ``extent_buffer``.
+    extent_buffer : float, default=50.0
+        Maximum perpendicular access distance (a bounded catchment cap) from a
+        street to a building/cell for it to be retained, and the maximum length
+        of a ``faced_to`` connection. Unlike ``distance`` this access term is
+        never added to the walking-network budget, so a building whose only
+        nearby street is disconnected from the reachable network is not retained
+        on the strength of a long straight-line access leg across barriers. Must
+        be non-negative and not larger than ``clipping_buffer``.
     limit : geopandas.GeoDataFrame, geopandas.GeoSeries, shapely geometry, or None, optional
         Boundary passed to `momepy.enclosures` when creating enclosed
         tessellation. When None, `create_tessellation` computes one from the
@@ -195,9 +204,15 @@ def morphological_graph(  # noqa: PLR0913
         msg = "contiguity must be 'queen' or 'rook'"
         raise ValueError(msg)
 
-    # Validate clipping_buffer
+    # Validate clipping_buffer and extent_buffer
     if clipping_buffer < 0:
         msg = "clipping_buffer cannot be negative."
+        raise ValueError(msg)
+    if extent_buffer < 0:
+        msg = "extent_buffer cannot be negative."
+        raise ValueError(msg)
+    if clipping_buffer < extent_buffer:
+        msg = "clipping_buffer must be greater than or equal to extent_buffer."
         raise ValueError(msg)
 
     if isinstance(buildings_gdf.index, pd.MultiIndex):
@@ -228,7 +243,7 @@ def morphological_graph(  # noqa: PLR0913
         keep_buildings,
         private_id_col,
         include_unenclosed_buildings,
-        segments_buffer,
+        extent_buffer,
         limit=limit,
     )
 
@@ -246,6 +261,7 @@ def morphological_graph(  # noqa: PLR0913
         public_id_col,
         keep_segments,
         drop_isolated_private=drop_isolated_private,
+        extent_buffer=extent_buffer,
     )
 
     return (nodes, edges) if not as_nx else gdf_to_nx(nodes, edges)
@@ -404,6 +420,7 @@ def private_to_public_graph(
     primary_barrier_col: str | None = None,
     tolerance: float = 1e-6,
     as_nx: bool = False,
+    max_connection_distance: float = math.inf,
 ) -> tuple[gpd.GeoDataFrame, gpd.GeoDataFrame] | nx.Graph:
     """
     Create edges between private polygons and nearby public geometries.
@@ -427,6 +444,12 @@ def private_to_public_graph(
         Buffer distance for public geometries to detect proximity to private spaces.
     as_nx : bool, default=False
         If True, convert the output to a NetworkX graph.
+    max_connection_distance : float, default=``math.inf``
+        Maximum distance for the nearest-public fallback connection. Private
+        cells matched by the ``tolerance`` proximity query are unaffected; cells
+        connected only by the fallback are dropped when their nearest public
+        geometry lies farther than this distance, preventing long star-shaped
+        edges to distant streets.
 
     Returns
     -------
@@ -526,6 +549,7 @@ def private_to_public_graph(
         query_geometry,
         private_id_col,
         public_id_col,
+        max_connection_distance,
     )
 
     edges_gdf = _create_private_public_edges(
@@ -548,6 +572,7 @@ def _connect_unmatched_private_to_nearest_public(
     query_geometry: gpd.GeoSeries,
     private_id_col: str,
     public_id_col: str,
+    max_distance: float = math.inf,
 ) -> pd.DataFrame:
     """
     Add one nearest public edge for private polygons missed by the proximity query.
@@ -555,7 +580,10 @@ def _connect_unmatched_private_to_nearest_public(
     The regular ``dwithin`` query captures true face relationships. Fallback
     tessellation cells can be raw building footprints, so they may not touch a
     street barrier. Those otherwise isolated cells are connected to their nearest
-    public segment to keep them integrated in the morphology graph.
+    public segment to keep them integrated in the morphology graph, but only when
+    that segment lies within ``max_distance``. Cells whose nearest segment is
+    farther are left unconnected so a caller's isolated-node pruning can remove
+    them instead of forcing a long star-shaped edge.
 
     Parameters
     ----------
@@ -571,6 +599,8 @@ def _connect_unmatched_private_to_nearest_public(
         Column name identifying private geometries.
     public_id_col : str
         Column name identifying public geometries.
+    max_distance : float, default ``math.inf``
+        Maximum private-to-public distance for a fallback connection to be added.
 
     Returns
     -------
@@ -594,6 +624,21 @@ def _connect_unmatched_private_to_nearest_public(
     )
     if len(private_nearest_indices) == 0:
         return joined
+
+    # Drop fallback pairs whose nearest public segment is beyond the cap so that
+    # only genuinely street-facing cells receive a fallback faced_to edge.
+    if not math.isinf(max_distance):
+        matched_private = unmatched_private.geometry.to_numpy()[private_nearest_indices]
+        matched_public = public_query.to_numpy()[public_nearest_indices]
+        gaps = gpd.GeoSeries(matched_private, crs=public_gdf.crs).distance(
+            gpd.GeoSeries(matched_public, crs=public_gdf.crs),
+            align=False,
+        )
+        within = (gaps <= max_distance).to_numpy()
+        private_nearest_indices = private_nearest_indices[within]
+        public_nearest_indices = public_nearest_indices[within]
+        if len(private_nearest_indices) == 0:
+            return joined
 
     nearest = pd.DataFrame(
         {
@@ -1068,7 +1113,7 @@ def _create_and_filter_tessellation(  # noqa: PLR0913
     keep_buildings: bool,
     private_id_col: str,
     include_unenclosed_buildings: bool = False,
-    network_segments: gpd.GeoDataFrame | None = None,
+    extent_buffer: float = math.inf,
     limit: gpd.GeoDataFrame | gpd.GeoSeries | BaseGeometry | None = None,
 ) -> gpd.GeoDataFrame:
     """
@@ -1077,14 +1122,19 @@ def _create_and_filter_tessellation(  # noqa: PLR0913
     This function creates a tessellation from buildings and barriers, renames the ID column,
     and filters the tessellation based on adjacency to segments and network distance.
 
+    The wider ``segments_buffer`` only provides tessellation context (barriers and
+    a coarse adjacency gate); building and cell retention are judged solely
+    against ``segments_filtered`` (the reachable isochrone streets) so that
+    retention and the ``faced_to`` edges that follow share a single street set.
+
     Parameters
     ----------
     buildings_gdf : geopandas.GeoDataFrame
         GeoDataFrame containing building polygons.
     segments_buffer : geopandas.GeoDataFrame
-        Buffered segments used for tessellation context.
+        Buffered segments used for tessellation context (barriers and adjacency).
     segments_filtered : geopandas.GeoDataFrame
-        Filtered segments used for adjacency checks.
+        Reachable isochrone segments used for adjacency and all retention checks.
     primary_barrier_col : str or None
         Column name containing alternative geometry for public spaces.
     distance : float or None
@@ -1100,9 +1150,9 @@ def _create_and_filter_tessellation(  # noqa: PLR0913
     include_unenclosed_buildings : bool, default=False
         If True, buildings excluded by enclosed tessellation are added using
         barrier-free tessellation before distance filters are applied.
-    network_segments : geopandas.GeoDataFrame or None, default=None
-        Segments used for the network distance computations. When None, the
-        filtered segments are used; otherwise these segments define the network.
+    extent_buffer : float, default ``math.inf``
+        Maximum perpendicular access distance from a street to a building/cell
+        centroid for it to be retained by the network-distance filters.
     limit : geopandas.GeoDataFrame, geopandas.GeoSeries, shapely geometry, or None, optional
         Boundary passed to `create_tessellation` for enclosed tessellation.
 
@@ -1128,13 +1178,16 @@ def _create_and_filter_tessellation(  # noqa: PLR0913
     if private_id_col not in tessellation.columns:
         tessellation[private_id_col] = range(len(tessellation))  # Assign sequential private IDs
 
-    distance_segments = segments_filtered if network_segments is None else network_segments
+    # Retention is judged solely against the reachable isochrone streets so that
+    # cell/building acceptance and the faced_to edges share a single street set.
+    distance_segments = segments_filtered
 
     eligible_buildings = _filter_buildings_by_network_distance(
         buildings_gdf,
         distance_segments,
         center_point,
         distance,
+        extent_buffer,
     )
 
     if include_unenclosed_buildings and not barriers.empty:
@@ -1160,6 +1213,7 @@ def _create_and_filter_tessellation(  # noqa: PLR0913
             distance_segments,
             center_point,
             distance,  # Max network distance
+            extent_buffer,
         )
 
     # Optionally preserve building information by joining tessellation with buildings
@@ -1225,11 +1279,13 @@ def _filter_buildings_by_network_distance(
     segments: gpd.GeoDataFrame,
     center_point: gpd.GeoSeries | gpd.GeoDataFrame | Point | None,
     max_distance: float | None,
+    extent_buffer: float = math.inf,
 ) -> gpd.GeoDataFrame:
     """
     Filter buildings by network distance from a centre point.
 
     Buildings are kept when their centroid is reachable within ``max_distance``
+    network distance *and* within ``extent_buffer`` access distance of a street
     on the shared reachability cost field. Filtering is skipped when no centre or
     distance budget is supplied, returning the buildings unchanged.
 
@@ -1243,6 +1299,8 @@ def _filter_buildings_by_network_distance(
         Origin point(s) for the reachability computation.
     max_distance : float or None
         Maximum network distance for a building to be retained.
+    extent_buffer : float, default ``math.inf``
+        Maximum perpendicular access distance from a street to the building.
 
     Returns
     -------
@@ -1257,6 +1315,7 @@ def _filter_buildings_by_network_distance(
         segments,
         center_point,
         max_distance,
+        extent_buffer,
     )
     return buildings_gdf.iloc[keep_ilocs].copy()
 
@@ -1307,6 +1366,7 @@ def _build_morphological_layers(
     public_id_col: str,
     keep_segments: bool = True,
     drop_isolated_private: bool = False,
+    extent_buffer: float = math.inf,
 ) -> tuple[dict[str, gpd.GeoDataFrame], dict[tuple[str, str, str], gpd.GeoDataFrame]]:
     """
     Build the node and edge layers for the morphological graph.
@@ -1339,6 +1399,12 @@ def _build_morphological_layers(
         This guarantees an induced subgraph free of isolated private nodes and is
         enabled when a reachability budget (``center_point`` and ``distance``) is
         applied.
+    extent_buffer : float, default ``math.inf``
+        Maximum length of a nearest-public fallback ``faced_to`` connection. A
+        private cell that touches no street within ``tolerance`` and whose
+        nearest street lies farther than ``extent_buffer`` receives no fallback
+        edge, so ``drop_isolated_private`` can remove it instead of forcing a
+        long star-shaped connection to a distant street.
 
     Returns
     -------
@@ -1373,6 +1439,7 @@ def _build_morphological_layers(
         segments_filtered,
         primary_barrier_col=primary_barrier_col,
         tolerance=tolerance,
+        max_connection_distance=extent_buffer,
     )
 
     # Log warning if no private-public connections found
@@ -1632,14 +1699,16 @@ def _filter_tessellation_by_network_distance(
     segments: gpd.GeoDataFrame,
     center_point: gpd.GeoSeries | gpd.GeoDataFrame | Point,
     max_distance: float,
+    extent_buffer: float = math.inf,
 ) -> gpd.GeoDataFrame:
     """
     Filter tessellation by network distance from a center point.
 
     This function filters a tessellation GeoDataFrame to include only those cells
-    that are within a specified network distance from a given `center_point`.
-    It constructs a spatial graph combining street segments and tessellation
-    centroids, then uses shortest-path calculations to determine reachability.
+    that are within a specified network distance from a given `center_point` and
+    within ``extent_buffer`` access distance of a street. It constructs a spatial
+    graph from the street segments and tests each cell centroid against the
+    shared reachability cost field with two independent caps.
 
     Parameters
     ----------
@@ -1651,6 +1720,8 @@ def _filter_tessellation_by_network_distance(
         The geographic center point(s) from which to calculate network distances.
     max_distance : float
         The maximum network distance (e.g., in meters) for a tessellation cell to be included.
+    extent_buffer : float, default ``math.inf``
+        Maximum perpendicular access distance from a street to a cell centroid.
 
     Returns
     -------
@@ -1667,6 +1738,7 @@ def _filter_tessellation_by_network_distance(
         segments,
         center_point,
         max_distance,
+        extent_buffer,
     )
 
     # Return the subset of the original tessellation corresponding to the kept ilocs
@@ -1780,13 +1852,19 @@ def _geometry_ilocs_within_network_distance(
     segments: gpd.GeoDataFrame,
     center_point: gpd.GeoSeries | gpd.GeoDataFrame | Point,
     max_distance: float,
+    extent_buffer: float = math.inf,
 ) -> list[int]:
     """
-    Return the integer positions of geometries reachable within a network budget.
+    Return the integer positions of geometries reachable within the budget caps.
 
-    Each geometry (typically a cell or building centroid) is scored against the
-    shared reachability cost field, adding the last-leg access from the geometry
-    to the network, and kept when that cost is within ``max_distance``.
+    Each geometry (typically a cell or building centroid) is tested against the
+    shared reachability cost field with two independent caps: the network
+    distance from the centre to the projection foot must be within
+    ``max_distance`` and the perpendicular access distance from the foot to the
+    geometry must be within ``extent_buffer``. The access term is never folded
+    into the network budget, so a geometry whose only nearby street is
+    disconnected (forcing a long straight-line access leg across barriers) is not
+    retained on the strength of a distant reachable street.
 
     Parameters
     ----------
@@ -1797,7 +1875,9 @@ def _geometry_ilocs_within_network_distance(
     center_point : geopandas.GeoSeries or geopandas.GeoDataFrame or shapely.geometry.Point
         Origin point(s) for the reachability computation.
     max_distance : float
-        Maximum network distance for a geometry to be retained.
+        Maximum network distance from the centre to the projection foot.
+    extent_buffer : float, default ``math.inf``
+        Maximum perpendicular access distance from a street to the geometry.
 
     Returns
     -------
@@ -1811,15 +1891,16 @@ def _geometry_ilocs_within_network_distance(
     return [
         iloc
         for iloc, geometry in enumerate(geometries)
-        if _distance_from_network_edges(
+        if _reachable_within_caps(
             geometry,
             field.endpoint_lengths,
             field.edge_records,
             field.source_edge,
             field.source_along,
             field.source_access,
+            max_distance,
+            extent_buffer,
         )
-        <= max_distance
     ]
 
 
@@ -1934,26 +2015,32 @@ def _connect_point_to_nearest_edge(
     return edge_record, along, access_distance
 
 
-def _distance_from_network_edges(
+def _reachable_within_caps(
     point: Point,
     endpoint_lengths: dict[typing.Hashable, float],
     edge_records: list[tuple[typing.Hashable, typing.Hashable, LineString, float]],
     source_edge: tuple[typing.Hashable, typing.Hashable, LineString, float],
     source_along: float,
     source_access: float,
-) -> float:
+    max_distance: float,
+    extent_buffer: float,
+) -> bool:
     """
-    Compute the network distance from the centre to a point.
+    Decide whether a point is reachable within both the network and access caps.
 
-    The point is projected onto every reachable edge and the cheapest path is
-    taken across the endpoint costs (plus along-edge and access terms), with the
-    centre-bearing edge handled explicitly so points sharing that edge are not
-    forced to detour through an endpoint.
+    For every reachable edge the point is projected onto its foot, splitting the
+    last leg into two independently-bounded terms: the network cost to reach the
+    foot (the centre endpoint costs plus the along-edge distance) and the
+    perpendicular access distance from the foot to the point. The point is kept
+    when some edge holds the network cost within ``max_distance`` *and* the
+    access distance within ``extent_buffer``. Keeping the access term out of the
+    network budget prevents a straight-line access leg that crosses barriers from
+    being mistaken for walkable network distance.
 
     Parameters
     ----------
     point : shapely.geometry.Point
-        The destination point to score.
+        The destination point to test.
     endpoint_lengths : dict[typing.Hashable, float]
         Shortest-path cost from the centre to each reachable network node.
     edge_records : list[tuple[typing.Hashable, typing.Hashable, shapely.geometry.LineString, float]]
@@ -1964,13 +2051,16 @@ def _distance_from_network_edges(
         Along-edge distance of the centre projection on ``source_edge``.
     source_access : float
         Access distance from the centre to ``source_edge``.
+    max_distance : float
+        Maximum network distance from the centre to the projection foot.
+    extent_buffer : float
+        Maximum perpendicular access distance from the foot to ``point``.
 
     Returns
     -------
-    float
-        The minimum network distance, or ``math.inf`` when unreachable.
+    bool
+        ``True`` when at least one edge satisfies both caps, ``False`` otherwise.
     """
-    best = math.inf
     for edge_record in edge_records:
         from_node, to_node, geometry, length = edge_record
         from_length = endpoint_lengths.get(from_node)
@@ -1979,13 +2069,19 @@ def _distance_from_network_edges(
             continue
 
         along, access_distance = _projected_edge_access(point, geometry)
+        if access_distance > extent_buffer:
+            continue
+
+        network_cost = math.inf
         if edge_record is source_edge:
-            best = min(best, source_access + abs(along - source_along) + access_distance)
+            network_cost = min(network_cost, source_access + abs(along - source_along))
         if from_length is not None:
-            best = min(best, from_length + along + access_distance)
+            network_cost = min(network_cost, from_length + along)
         if to_length is not None:
-            best = min(best, to_length + max(length - along, 0.0) + access_distance)
-    return best
+            network_cost = min(network_cost, to_length + max(length - along, 0.0))
+        if network_cost <= max_distance:
+            return True
+    return False
 
 
 def _projected_edge_access(point: Point, line: LineString) -> tuple[float, float]:
