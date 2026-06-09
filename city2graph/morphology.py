@@ -15,7 +15,6 @@ The module specializes in three types of spatial relationships:
 """
 
 # Standard library imports
-import itertools
 import logging
 import math
 import typing
@@ -26,10 +25,10 @@ import geopandas as gpd
 import networkx as nx
 import numpy as np
 import pandas as pd
-from scipy.spatial import KDTree
-from scipy.spatial.distance import pdist
 from shapely.creation import linestrings as sh_linestrings
+from shapely.geometry import LineString
 from shapely.geometry import Point
+from shapely.geometry.base import BaseGeometry
 
 # Local imports
 from .base import GeoDataProcessor
@@ -51,6 +50,7 @@ __all__ = [
 
 # Module logger configuration
 logger = logging.getLogger(__name__)
+_SOURCE_BUILDING_INDEX_COL = "_source_building_index"
 
 
 # ============================================================================
@@ -63,17 +63,19 @@ logger = logging.getLogger(__name__)
 # ============================================================================
 
 
-def morphological_graph(
+def morphological_graph(  # noqa: PLR0913
     buildings_gdf: gpd.GeoDataFrame,
     segments_gdf: gpd.GeoDataFrame,
     center_point: gpd.GeoSeries | gpd.GeoDataFrame | None = None,
     distance: float | None = None,
     clipping_buffer: float = math.inf,
+    limit: gpd.GeoDataFrame | gpd.GeoSeries | BaseGeometry | None = None,
     primary_barrier_col: str | None = "barrier_geometry",
     contiguity: str = "queen",
     keep_buildings: bool = False,
     keep_segments: bool = True,
     tolerance: float = 1e-6,
+    include_unenclosed_buildings: bool = False,
     as_nx: bool = False,
 ) -> tuple[dict[str, gpd.GeoDataFrame], dict[tuple[str, str, str], gpd.GeoDataFrame]] | nx.Graph:
     """
@@ -105,6 +107,10 @@ def morphological_graph(
     clipping_buffer : float, default=math.inf
         Buffer distance to ensure adequate context for generating tessellation.
         Must be non-negative.
+    limit : geopandas.GeoDataFrame, geopandas.GeoSeries, shapely geometry, or None, optional
+        Boundary passed to `momepy.enclosures` when creating enclosed
+        tessellation. When None, `create_tessellation` computes one from the
+        buildings and barriers.
     primary_barrier_col : str, optional
         Column name containing alternative geometry for public spaces. If specified and exists,
         this geometry will be used instead of the main geometry column for tessellation barriers.
@@ -120,6 +126,9 @@ def morphological_graph(
         Buffer distance for public geometries when creating private-to-public connections.
         This parameter controls how close private spaces need to be to public spaces
         to establish a connection.
+    include_unenclosed_buildings : bool, default=False
+        If True, buildings excluded by enclosed tessellation are added using
+        barrier-free tessellation before distance filters are applied.
     as_nx : bool, default=False
         If True, convert the output to a NetworkX graph.
 
@@ -218,7 +227,14 @@ def morphological_graph(
         center_point,
         keep_buildings,
         private_id_col,
+        include_unenclosed_buildings,
+        segments_buffer,
+        limit=limit,
     )
+
+    # When a reachability budget is applied, prune private cells that face no
+    # retained street so the induced subgraph contains no isolated private nodes.
+    drop_isolated_private = center_point is not None and distance is not None
 
     nodes, edges = _build_morphological_layers(
         tessellation,
@@ -229,6 +245,7 @@ def morphological_graph(
         private_id_col,
         public_id_col,
         keep_segments,
+        drop_isolated_private=drop_isolated_private,
     )
 
     return (nodes, edges) if not as_nx else gdf_to_nx(nodes, edges)
@@ -502,6 +519,14 @@ def private_to_public_graph(
 
     # Drop duplicate pairs of (private_id, public_id)
     joined = joined.drop_duplicates()
+    joined = _connect_unmatched_private_to_nearest_public(
+        joined,
+        private_gdf,
+        public_gdf,
+        query_geometry,
+        private_id_col,
+        public_id_col,
+    )
 
     edges_gdf = _create_private_public_edges(
         joined,
@@ -514,6 +539,71 @@ def private_to_public_graph(
     nodes_gdf = pd.concat([private_gdf, public_gdf], ignore_index=True)
 
     return (nodes_gdf, edges_gdf) if not as_nx else gdf_to_nx(nodes=nodes_gdf, edges=edges_gdf)
+
+
+def _connect_unmatched_private_to_nearest_public(
+    joined: pd.DataFrame,
+    private_gdf: gpd.GeoDataFrame,
+    public_gdf: gpd.GeoDataFrame,
+    query_geometry: gpd.GeoSeries,
+    private_id_col: str,
+    public_id_col: str,
+) -> pd.DataFrame:
+    """
+    Add one nearest public edge for private polygons missed by the proximity query.
+
+    The regular ``dwithin`` query captures true face relationships. Fallback
+    tessellation cells can be raw building footprints, so they may not touch a
+    street barrier. Those otherwise isolated cells are connected to their nearest
+    public segment to keep them integrated in the morphology graph.
+
+    Parameters
+    ----------
+    joined : pd.DataFrame
+        DataFrame of proximity query results linking private and public geometries.
+    private_gdf : gpd.GeoDataFrame
+        GeoDataFrame of private geometries (tessellation cells or building footprints).
+    public_gdf : gpd.GeoDataFrame
+        GeoDataFrame of public geometries (street segments).
+    query_geometry : gpd.GeoSeries
+        GeoSeries used to find nearest public segments for missing private geometries.
+    private_id_col : str
+        Column name identifying private geometries.
+    public_id_col : str
+        Column name identifying public geometries.
+
+    Returns
+    -------
+    pd.DataFrame
+        DataFrame containing augmented connections for isolated private geometries.
+    """
+    connected_private_ids = set(joined[private_id_col]) if not joined.empty else set()
+    unmatched_private = private_gdf.loc[
+        ~private_gdf[private_id_col].isin(connected_private_ids),
+    ].drop_duplicates(subset=[private_id_col])
+    if unmatched_private.empty:
+        return joined
+
+    public_query = gpd.GeoSeries(query_geometry.to_numpy(), crs=public_gdf.crs)
+    if public_query.empty:
+        return joined
+
+    private_nearest_indices, public_nearest_indices = public_query.sindex.nearest(
+        unmatched_private.geometry,
+        return_all=False,
+    )
+    if len(private_nearest_indices) == 0:
+        return joined
+
+    nearest = pd.DataFrame(
+        {
+            private_id_col: unmatched_private.iloc[private_nearest_indices][
+                private_id_col
+            ].to_numpy(),
+            public_id_col: public_gdf.iloc[public_nearest_indices][public_id_col].to_numpy(),
+        },
+    )
+    return pd.concat([joined, nearest], ignore_index=True).drop_duplicates()
 
 
 # ============================================================================
@@ -930,10 +1020,15 @@ def _process_segments(
         segment_nodes, segment_edges = segments_to_graph(segments_gdf)
         segments_graph = nx.Graph()
 
-    # Filter segments by network distance for the final graph if center_point and distance are provided
+    # Filter segments by network distance for the final graph if center_point and distance are
+    # provided. Street acceptance is derived from the same reachability cost field used for
+    # tessellation cells, so every node type is judged against a single distance metric.
     if center_point is not None and distance is not None and not segments_gdf.empty:
-        filtered_segments_graph = filter_graph_by_distance(segments_graph, center_point, distance)
-        segments_filtered = nx_to_gdf(filtered_segments_graph, nodes=False, edges=True)
+        segments_filtered = _segments_within_network_distance(
+            segment_edges,
+            center_point,
+            distance,
+        )
     else:
         segments_filtered = segment_edges
 
@@ -962,7 +1057,7 @@ def _process_segments(
     return segments_filtered, segments_buffer
 
 
-def _create_and_filter_tessellation(
+def _create_and_filter_tessellation(  # noqa: PLR0913
     buildings_gdf: gpd.GeoDataFrame,
     segments_buffer: gpd.GeoDataFrame,
     segments_filtered: gpd.GeoDataFrame,
@@ -972,6 +1067,9 @@ def _create_and_filter_tessellation(
     center_point: gpd.GeoSeries | gpd.GeoDataFrame | None,
     keep_buildings: bool,
     private_id_col: str,
+    include_unenclosed_buildings: bool = False,
+    network_segments: gpd.GeoDataFrame | None = None,
+    limit: gpd.GeoDataFrame | gpd.GeoSeries | BaseGeometry | None = None,
 ) -> gpd.GeoDataFrame:
     """
     Create tessellation and apply spatial filters.
@@ -999,6 +1097,14 @@ def _create_and_filter_tessellation(
         If True, preserves building information in the tessellation output.
     private_id_col : str
         Name of the private ID column.
+    include_unenclosed_buildings : bool, default=False
+        If True, buildings excluded by enclosed tessellation are added using
+        barrier-free tessellation before distance filters are applied.
+    network_segments : geopandas.GeoDataFrame or None, default=None
+        Segments used for the network distance computations. When None, the
+        filtered segments are used; otherwise these segments define the network.
+    limit : geopandas.GeoDataFrame, geopandas.GeoSeries, shapely geometry, or None, optional
+        Boundary passed to `create_tessellation` for enclosed tessellation.
 
     Returns
     -------
@@ -1007,9 +1113,13 @@ def _create_and_filter_tessellation(
     """
     barriers = _prepare_barriers(segments_buffer, primary_barrier_col)
     # Create tessellation based on buildings and prepared barriers
+    tessellation_kwargs = {}
+    if limit is not None:
+        tessellation_kwargs["limit"] = limit
     tessellation = create_tessellation(
         buildings_gdf,
         primary_barriers=None if barriers.empty else barriers,  # Use barriers if available
+        **tessellation_kwargs,
     )
 
     tessellation = tessellation.rename(columns={"tess_id": private_id_col})
@@ -1017,6 +1127,22 @@ def _create_and_filter_tessellation(
     # Ensure the fixed private ID column exists, creating a sequential ID if necessary
     if private_id_col not in tessellation.columns:
         tessellation[private_id_col] = range(len(tessellation))  # Assign sequential private IDs
+
+    distance_segments = segments_filtered if network_segments is None else network_segments
+
+    eligible_buildings = _filter_buildings_by_network_distance(
+        buildings_gdf,
+        distance_segments,
+        center_point,
+        distance,
+    )
+
+    if include_unenclosed_buildings and not barriers.empty:
+        tessellation = _include_unenclosed_building_tessellation(
+            tessellation,
+            eligible_buildings,
+            private_id_col,
+        )
 
     # Determine max_distance for filtering tessellation adjacent to segments
     max_distance_for_adj_filter = distance + clipping_buffer if distance is not None else math.inf
@@ -1031,16 +1157,144 @@ def _create_and_filter_tessellation(
     if center_point is not None and distance is not None:
         tessellation = _filter_tessellation_by_network_distance(
             tessellation,
-            segments_filtered,  # Use 'segments_filtered' for network distance calculation
+            distance_segments,
             center_point,
             distance,  # Max network distance
         )
 
     # Optionally preserve building information by joining tessellation with buildings
     if keep_buildings:
-        tessellation = _add_building_info(tessellation, buildings_gdf)
+        tessellation = _add_building_info(tessellation, eligible_buildings)
 
     return tessellation
+
+
+def _include_unenclosed_building_tessellation(
+    tessellation: gpd.GeoDataFrame,
+    buildings_gdf: gpd.GeoDataFrame,
+    private_id_col: str,
+) -> gpd.GeoDataFrame:
+    """
+    Append fallback cells for buildings missed by the enclosed tessellation.
+
+    Buildings that fall outside every enclosed tessellation cell are represented
+    by their own footprint as a fallback cell, tagged with a synthetic private id
+    and a source-building reference so they can still join the morphological graph.
+
+    Parameters
+    ----------
+    tessellation : geopandas.GeoDataFrame
+        The enclosed tessellation to augment.
+    buildings_gdf : geopandas.GeoDataFrame
+        Buildings eligible for inclusion, used to find the unenclosed ones.
+    private_id_col : str
+        Name of the private ID column.
+
+    Returns
+    -------
+    geopandas.GeoDataFrame
+        The tessellation with fallback cells appended, or the original when none
+        are missing.
+    """
+    missing_buildings = _buildings_without_tessellation(tessellation, buildings_gdf)
+    if missing_buildings.empty:
+        return tessellation
+
+    tessellation = tessellation.copy()
+    if "enclosure_index" in tessellation.columns:
+        tessellation["enclosure_index"] = tessellation["enclosure_index"].astype(str)
+
+    fallback = gpd.GeoDataFrame(
+        {private_id_col: missing_buildings.index.astype(str)},
+        geometry=missing_buildings.geometry.to_numpy(),
+        crs=missing_buildings.crs,
+    )
+    fallback[_SOURCE_BUILDING_INDEX_COL] = missing_buildings.index.to_numpy()
+    fallback[private_id_col] = "fallback_" + fallback[private_id_col].astype(str)
+    fallback["enclosure_index"] = "fallback"
+
+    return gpd.GeoDataFrame(
+        pd.concat([tessellation, fallback], ignore_index=True, sort=False),
+        geometry=tessellation.geometry.name,
+        crs=tessellation.crs,
+    )
+
+
+def _filter_buildings_by_network_distance(
+    buildings_gdf: gpd.GeoDataFrame,
+    segments: gpd.GeoDataFrame,
+    center_point: gpd.GeoSeries | gpd.GeoDataFrame | Point | None,
+    max_distance: float | None,
+) -> gpd.GeoDataFrame:
+    """
+    Filter buildings by network distance from a centre point.
+
+    Buildings are kept when their centroid is reachable within ``max_distance``
+    on the shared reachability cost field. Filtering is skipped when no centre or
+    distance budget is supplied, returning the buildings unchanged.
+
+    Parameters
+    ----------
+    buildings_gdf : geopandas.GeoDataFrame
+        Buildings to filter.
+    segments : geopandas.GeoDataFrame
+        Street segments used to build the reachability network.
+    center_point : geopandas.GeoSeries or geopandas.GeoDataFrame or shapely.geometry.Point or None
+        Origin point(s) for the reachability computation.
+    max_distance : float or None
+        Maximum network distance for a building to be retained.
+
+    Returns
+    -------
+    geopandas.GeoDataFrame
+        The reachable subset of ``buildings_gdf``.
+    """
+    if buildings_gdf.empty or segments.empty or center_point is None or max_distance is None:
+        return buildings_gdf.copy()
+
+    keep_ilocs = _geometry_ilocs_within_network_distance(
+        buildings_gdf.geometry.centroid,
+        segments,
+        center_point,
+        max_distance,
+    )
+    return buildings_gdf.iloc[keep_ilocs].copy()
+
+
+def _buildings_without_tessellation(
+    tessellation: gpd.GeoDataFrame,
+    buildings_gdf: gpd.GeoDataFrame,
+) -> gpd.GeoDataFrame:
+    """
+    Identify buildings not covered by any tessellation cell.
+
+    A spatial join flags buildings whose footprint intersects a tessellation
+    cell; those that intersect none are returned as the unenclosed buildings.
+
+    Parameters
+    ----------
+    tessellation : geopandas.GeoDataFrame
+        The tessellation whose coverage is tested.
+    buildings_gdf : geopandas.GeoDataFrame
+        Buildings to test against the tessellation.
+
+    Returns
+    -------
+    geopandas.GeoDataFrame
+        The subset of buildings that intersect no tessellation cell.
+    """
+    if buildings_gdf.empty:
+        return buildings_gdf.copy()
+    if tessellation.empty:
+        return buildings_gdf.copy()
+
+    covered = gpd.sjoin(
+        buildings_gdf[[buildings_gdf.geometry.name]],
+        tessellation[[tessellation.geometry.name]],
+        how="inner",
+        predicate="intersects",
+    )
+    return buildings_gdf.loc[~buildings_gdf.index.isin(covered.index.unique())].copy()
 
 
 def _build_morphological_layers(
@@ -1052,6 +1306,7 @@ def _build_morphological_layers(
     private_id_col: str,
     public_id_col: str,
     keep_segments: bool = True,
+    drop_isolated_private: bool = False,
 ) -> tuple[dict[str, gpd.GeoDataFrame], dict[tuple[str, str, str], gpd.GeoDataFrame]]:
     """
     Build the node and edge layers for the morphological graph.
@@ -1078,6 +1333,12 @@ def _build_morphological_layers(
     keep_segments : bool, default True
         If True, preserves the original segment LineString geometry in a column
         named 'segment_geometry' in the public nodes GeoDataFrame.
+    drop_isolated_private : bool, default False
+        If True, private cells with no private-to-public (faced_to) connection
+        are removed, along with the private-to-private edges that reference them.
+        This guarantees an induced subgraph free of isolated private nodes and is
+        enabled when a reachability budget (``center_point`` and ``distance``) is
+        applied.
 
     Returns
     -------
@@ -1117,6 +1378,24 @@ def _build_morphological_layers(
     # Log warning if no private-public connections found
     if private_to_public_edges.empty:
         logger.warning("No private to public connections found")
+
+    # Drop private cells that face no retained street so the induced subgraph
+    # contains no isolated private nodes. Adjacency (touched_to) edges that
+    # reference removed cells are pruned to keep the layers consistent.
+    if drop_isolated_private and not tessellation.empty:
+        connected_private_ids = (
+            set(private_to_public_edges[private_id_col].unique())
+            if not private_to_public_edges.empty
+            else set()
+        )
+        keep_mask = tessellation[private_id_col].isin(connected_private_ids)
+        if not keep_mask.all():
+            tessellation = tessellation.loc[keep_mask].copy()
+            if not private_to_private_edges.empty:
+                private_to_private_edges = private_to_private_edges.loc[
+                    private_to_private_edges["from_private_id"].isin(connected_private_ids)
+                    & private_to_private_edges["to_private_id"].isin(connected_private_ids)
+                ].copy()
 
     # Prepare private nodes with Point geometry (centroids)
     # Preserve original tessellation geometry in tessellation_geometry column
@@ -1205,11 +1484,11 @@ def _add_building_info(
     """
     Add building information to tessellation.
 
-    This function performs a spatial join between the tessellation GeoDataFrame
-    and the buildings GeoDataFrame to associate each tessellation cell with
-    the building(s) it contains or intersects. It adds a new column
+    This function associates each tessellation cell with buildings whose
+    representative points fall inside the cell. Fallback cells with a recorded
+    source building index are matched exactly. It adds a new column
     `building_geometry` to the tessellation, containing the geometry of the
-    intersecting building.
+    matched building.
 
     Parameters
     ----------
@@ -1223,29 +1502,45 @@ def _add_building_info(
     geopandas.GeoDataFrame
         The tessellation GeoDataFrame with an added `building_geometry` column.
     """
-    joined = gpd.sjoin(tessellation, buildings, how="left", predicate="intersects")
-
-    # If 'index_right' exists (meaning some joins occurred), map building geometries
-    if "index_right" in joined.columns:
-        # Create a mapping from building index to building geometry
-        building_geom_map = buildings.geometry.to_dict()
-
-        # Use the 'index_right' (building indices) to look up geometries from the map
-        # This creates a pandas Series of Shapely geometries.
-        building_geometries_series = joined["index_right"].map(building_geom_map)
-
-        # Convert this pandas Series to a GeoSeries, assigning the CRS from the source 'buildings' GDF
-        joined["building_geometry"] = gpd.GeoSeries(building_geometries_series, crs=buildings.crs)
-
-        # Remove the temporary 'index_right' column
-        joined = joined.drop(columns=["index_right"])
-    else:
-        # Always allocate the "building_geometry" column even if sjoin yields 0 matches
+    if tessellation.empty or buildings.empty:
+        joined = tessellation.copy()
         joined["building_geometry"] = gpd.GeoSeries(
             [None] * len(joined), index=joined.index, crs=buildings.crs
         )
+        return joined.drop(columns=[_SOURCE_BUILDING_INDEX_COL], errors="ignore")
 
-    return joined  # Return tessellation with added building geometry (if any)
+    building_columns = [col for col in buildings.columns if col != buildings.geometry.name]
+    points = gpd.GeoDataFrame(
+        buildings[building_columns].copy(),
+        geometry=buildings.geometry.representative_point(),
+        crs=buildings.crs,
+    )
+    joined = gpd.sjoin(tessellation, points, how="left", predicate="contains")
+
+    if "index_right" not in joined.columns:
+        joined["index_right"] = None
+
+    if _SOURCE_BUILDING_INDEX_COL in joined.columns:
+        source_index = joined[_SOURCE_BUILDING_INDEX_COL]
+        joined["index_right"] = source_index.combine_first(joined["index_right"])
+        source_mask = source_index.notna()
+        for column in building_columns:
+            joined.loc[source_mask, column] = (
+                source_index.loc[source_mask]
+                .map(
+                    buildings[column],
+                )
+                .to_numpy()
+            )
+
+    building_geom_map = buildings.geometry.to_dict()
+    joined["building_geometry"] = gpd.GeoSeries(
+        joined["index_right"].map(building_geom_map),
+        index=joined.index,
+        crs=buildings.crs,
+    )
+
+    return joined.drop(columns=["index_right", _SOURCE_BUILDING_INDEX_COL], errors="ignore")
 
 
 # ============================================================================
@@ -1295,13 +1590,19 @@ def _filter_adjacent_tessellation(
     # List to store filtered parts of tessellation
     filtered_parts: list[gpd.GeoDataFrame] = []
 
+    groups = (
+        tessellation.groupby(enclosure_col) if enclosure_col is not None else [(None, tessellation)]
+    )
+
     # Iterate over each enclosure group
-    for _, group in tessellation.groupby(enclosure_col):
+    for _, group in groups:
         # Geometry of the current enclosure
         enclosure_geom = group.union_all()
 
         # Segments intersecting this enclosure
         segments_in_enclosure = segments[segments.intersects(enclosure_geom)]
+        if segments_in_enclosure.empty:
+            segments_in_enclosure = segments
 
         # Union of segments within this enclosure
         segment_union_in_enclosure = segments_in_enclosure.union_all()
@@ -1318,6 +1619,9 @@ def _filter_adjacent_tessellation(
         # Add filtered group to list
         if not filtered_group.empty:
             filtered_parts.append(filtered_group)
+
+    if not filtered_parts:
+        return tessellation.iloc[0:0].copy()
 
     # Concatenate all filtered parts into a single GeoDataFrame
     return gpd.GeoDataFrame(pd.concat(filtered_parts), crs=tessellation.crs)
@@ -1358,278 +1662,461 @@ def _filter_tessellation_by_network_distance(
     if tessellation.empty or segments.empty:
         return tessellation.copy()
 
-    # Get centroids of tessellation cells
-    tessellation_centroids = tessellation.geometry.centroid
-
-    # Build a spatial graph including segment endpoints and tessellation centroids as nodes
-    graph, centroid_iloc_to_node_id, segment_node_positions = _build_spatial_graph(
+    keep_ilocs = _geometry_ilocs_within_network_distance(
+        tessellation.geometry.centroid,
         segments,
-        tessellation_centroids,
-    )
-
-    # Connect tessellation centroid nodes to the nearest segment graph nodes
-    _connect_centroids_to_segment_graph(
-        graph,
-        tessellation_centroids,
-        centroid_iloc_to_node_id,
-        segment_node_positions,
-    )
-
-    _connect_centroids_to_centroids(graph, tessellation_centroids, centroid_iloc_to_node_id)
-
-    # Normalize center_point input to a single Shapely Point geometry
-    center_geom = center_point.iloc[0] if isinstance(center_point, gpd.GeoSeries) else center_point
-
-    # Find the graph node closest to the geographic center_geom
-    center_node_id_in_graph = _find_closest_node_to_center(graph, center_geom)
-
-    # Filter centroid ilocs based on network path length from the center_node_id_in_graph
-    keep_ilocs = _filter_nodes_by_path_length(
-        graph,
-        center_node_id_in_graph,
+        center_point,
         max_distance,
-        centroid_iloc_to_node_id,
     )
 
     # Return the subset of the original tessellation corresponding to the kept ilocs
-    return tessellation.iloc[sorted(keep_ilocs)].copy()
+    return tessellation.iloc[keep_ilocs].copy()
 
 
-def _filter_nodes_by_path_length(
-    graph: nx.Graph,
-    source_node_id: typing.Hashable,
-    max_distance: float,
-    centroid_iloc_to_node_id: dict[int, str],
-) -> list[int]:
+def _extract_center_geometry(
+    center_point: gpd.GeoSeries | gpd.GeoDataFrame | Point,
+) -> Point:
     """
-    Filter nodes by their shortest path length from a source node.
+    Extract a single representative Point from a centre input.
 
-    This function calculates the shortest path distance from a given source node to
-    all other nodes in the graph using Dijkstra's algorithm. It then returns a list
-    of the integer locations (ilocs) of the tessellation centroids whose corresponding
-    nodes are within the specified maximum distance.
+    Accepts the several centre representations used across the module and
+    returns the first geometry as a plain Point for downstream snapping.
 
     Parameters
     ----------
-    graph : networkx.Graph
-        The graph to perform the search on.
-    source_node_id : typing.Hashable
-        The ID of the source node for the path length calculation.
-    max_distance : float
-        The maximum path length for a node to be included.
-    centroid_iloc_to_node_id : dict[int, str]
-        A mapping from centroid integer location to its graph node ID.
+    center_point : geopandas.GeoSeries or geopandas.GeoDataFrame or shapely.geometry.Point
+        The centre input to normalise.
 
     Returns
     -------
-    list[int]
-        A list of integer locations of the centroids that are within the distance.
+    shapely.geometry.Point
+        The first point geometry of the input.
     """
-    if source_node_id not in graph:
-        # This can happen if the center point is very far from any graph node
-        logger.warning("Source node for distance filtering not found in graph.")
-        return []
-
-    lengths = nx.single_source_dijkstra_path_length(
-        graph,
-        source_node_id,
-        weight="length",
-    )
-
-    # Get the ilocs of tessellation centroids that are within the max_distance
-    keep_ilocs = []
-    for iloc, node_id in centroid_iloc_to_node_id.items():
-        if node_id in lengths and lengths[node_id] <= max_distance:
-            keep_ilocs.append(iloc)
-    return keep_ilocs
+    if isinstance(center_point, gpd.GeoDataFrame):
+        return typing.cast("Point", center_point.geometry.iloc[0])
+    if isinstance(center_point, gpd.GeoSeries):
+        return typing.cast("Point", center_point.iloc[0])
+    return center_point
 
 
-# ============================================================================
-# SPATIAL GRAPH CONSTRUCTION HELPERS
-# ============================================================================
+class _ReachabilityField(typing.NamedTuple):
+    """
+    Single-source reachability cost field shared across all node types.
+
+    The field is computed once from a centre snapped onto the street network and
+    is reused to derive the acceptance of both street segments and tessellation
+    cells, so every node type is judged against the same reachability metric.
+    """
+
+    endpoint_lengths: dict[typing.Hashable, float]
+    edge_records: list[tuple[typing.Hashable, typing.Hashable, LineString, float]]
+    source_edge: tuple[typing.Hashable, typing.Hashable, LineString, float]
+    source_along: float
+    source_access: float
+    node_positions: dict[typing.Hashable, tuple[float, float]]
 
 
-def _build_spatial_graph(
+def _network_reachability_field(
     segments: gpd.GeoDataFrame,
-    tessellation_centroids: gpd.GeoSeries,
-) -> tuple[nx.Graph, dict[int, str], dict[str, tuple[float, float]]]:
+    center_point: gpd.GeoSeries | gpd.GeoDataFrame | Point,
+) -> _ReachabilityField | None:
     """
-    Build a spatial graph from segments and tessellation centroids.
+    Compute the single-source reachability cost field for a street network.
 
-    This function creates a unified NetworkX graph that combines the street segment
-    network with the tessellation centroids. The segment endpoints and the centroids
-    are all treated as nodes in this temporary graph, which is used for calculating
-    network distances.
+    The centre point is snapped onto its nearest network edge (capturing the
+    last leg as an along-edge plus access projection), and a single shortest
+    path computation yields the cumulative cost to reach every network node.
+    This cost field is the common basis from which both street and cell
+    acceptance are derived.
 
     Parameters
     ----------
     segments : geopandas.GeoDataFrame
-        The street segments GeoDataFrame.
-    tessellation_centroids : geopandas.GeoSeries
-        A GeoSeries of tessellation centroid points.
+        Street segments used to build the network.
+    center_point : geopandas.GeoSeries or geopandas.GeoDataFrame or shapely.geometry.Point
+        Origin point(s) for the reachability computation.
 
     Returns
     -------
-    tuple[networkx.Graph, dict[int, str], dict[str, tuple[float, float]]]
-        A tuple containing the combined graph, a mapping from centroid integer
-        location to node ID, and a dictionary of segment node positions.
+    _ReachabilityField or None
+        The computed cost field, or None when the network has no usable edges
+        or the centre cannot be snapped onto it.
     """
     graph = gdf_to_nx(edges=segments)
+    _ensure_graph_edge_lengths(graph)
+    edge_records = _network_edge_records(graph)
+    if not edge_records:
+        return None
 
-    # Get positions (coordinates) of segment graph nodes
-    segment_node_positions = nx.get_node_attributes(graph, "pos")
+    source_id = "__city2graph_center__"
+    graph = graph.copy()
+    source_edge, source_along, source_access = _connect_point_to_nearest_edge(
+        graph,
+        source_id,
+        _extract_center_geometry(center_point),
+        edge_records,
+    )
+    if source_id not in graph:
+        logger.warning("Source node for distance filtering not found in graph.")
+        return None
 
-    centroid_iloc_to_node_id = {
-        i: f"tess_centroid_{i}" for i, _ in enumerate(tessellation_centroids)
-    }
+    endpoint_lengths = nx.single_source_dijkstra_path_length(
+        graph,
+        source_id,
+        weight="length",
+    )
+    return _ReachabilityField(
+        endpoint_lengths=endpoint_lengths,
+        edge_records=edge_records,
+        source_edge=source_edge,
+        source_along=source_along,
+        source_access=source_access,
+        node_positions=nx.get_node_attributes(graph, "pos"),
+    )
 
-    centroid_nodes = [
-        (f"tess_centroid_{i}", {"pos": (point.x, point.y), "type": "centroid_node"})
-        for i, point in enumerate(tessellation_centroids)
-    ]
 
-    # Add tessellation centroid nodes to the graph
-    graph.add_nodes_from(centroid_nodes)
-    return graph, centroid_iloc_to_node_id, segment_node_positions
-
-
-def _connect_centroids_to_segment_graph(
-    graph: nx.Graph,
-    tessellation_centroids: gpd.GeoSeries,
-    centroid_iloc_to_node_id: dict[int, str],
-    segment_node_positions: dict[str, tuple[float, float]],
-) -> None:
+def _geometry_ilocs_within_network_distance(
+    geometries: gpd.GeoSeries,
+    segments: gpd.GeoDataFrame,
+    center_point: gpd.GeoSeries | gpd.GeoDataFrame | Point,
+    max_distance: float,
+) -> list[int]:
     """
-    Connect centroid nodes to their nearest segment graph nodes.
+    Return the integer positions of geometries reachable within a network budget.
 
-    This function uses a KDTree for efficient nearest neighbor search to find the
-    closest segment node for each tessellation centroid. It then adds edges to the
-    graph connecting each centroid to its nearest segment node, with the edge
-    length representing the Euclidean distance.
+    Each geometry (typically a cell or building centroid) is scored against the
+    shared reachability cost field, adding the last-leg access from the geometry
+    to the network, and kept when that cost is within ``max_distance``.
 
     Parameters
     ----------
-    graph : networkx.Graph
-        The graph to which the new edges will be added.
-    tessellation_centroids : geopandas.GeoSeries
-        The GeoSeries of tessellation centroid points.
-    centroid_iloc_to_node_id : dict[int, str]
-        A mapping from centroid integer location to its graph node ID.
-    segment_node_positions : dict[str, tuple[float, float]]
-        A dictionary of segment node positions.
-    """
-    # Prepare segment node IDs and their coordinates for KDTree
-    segment_node_ids = list(segment_node_positions.keys())
-    segment_node_coords = [list(coord) for coord in segment_node_positions.values()]
-    segment_coords_array = np.array(segment_node_coords)
-
-    # Build KDTree from segment graph node coordinates for efficient nearest neighbor search
-    kdtree = KDTree(segment_coords_array)
-
-    # Prepare centroid coordinates for querying the KDTree
-    centroid_coords = [(point.x, point.y) for point in tessellation_centroids.tolist()]
-    centroid_coords_array = np.array(centroid_coords)
-
-    # Query KDTree: for each centroid, find the nearest segment graph node and distance to it
-    distances_to_segments, segment_indices = kdtree.query(centroid_coords_array)
-
-    # Prepare edges to connect centroids to their nearest segment graph nodes
-    edges_to_add = [
-        (
-            centroid_iloc_to_node_id[i],
-            segment_node_ids[segment_indices[i]],
-            {"length": distances_to_segments[i]},
-        )
-        for i in range(len(tessellation_centroids))
-        if 0 <= segment_indices[i] < len(segment_node_ids)
-    ]
-    # Add the new edges to the graph
-    if edges_to_add:
-        graph.add_edges_from(edges_to_add)
-
-
-def _connect_centroids_to_centroids(
-    graph: nx.Graph,
-    tessellation_centroids: gpd.GeoSeries,
-    centroid_iloc_to_node_id: dict[int, str],
-) -> None:
-    """
-    Connect centroid nodes to each other based on Euclidean distance.
-
-    This function creates a complete graph between all the tessellation centroid
-    nodes, where the weight of each edge is the Euclidean distance between the
-    centroids. This allows for pathfinding between centroids that may not be
-    directly connected to the street network.
-
-    Parameters
-    ----------
-    graph : networkx.Graph
-        The graph to which the new edges will be added.
-    tessellation_centroids : geopandas.GeoSeries
-        The GeoSeries of tessellation centroid points.
-    centroid_iloc_to_node_id : dict[int, str]
-        A mapping from centroid integer location to its graph node ID.
-    """
-    relevant_ilocs = sorted(centroid_iloc_to_node_id.keys())
-
-    # Extract centroid Point geometries and their graph node IDs in a consistent, sorted order
-    points_to_connect = tessellation_centroids.iloc[relevant_ilocs]
-    node_ids_ordered = [centroid_iloc_to_node_id[iloc] for iloc in relevant_ilocs]
-
-    coords_array = np.array([(point.x, point.y) for point in points_to_connect])
-
-    pairwise_distances = pdist(coords_array, metric="euclidean")
-
-    # List to store edges to be added to the graph
-    edges_to_add = []
-
-    # Generate all unique pairs of ordered node IDs using itertools.combinations
-    # The order of pairs matches the order of distances in pairwise_distances
-    for idx, (node_id1, node_id2) in enumerate(itertools.combinations(node_ids_ordered, 2)):
-        distance = pairwise_distances[idx]
-        edges_to_add.append((node_id1, node_id2, {"length": distance}))
-
-    # Add all new centroid-to-centroid edges to the graph
-    if edges_to_add:
-        graph.add_edges_from(edges_to_add)
-
-
-def _find_closest_node_to_center(
-    graph: nx.Graph,
-    center_point_geom: Point,
-) -> typing.Hashable:
-    """
-    Find the graph node ID closest to a geometric center point.
-
-    This function uses a KDTree to efficiently find the nearest node in the graph
-    to a given geometric point. This is used to identify the starting node for
-    network distance calculations when filtering by distance from a center point.
-
-    Parameters
-    ----------
-    graph : networkx.Graph
-        The graph to search within.
-    center_point_geom : shapely.geometry.Point
-        The geometric point to find the closest node to.
+    geometries : geopandas.GeoSeries
+        Geometries whose reachability is evaluated, in their original order.
+    segments : geopandas.GeoDataFrame
+        Street segments used to build the reachability network.
+    center_point : geopandas.GeoSeries or geopandas.GeoDataFrame or shapely.geometry.Point
+        Origin point(s) for the reachability computation.
+    max_distance : float
+        Maximum network distance for a geometry to be retained.
 
     Returns
     -------
-    str
-        The ID of the closest node in the graph.
+    list[int]
+        Integer positions (``iloc``) of the reachable geometries.
     """
-    pos = nx.get_node_attributes(graph, "pos")
+    field = _network_reachability_field(segments, center_point)
+    if field is None:
+        return []
 
-    node_ids = list(pos.keys())
-    node_coords = np.array(list(pos.values()))
+    return [
+        iloc
+        for iloc, geometry in enumerate(geometries)
+        if _distance_from_network_edges(
+            geometry,
+            field.endpoint_lengths,
+            field.edge_records,
+            field.source_edge,
+            field.source_along,
+            field.source_access,
+        )
+        <= max_distance
+    ]
 
-    # Create a KDTree for efficient nearest neighbor search
-    kdtree = KDTree(node_coords)
 
-    # Query for the closest node to the center point
-    _, idx = kdtree.query([center_point_geom.x, center_point_geom.y])
+def _ensure_graph_edge_lengths(graph: nx.Graph) -> None:
+    """
+    Populate a ``length`` weight on every graph edge in place.
 
-    # Return the exact native ID of the closest node
-    return typing.cast("typing.Hashable", node_ids[int(idx)])
+    Edges that already carry a valid ``length`` are left untouched; otherwise the
+    length is taken from the edge geometry, or from the straight-line distance
+    between the endpoint positions when no geometry is available.
+
+    Parameters
+    ----------
+    graph : networkx.Graph
+        Graph whose edges are annotated with a ``length`` weight in place.
+    """
+    positions = nx.get_node_attributes(graph, "pos")
+    for from_node, to_node, data in graph.edges(data=True):
+        length = data.get("length")
+        if length is not None and not pd.isna(length):
+            continue
+
+        geometry = data.get("geometry")
+        if geometry is not None:
+            data["length"] = geometry.length
+            continue
+
+        from_pos = positions.get(from_node)
+        to_pos = positions.get(to_node)
+        if from_pos is not None and to_pos is not None:
+            data["length"] = Point(from_pos).distance(Point(to_pos))
+
+
+def _network_edge_records(
+    graph: nx.Graph,
+) -> list[tuple[typing.Hashable, typing.Hashable, LineString, float]]:
+    """
+    Collect the traversable edges of a network as reusable records.
+
+    Each record bundles the endpoint node ids, the edge geometry and its length;
+    zero-length edges and edges with undetermined geometry are skipped so the
+    records can drive both snapping and distance evaluation.
+
+    Parameters
+    ----------
+    graph : networkx.Graph
+        The street network graph to enumerate.
+
+    Returns
+    -------
+    list[tuple[typing.Hashable, typing.Hashable, shapely.geometry.LineString, float]]
+        One ``(from_node, to_node, geometry, length)`` tuple per usable edge.
+    """
+    records = []
+    positions = nx.get_node_attributes(graph, "pos")
+    for from_node, to_node, data in graph.edges(data=True):
+        geometry = data.get("geometry")
+        if geometry is None:
+            from_pos = positions.get(from_node)
+            to_pos = positions.get(to_node)
+            if from_pos is None or to_pos is None:
+                continue
+            geometry = LineString([from_pos, to_pos])
+
+        length = data.get("length")
+        if length is None or pd.isna(length):
+            length = geometry.length
+        if length <= 0:
+            continue
+        records.append((from_node, to_node, geometry, float(length)))
+    return records
+
+
+def _connect_point_to_nearest_edge(
+    graph: nx.Graph,
+    point_node_id: typing.Hashable,
+    point: Point,
+    edge_records: list[tuple[typing.Hashable, typing.Hashable, LineString, float]],
+) -> tuple[tuple[typing.Hashable, typing.Hashable, LineString, float], float, float]:
+    """
+    Attach a point to the network through its nearest edge.
+
+    A temporary node is added for the point and connected to both endpoints of
+    the nearest edge, weighting each connection by the perpendicular access plus
+    the along-edge distance so the last leg is reflected in the cost field.
+
+    Parameters
+    ----------
+    graph : networkx.Graph
+        Graph that the point node is added to in place.
+    point_node_id : typing.Hashable
+        Identifier used for the temporary point node.
+    point : shapely.geometry.Point
+        The point to connect to the network.
+    edge_records : list[tuple[typing.Hashable, typing.Hashable, shapely.geometry.LineString, float]]
+        Candidate edges produced by :func:`_network_edge_records`.
+
+    Returns
+    -------
+    tuple[tuple[typing.Hashable, typing.Hashable, shapely.geometry.LineString, float], float, float]
+        The chosen edge record, the along-edge distance and the access distance.
+    """
+    edge_record = min(
+        edge_records,
+        key=lambda record: point.distance(record[2]),
+    )
+    from_node, to_node, geometry, length = edge_record
+    along, access_distance = _projected_edge_access(point, geometry)
+    graph.add_node(point_node_id, pos=(point.x, point.y))
+    graph.add_edge(point_node_id, from_node, length=access_distance + along)
+    graph.add_edge(point_node_id, to_node, length=access_distance + max(length - along, 0.0))
+    return edge_record, along, access_distance
+
+
+def _distance_from_network_edges(
+    point: Point,
+    endpoint_lengths: dict[typing.Hashable, float],
+    edge_records: list[tuple[typing.Hashable, typing.Hashable, LineString, float]],
+    source_edge: tuple[typing.Hashable, typing.Hashable, LineString, float],
+    source_along: float,
+    source_access: float,
+) -> float:
+    """
+    Compute the network distance from the centre to a point.
+
+    The point is projected onto every reachable edge and the cheapest path is
+    taken across the endpoint costs (plus along-edge and access terms), with the
+    centre-bearing edge handled explicitly so points sharing that edge are not
+    forced to detour through an endpoint.
+
+    Parameters
+    ----------
+    point : shapely.geometry.Point
+        The destination point to score.
+    endpoint_lengths : dict[typing.Hashable, float]
+        Shortest-path cost from the centre to each reachable network node.
+    edge_records : list[tuple[typing.Hashable, typing.Hashable, shapely.geometry.LineString, float]]
+        Candidate edges produced by :func:`_network_edge_records`.
+    source_edge : tuple[typing.Hashable, typing.Hashable, shapely.geometry.LineString, float]
+        The edge onto which the centre was snapped.
+    source_along : float
+        Along-edge distance of the centre projection on ``source_edge``.
+    source_access : float
+        Access distance from the centre to ``source_edge``.
+
+    Returns
+    -------
+    float
+        The minimum network distance, or ``math.inf`` when unreachable.
+    """
+    best = math.inf
+    for edge_record in edge_records:
+        from_node, to_node, geometry, length = edge_record
+        from_length = endpoint_lengths.get(from_node)
+        to_length = endpoint_lengths.get(to_node)
+        if from_length is None and to_length is None:
+            continue
+
+        along, access_distance = _projected_edge_access(point, geometry)
+        if edge_record is source_edge:
+            best = min(best, source_access + abs(along - source_along) + access_distance)
+        if from_length is not None:
+            best = min(best, from_length + along + access_distance)
+        if to_length is not None:
+            best = min(best, to_length + max(length - along, 0.0) + access_distance)
+    return best
+
+
+def _projected_edge_access(point: Point, line: LineString) -> tuple[float, float]:
+    """
+    Project a point onto a line and measure the access geometry.
+
+    The projection captures how far along the line the nearest point lies and how
+    far the point sits from the line, which together form the last-leg access.
+
+    Parameters
+    ----------
+    point : shapely.geometry.Point
+        The point to project.
+    line : shapely.geometry.LineString
+        The line to project onto.
+
+    Returns
+    -------
+    tuple[float, float]
+        The along-edge distance and the perpendicular access distance.
+    """
+    along = float(line.project(point))
+    projected = line.interpolate(along)
+    return along, point.distance(projected)
+
+
+def _coordinate_key(coordinate: tuple[float, float]) -> tuple[float, float]:
+    """
+    Round a coordinate to a stable lookup key.
+
+    Rounding tolerates floating-point noise so segment endpoints can be matched
+    against network node positions in a dictionary.
+
+    Parameters
+    ----------
+    coordinate : tuple[float, float]
+        The ``(x, y)`` coordinate to normalise.
+
+    Returns
+    -------
+    tuple[float, float]
+        The coordinate rounded to six decimal places.
+    """
+    return (round(coordinate[0], 6), round(coordinate[1], 6))
+
+
+def _segments_within_network_distance(
+    segments: gpd.GeoDataFrame,
+    center_point: gpd.GeoSeries | gpd.GeoDataFrame | Point,
+    max_distance: float,
+) -> gpd.GeoDataFrame:
+    """
+    Filter street segments by the shared network reachability cost field.
+
+    A segment is retained when its nearest reachable endpoint lies within
+    ``max_distance`` on the same cost field used for tessellation cells. This
+    keeps segments that straddle the budget boundary (their reachable portion is
+    within budget) instead of dropping them on a binary wholly-in/out test, and
+    ensures street and cell acceptance derive from a single reachability metric.
+
+    Parameters
+    ----------
+    segments : geopandas.GeoDataFrame
+        Street segments to filter. All columns are preserved on the kept rows.
+    center_point : geopandas.GeoSeries or geopandas.GeoDataFrame or shapely.geometry.Point
+        Origin point(s) for the reachability computation.
+    max_distance : float
+        Maximum network distance for a segment to be retained.
+
+    Returns
+    -------
+    geopandas.GeoDataFrame
+        The subset of ``segments`` reachable within ``max_distance``.
+    """
+    if segments.empty:
+        return segments.copy()
+
+    field = _network_reachability_field(segments, center_point)
+    if field is None:
+        return segments.iloc[0:0].copy()
+
+    # Map each network node position to its cheapest reachable cost so segment
+    # endpoints can be looked up directly against the shared cost field.
+    cost_by_coordinate: dict[tuple[float, float], float] = {}
+    for node, cost in field.endpoint_lengths.items():
+        position = field.node_positions.get(node)
+        if position is None:
+            continue
+        key = _coordinate_key(position)
+        existing = cost_by_coordinate.get(key)
+        if existing is None or cost < existing:
+            cost_by_coordinate[key] = cost
+
+    keep_ilocs = [
+        iloc
+        for iloc, geometry in enumerate(segments.geometry)
+        if _segment_min_reachable_cost(geometry, cost_by_coordinate) <= max_distance
+    ]
+    return segments.iloc[keep_ilocs].copy()
+
+
+def _segment_min_reachable_cost(
+    geometry: LineString,
+    cost_by_coordinate: dict[tuple[float, float], float],
+) -> float:
+    """
+    Return the cheapest reachable cost among a segment's endpoints.
+
+    The reachable portion of a segment is bounded by its cheaper endpoint, so the
+    minimum endpoint cost determines whether any part of the segment falls within
+    the reachability budget.
+
+    Parameters
+    ----------
+    geometry : shapely.geometry.LineString
+        The segment geometry to evaluate.
+    cost_by_coordinate : dict[tuple[float, float], float]
+        Reachability cost keyed by rounded network node position.
+
+    Returns
+    -------
+    float
+        The minimum endpoint cost, or ``math.inf`` when neither endpoint is
+        reachable.
+    """
+    coordinates = list(geometry.coords)
+    if not coordinates:
+        return math.inf
+    start = cost_by_coordinate.get(_coordinate_key(coordinates[0]), math.inf)
+    end = cost_by_coordinate.get(_coordinate_key(coordinates[-1]), math.inf)
+    return min(start, end)
 
 
 # ============================================================================

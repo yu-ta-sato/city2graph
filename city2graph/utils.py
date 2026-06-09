@@ -38,6 +38,7 @@ from shapely.geometry import MultiPoint
 from shapely.geometry import MultiPolygon
 from shapely.geometry import Point
 from shapely.geometry import Polygon
+from shapely.geometry.base import BaseGeometry
 
 try:
     import matplotlib.pyplot as plt
@@ -3923,6 +3924,7 @@ def create_tessellation(
     segment: float = 0.5,
     threshold: float = 0.05,
     n_jobs: int = -1,
+    limit: gpd.GeoDataFrame | gpd.GeoSeries | BaseGeometry | None = None,
     **kwargs: object,
 ) -> gpd.GeoDataFrame:
     """
@@ -3952,6 +3954,9 @@ def create_tessellation(
     n_jobs : int, default -1
         The number of jobs to use for parallel processing. -1 means using all
         available processors. Only used for enclosed tessellation.
+    limit : geopandas.GeoDataFrame, geopandas.GeoSeries, shapely geometry, or None, optional
+        Boundary passed to `momepy.enclosures` for enclosed tessellation. When
+        None, a buffered convex hull of input geometry and barriers is computed.
     **kwargs : object, optional
         Additional keyword arguments passed to the underlying `momepy`
         tessellation function.
@@ -4015,6 +4020,7 @@ def create_tessellation(
         return _create_enclosed_tessellation(
             geometry,
             primary_barriers,
+            limit,
             shrink,
             segment,
             threshold,
@@ -4032,6 +4038,7 @@ def create_tessellation(
 def _create_enclosed_tessellation(
     geometry: gpd.GeoDataFrame | gpd.GeoSeries,
     primary_barriers: gpd.GeoDataFrame | gpd.GeoSeries,
+    limit: gpd.GeoDataFrame | gpd.GeoSeries | BaseGeometry | None,
     shrink: float,
     segment: float,
     threshold: float,
@@ -4051,6 +4058,9 @@ def _create_enclosed_tessellation(
         The geometries to tessellate around.
     primary_barriers : geopandas.GeoDataFrame or geopandas.GeoSeries
         Geometries to use as barriers.
+    limit : geopandas.GeoDataFrame, geopandas.GeoSeries, shapely geometry, or None
+        Boundary passed to `momepy.enclosures`. If None, one is derived from
+        geometry and barriers.
     shrink : float
         The distance to shrink the geometry.
     segment : float
@@ -4067,9 +4077,12 @@ def _create_enclosed_tessellation(
     geopandas.GeoDataFrame
         The enclosed tessellation.
     """
+    if limit is None:
+        limit = _compute_enclosure_limit(geometry, primary_barriers)
+
     enclosures = momepy.enclosures(
         primary_barriers=primary_barriers,
-        limit=None,
+        limit=limit,
         additional_barriers=None,
         enclosure_id="eID",
         clip=False,
@@ -4104,6 +4117,44 @@ def _create_enclosed_tessellation(
         for i, j in zip(tessellation["enclosure_index"], tessellation.index, strict=False)
     ]
     return tessellation.reset_index(drop=True)
+
+
+def _compute_enclosure_limit(
+    geometry: gpd.GeoDataFrame | gpd.GeoSeries,
+    primary_barriers: gpd.GeoDataFrame | gpd.GeoSeries,
+    buffer: float = 500,
+) -> BaseGeometry | None:
+    """
+    Compute a buffered hull limit for momepy enclosures.
+
+    The limit needs to include both buildings and street barriers so buildings
+    near the outer street loops are not excluded from enclosed tessellation.
+
+    Parameters
+    ----------
+    geometry : gpd.GeoDataFrame | gpd.GeoSeries
+        Building geometries used to compute boundaries.
+    primary_barriers : gpd.GeoDataFrame | gpd.GeoSeries
+        Street geometries forming enclosures.
+    buffer : float, default 500
+        Distance in map units to buffer the combined convex hull.
+
+    Returns
+    -------
+    BaseGeometry | None
+        A single geometry representing the enclosure limit, or None if no valid
+        geometries exist.
+    """
+    geometries = [
+        geom
+        for source in (geometry.geometry, primary_barriers.geometry)
+        for geom in source
+        if geom is not None and not geom.is_empty
+    ]
+    if not geometries:
+        return None
+
+    return gpd.GeoSeries(geometries, crs=geometry.crs).union_all().convex_hull.buffer(buffer)
 
 
 def _create_empty_tessellation(
