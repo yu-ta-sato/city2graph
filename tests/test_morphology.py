@@ -14,6 +14,7 @@ from shapely.geometry import LineString
 from shapely.geometry import Point
 from shapely.geometry import Polygon
 
+import city2graph.morphology as morph
 from city2graph.morphology import _create_and_filter_tessellation
 from city2graph.morphology import _filter_buildings_by_network_distance
 from city2graph.morphology import _filter_tessellation_by_network_distance
@@ -1494,3 +1495,116 @@ class TestSpecialScenarios(TestMorphologyBase):
         except KeyError:
             # Expected if no connections are found, but MultiIndex code was still executed
             pass
+
+
+class TestReachabilityFieldRefactor(TestMorphologyBase):
+    """Invariants introduced by the shared reachability-field refactor."""
+
+    def test_reachability_field_computed_once(
+        self,
+        sample_buildings_gdf: gpd.GeoDataFrame,
+        sample_segments_gdf: gpd.GeoDataFrame,
+        mg_center_point: gpd.GeoSeries,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A budgeted morphological_graph computes the cost field exactly once.
+
+        Previously the field was recomputed independently for segments, buildings
+        and cells (up to three Dijkstra/snap passes). It must now be built once on
+        the full network and shared across all node types.
+        """
+        original = morph._network_reachability_field
+        calls = {"n": 0}
+
+        def counting(*args: Any, **kwargs: Any) -> Any:  # noqa: ANN401
+            calls["n"] += 1
+            return original(*args, **kwargs)
+
+        monkeypatch.setattr(morph, "_network_reachability_field", counting)
+
+        morphological_graph(
+            sample_buildings_gdf,
+            sample_segments_gdf,
+            center_point=mg_center_point,
+            distance=100.0,
+        )
+
+        assert calls["n"] == 1
+
+    def test_shared_field_reaches_cell_and_building_filters(
+        self,
+        sample_buildings_gdf: gpd.GeoDataFrame,
+        sample_segments_gdf: gpd.GeoDataFrame,
+        mg_center_point: gpd.GeoSeries,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """The single full-network field is threaded into the centroid filters.
+
+        This locks in the fix for the full-vs-truncated network discrepancy:
+        buildings and cells are judged against the same field used for streets,
+        not one rebuilt on the already-truncated segments.
+        """
+        original = morph._geometry_ilocs_within_network_distance
+        seen_fields: list[object] = []
+
+        def recording(*args: Any, **kwargs: Any) -> Any:  # noqa: ANN401
+            seen_fields.append(kwargs.get("field"))
+            return original(*args, **kwargs)
+
+        monkeypatch.setattr(morph, "_geometry_ilocs_within_network_distance", recording)
+
+        morphological_graph(
+            sample_buildings_gdf,
+            sample_segments_gdf,
+            center_point=mg_center_point,
+            distance=100.0,
+        )
+
+        # The centroid filters (buildings + cells) ran and every one received the
+        # shared field instance rather than None.
+        assert seen_fields
+        assert all(field is not None for field in seen_fields)
+        assert len({id(field) for field in seen_fields}) == 1
+
+    def test_geographic_crs_emits_warning(self) -> None:
+        """Distance params are metric, so a geographic CRS input must warn the user.
+
+        Exercised through ``private_to_public_graph`` because it shares the CRS
+        chokepoint (``_ensure_crs_consistency``) with ``morphological_graph`` but
+        does not invoke tessellation, which momepy refuses to run on a geographic
+        CRS.
+        """
+        private_gdf = gpd.GeoDataFrame(
+            {"private_id": [0]},
+            geometry=[Polygon([(0, 0), (0, 0.001), (0.001, 0.001), (0.001, 0)])],
+            crs="EPSG:4326",
+        )
+        public_gdf = gpd.GeoDataFrame(
+            {"public_id": [10]},
+            geometry=[LineString([(0, 0), (0.001, 0.001)])],
+            crs="EPSG:4326",
+        )
+
+        with pytest.warns(UserWarning, match="geographic CRS"):
+            private_to_public_graph(private_gdf, public_gdf)
+
+    def test_projected_crs_does_not_emit_geographic_warning(
+        self,
+        sample_crs: str,
+    ) -> None:
+        """A projected CRS input must not raise the geographic-CRS warning."""
+        private_gdf = gpd.GeoDataFrame(
+            {"private_id": [0]},
+            geometry=[Polygon([(0, 0), (0, 1), (1, 1), (1, 0)])],
+            crs=sample_crs,
+        )
+        public_gdf = gpd.GeoDataFrame(
+            {"public_id": [10]},
+            geometry=[LineString([(0, 0), (1, 1)])],
+            crs=sample_crs,
+        )
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", UserWarning)
+            # Should not raise: inputs are in EPSG:27700 (projected).
+            private_to_public_graph(private_gdf, public_gdf)

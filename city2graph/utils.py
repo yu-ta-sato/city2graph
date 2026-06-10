@@ -4089,16 +4089,22 @@ def _create_enclosed_tessellation(
     )
 
     if not enclosures.empty:
-        try:
-            tessellation = momepy.enclosed_tessellation(
+
+        def _run_enclosed_tessellation(**extra_kwargs: object) -> gpd.GeoDataFrame:
+            # ``extra_kwargs`` (e.g. ``simplify`` or a coarser ``grid_size``) are
+            # applied as retry overrides on top of the caller-supplied ``kwargs``.
+            return momepy.enclosed_tessellation(
                 geometry=geometry,
                 enclosures=enclosures,
                 shrink=shrink,
                 segment=segment,
                 threshold=threshold,
                 n_jobs=n_jobs,
-                **kwargs,
+                **{**kwargs, **extra_kwargs},
             )
+
+        try:
+            tessellation = _run_enclosed_tessellation()
         except ValueError as e:
             if "No objects to concatenate" in str(e):
                 logger.warning(
@@ -4106,6 +4112,41 @@ def _create_enclosed_tessellation(
                 )
                 return _create_empty_tessellation(geometry.crs)
             raise
+        except TypeError as e:
+            # shapely.coverage_simplify rejects non-polygonal cells produced by
+            # degenerate/overlapping footprints in a single enclosure, which
+            # aborts the whole parallel run. Retry once without boundary
+            # simplification (the un-simplified result is still a valid
+            # tessellation) unless the caller explicitly chose ``simplify``.
+            if "incorrect geometry type" not in str(e) or "simplify" in kwargs:
+                raise
+            logger.warning(
+                "Tessellation boundary simplification failed (%s); retrying with simplify=False.",
+                e,
+            )
+            tessellation = _run_enclosed_tessellation(simplify=False)
+        except shapely.errors.GEOSException as e:
+            # ``shapely.voronoi_polygons`` can raise ``TopologyException: side
+            # location conflict`` on numerically fragile / near-degenerate
+            # footprints. ``voronoi_frames`` snaps coordinates at ``grid_size``
+            # (default 1e-5); a single failing enclosure aborts the whole parallel
+            # run. Retry once with a coarser precision to resolve the conflict,
+            # unless the caller already pinned ``grid_size``.
+            if "grid_size" in kwargs:
+                raise
+            logger.warning(
+                "Tessellation hit a GEOS topology error (%s); retrying with coarser "
+                "grid_size=1e-3.",
+                e,
+            )
+            try:
+                tessellation = _run_enclosed_tessellation(grid_size=1e-3)
+            except shapely.errors.GEOSException:
+                logger.warning(
+                    "Tessellation still failed at coarser precision; returning empty "
+                    "tessellation for this unit.",
+                )
+                return _create_empty_tessellation(geometry.crs, include_tess_id=False)
     else:
         tessellation = _create_empty_tessellation(geometry.crs, include_tess_id=False)
 

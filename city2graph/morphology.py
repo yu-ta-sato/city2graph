@@ -14,6 +14,8 @@ The module specializes in three types of spatial relationships:
 3. Private-to-public: Interface relationships between private and public spaces
 """
 
+from __future__ import annotations
+
 # Standard library imports
 import logging
 import math
@@ -25,10 +27,10 @@ import geopandas as gpd
 import networkx as nx
 import numpy as np
 import pandas as pd
+from shapely import STRtree
 from shapely.creation import linestrings as sh_linestrings
 from shapely.geometry import LineString
 from shapely.geometry import Point
-from shapely.geometry.base import BaseGeometry
 
 # Local imports
 from .base import GeoDataProcessor
@@ -38,6 +40,9 @@ from .utils import dual_graph
 from .utils import filter_graph_by_distance
 from .utils import gdf_to_nx
 from .utils import nx_to_gdf
+
+if typing.TYPE_CHECKING:
+    from shapely.geometry.base import BaseGeometry
 
 # Public API definition
 __all__ = [
@@ -225,11 +230,19 @@ def morphological_graph(  # noqa: PLR0913
     segments_gdf = segments_gdf.copy()
     segments_gdf[public_id_col] = segments_gdf.index
 
+    # Compute the single-source reachability cost field once on the full network so that
+    # streets, buildings and cells are all judged against the same metric on the same network.
+    reachability_field: _ReachabilityField | None = None
+    if center_point is not None and distance is not None and not segments_gdf.empty:
+        _, full_segment_edges = segments_to_graph(segments_gdf)
+        reachability_field = _network_reachability_field(full_segment_edges, center_point)
+
     segments_filtered, segments_buffer = _process_segments(
         segments_gdf,
         center_point,
         distance,
         clipping_buffer,
+        field=reachability_field,
     )
 
     tessellation = _create_and_filter_tessellation(
@@ -245,6 +258,7 @@ def morphological_graph(  # noqa: PLR0913
         include_unenclosed_buildings,
         extent_buffer,
         limit=limit,
+        field=reachability_field,
     )
 
     # When a reachability budget is applied, prune private cells that face no
@@ -1010,6 +1024,10 @@ def _ensure_crs_consistency(
     -----
     RuntimeWarning
         If a CRS mismatch is detected and reprojection is performed.
+    UserWarning
+        If the resolved CRS is geographic (degrees). Distance parameters
+        (``distance``, ``extent_buffer``, ``tolerance``) are interpreted as
+        metric and ``.centroid`` results are unreliable on such a CRS.
     """
     if source_gdf.crs != target_gdf.crs:
         warnings.warn(
@@ -1017,7 +1035,17 @@ def _ensure_crs_consistency(
             RuntimeWarning,
             stacklevel=3,
         )  # Warn user
-        return source_gdf.to_crs(target_gdf.crs)
+        source_gdf = source_gdf.to_crs(target_gdf.crs)
+
+    if target_gdf.crs is not None and target_gdf.crs.is_geographic:
+        warnings.warn(
+            "Geometry is in a geographic CRS. Distance parameters "
+            "(distance, extent_buffer, tolerance) are treated as metric and "
+            "'.centroid' results are unreliable. Re-project to a projected CRS "
+            "with 'GeoSeries.to_crs()' before building the morphological graph.",
+            UserWarning,
+            stacklevel=3,
+        )
     return source_gdf
 
 
@@ -1031,6 +1059,7 @@ def _process_segments(
     center_point: gpd.GeoSeries | gpd.GeoDataFrame | None,
     distance: float | None,
     clipping_buffer: float,
+    field: _ReachabilityField | None = None,
 ) -> tuple[gpd.GeoDataFrame, gpd.GeoDataFrame]:
     """
     Process segments: create graph, filter by distance, and create buffer context.
@@ -1049,6 +1078,10 @@ def _process_segments(
         Maximum distance from ``center_point`` for spatial filtering.
     clipping_buffer : float
         Buffer distance to ensure adequate context for generating tessellation.
+    field : _ReachabilityField or None, optional
+        A precomputed cost field shared across node types. When supplied it is
+        reused for the segment filter so the field is computed only once on the
+        full network; when ``None`` the field is computed here from the segments.
 
     Returns
     -------
@@ -1066,13 +1099,17 @@ def _process_segments(
         segments_graph = nx.Graph()
 
     # Filter segments by network distance for the final graph if center_point and distance are
-    # provided. Street acceptance is derived from the same reachability cost field used for
-    # tessellation cells, so every node type is judged against a single distance metric.
+    # provided. The same reachability cost field is reused for tessellation cells and buildings,
+    # so every node type is judged against a single distance metric on the same network.
     if center_point is not None and distance is not None and not segments_gdf.empty:
+        seg_field = (
+            field if field is not None else _network_reachability_field(segment_edges, center_point)
+        )
         segments_filtered = _segments_within_network_distance(
             segment_edges,
             center_point,
             distance,
+            field=seg_field,
         )
     else:
         segments_filtered = segment_edges
@@ -1115,6 +1152,7 @@ def _create_and_filter_tessellation(  # noqa: PLR0913
     include_unenclosed_buildings: bool = False,
     extent_buffer: float = math.inf,
     limit: gpd.GeoDataFrame | gpd.GeoSeries | BaseGeometry | None = None,
+    field: _ReachabilityField | None = None,
 ) -> gpd.GeoDataFrame:
     """
     Create tessellation and apply spatial filters.
@@ -1155,6 +1193,11 @@ def _create_and_filter_tessellation(  # noqa: PLR0913
         centroid for it to be retained by the network-distance filters.
     limit : geopandas.GeoDataFrame, geopandas.GeoSeries, shapely geometry, or None, optional
         Boundary passed to `create_tessellation` for enclosed tessellation.
+    field : _ReachabilityField or None, optional
+        Shared reachability cost field computed once on the full network. When
+        provided it is reused for both the building and tessellation network
+        filters so they share a single metric; when ``None`` each filter computes
+        its own field from the segments it is given.
 
     Returns
     -------
@@ -1188,6 +1231,7 @@ def _create_and_filter_tessellation(  # noqa: PLR0913
         center_point,
         distance,
         extent_buffer,
+        field=field,
     )
 
     if include_unenclosed_buildings and not barriers.empty:
@@ -1214,6 +1258,7 @@ def _create_and_filter_tessellation(  # noqa: PLR0913
             center_point,
             distance,  # Max network distance
             extent_buffer,
+            field=field,
         )
 
     # Optionally preserve building information by joining tessellation with buildings
@@ -1280,6 +1325,7 @@ def _filter_buildings_by_network_distance(
     center_point: gpd.GeoSeries | gpd.GeoDataFrame | Point | None,
     max_distance: float | None,
     extent_buffer: float = math.inf,
+    field: _ReachabilityField | None = None,
 ) -> gpd.GeoDataFrame:
     """
     Filter buildings by network distance from a centre point.
@@ -1301,6 +1347,9 @@ def _filter_buildings_by_network_distance(
         Maximum network distance for a building to be retained.
     extent_buffer : float, default ``math.inf``
         Maximum perpendicular access distance from a street to the building.
+    field : _ReachabilityField or None, optional
+        A precomputed cost field shared across node types. When ``None`` the field
+        is computed from ``segments`` and ``center_point``.
 
     Returns
     -------
@@ -1316,6 +1365,7 @@ def _filter_buildings_by_network_distance(
         center_point,
         max_distance,
         extent_buffer,
+        field=field,
     )
     return buildings_gdf.iloc[keep_ilocs].copy()
 
@@ -1661,18 +1711,23 @@ def _filter_adjacent_tessellation(
         tessellation.groupby(enclosure_col) if enclosure_col is not None else [(None, tessellation)]
     )
 
+    # Build the segment spatial index once so each enclosure only examines its
+    # candidate segments instead of scanning the whole network.
+    segments_sindex = segments.sindex
+    all_segments_union = segments.union_all()
+
     # Iterate over each enclosure group
     for _, group in groups:
         # Geometry of the current enclosure
         enclosure_geom = group.union_all()
 
-        # Segments intersecting this enclosure
-        segments_in_enclosure = segments[segments.intersects(enclosure_geom)]
-        if segments_in_enclosure.empty:
-            segments_in_enclosure = segments
-
-        # Union of segments within this enclosure
-        segment_union_in_enclosure = segments_in_enclosure.union_all()
+        # Segments intersecting this enclosure, found via the spatial index.
+        candidate_pos = segments_sindex.query(enclosure_geom, predicate="intersects")
+        segment_union_in_enclosure = (
+            all_segments_union
+            if len(candidate_pos) == 0
+            else segments.iloc[candidate_pos].union_all()
+        )
 
         # Centroids of cells in this group
         centroids_in_group = group.geometry.centroid
@@ -1700,6 +1755,7 @@ def _filter_tessellation_by_network_distance(
     center_point: gpd.GeoSeries | gpd.GeoDataFrame | Point,
     max_distance: float,
     extent_buffer: float = math.inf,
+    field: _ReachabilityField | None = None,
 ) -> gpd.GeoDataFrame:
     """
     Filter tessellation by network distance from a center point.
@@ -1722,6 +1778,9 @@ def _filter_tessellation_by_network_distance(
         The maximum network distance (e.g., in meters) for a tessellation cell to be included.
     extent_buffer : float, default ``math.inf``
         Maximum perpendicular access distance from a street to a cell centroid.
+    field : _ReachabilityField or None, optional
+        A precomputed cost field shared across node types. When ``None`` the field
+        is computed from ``segments`` and ``center_point``.
 
     Returns
     -------
@@ -1739,6 +1798,7 @@ def _filter_tessellation_by_network_distance(
         center_point,
         max_distance,
         extent_buffer,
+        field=field,
     )
 
     # Return the subset of the original tessellation corresponding to the kept ilocs
@@ -1776,8 +1836,16 @@ class _ReachabilityField(typing.NamedTuple):
     Single-source reachability cost field shared across all node types.
 
     The field is computed once from a centre snapped onto the street network and
-    is reused to derive the acceptance of both street segments and tessellation
-    cells, so every node type is judged against the same reachability metric.
+    is reused to derive the acceptance of street segments, buildings and
+    tessellation cells alike, so every node type is judged against the same
+    reachability metric on the same network.
+
+    The node identities of ``endpoint_lengths`` and ``edge_records`` are the exact
+    endpoint coordinate tuples assigned by :func:`gdf_to_nx` (which keys implicit
+    nodes by their coordinate), so segment endpoints can be matched directly
+    against the cost field without a separate rounding scheme. ``edge_tree`` is an
+    STRtree over ``edge_records`` geometries (aligned by position) used to prune
+    the edges that need examining for a given destination geometry.
     """
 
     endpoint_lengths: dict[typing.Hashable, float]
@@ -1785,7 +1853,7 @@ class _ReachabilityField(typing.NamedTuple):
     source_edge: tuple[typing.Hashable, typing.Hashable, LineString, float]
     source_along: float
     source_access: float
-    node_positions: dict[typing.Hashable, tuple[float, float]]
+    edge_tree: STRtree
 
 
 def _network_reachability_field(
@@ -1843,7 +1911,7 @@ def _network_reachability_field(
         source_edge=source_edge,
         source_along=source_along,
         source_access=source_access,
-        node_positions=nx.get_node_attributes(graph, "pos"),
+        edge_tree=STRtree([record[2] for record in edge_records]),
     )
 
 
@@ -1853,6 +1921,7 @@ def _geometry_ilocs_within_network_distance(
     center_point: gpd.GeoSeries | gpd.GeoDataFrame | Point,
     max_distance: float,
     extent_buffer: float = math.inf,
+    field: _ReachabilityField | None = None,
 ) -> list[int]:
     """
     Return the integer positions of geometries reachable within the budget caps.
@@ -1866,25 +1935,35 @@ def _geometry_ilocs_within_network_distance(
     disconnected (forcing a long straight-line access leg across barriers) is not
     retained on the strength of a distant reachable street.
 
+    Only edges whose perpendicular access is within ``extent_buffer`` can satisfy
+    the access cap, so the field's STRtree restricts the per-geometry scan to that
+    neighbourhood instead of every network edge.
+
     Parameters
     ----------
     geometries : geopandas.GeoSeries
         Geometries whose reachability is evaluated, in their original order.
     segments : geopandas.GeoDataFrame
-        Street segments used to build the reachability network.
+        Street segments used to build the reachability network. Ignored when a
+        precomputed ``field`` is supplied.
     center_point : geopandas.GeoSeries or geopandas.GeoDataFrame or shapely.geometry.Point
         Origin point(s) for the reachability computation.
     max_distance : float
         Maximum network distance from the centre to the projection foot.
     extent_buffer : float, default ``math.inf``
         Maximum perpendicular access distance from a street to the geometry.
+    field : _ReachabilityField or None, optional
+        A precomputed cost field shared across node types. When ``None`` the
+        field is computed from ``segments`` and ``center_point``, reproducing the
+        standalone behaviour.
 
     Returns
     -------
     list[int]
         Integer positions (``iloc``) of the reachable geometries.
     """
-    field = _network_reachability_field(segments, center_point)
+    if field is None:
+        field = _network_reachability_field(segments, center_point)
     if field is None:
         return []
 
@@ -1894,7 +1973,7 @@ def _geometry_ilocs_within_network_distance(
         if _reachable_within_caps(
             geometry,
             field.endpoint_lengths,
-            field.edge_records,
+            _candidate_edge_records(geometry, field, extent_buffer),
             field.source_edge,
             field.source_along,
             field.source_access,
@@ -1902,6 +1981,39 @@ def _geometry_ilocs_within_network_distance(
             extent_buffer,
         )
     ]
+
+
+def _candidate_edge_records(
+    point: Point,
+    field: _ReachabilityField,
+    extent_buffer: float,
+) -> list[tuple[typing.Hashable, typing.Hashable, LineString, float]]:
+    """
+    Restrict the network edges worth testing for a single destination point.
+
+    Only edges whose perpendicular access distance is within ``extent_buffer`` can
+    satisfy the access cap, so the field's STRtree returns just the edges in that
+    neighbourhood. When ``extent_buffer`` is infinite no spatial restriction is
+    possible and every edge is returned, preserving the exhaustive behaviour.
+
+    Parameters
+    ----------
+    point : shapely.geometry.Point
+        The destination point being tested.
+    field : _ReachabilityField
+        The shared cost field whose STRtree indexes the edge geometries.
+    extent_buffer : float
+        Maximum perpendicular access distance from a street to the point.
+
+    Returns
+    -------
+    list[tuple[typing.Hashable, typing.Hashable, shapely.geometry.LineString, float]]
+        The subset of ``field.edge_records`` near ``point``.
+    """
+    if math.isinf(extent_buffer):
+        return field.edge_records
+    candidate_ilocs = field.edge_tree.query(point, predicate="dwithin", distance=extent_buffer)
+    return [field.edge_records[iloc] for iloc in candidate_ilocs]
 
 
 def _ensure_graph_edge_lengths(graph: nx.Graph) -> None:
@@ -2044,7 +2156,8 @@ def _reachable_within_caps(
     endpoint_lengths : dict[typing.Hashable, float]
         Shortest-path cost from the centre to each reachable network node.
     edge_records : list[tuple[typing.Hashable, typing.Hashable, shapely.geometry.LineString, float]]
-        Candidate edges produced by :func:`_network_edge_records`.
+        Candidate edges to examine, typically the subset near ``point`` returned
+        by :func:`_candidate_edge_records`.
     source_edge : tuple[typing.Hashable, typing.Hashable, shapely.geometry.LineString, float]
         The edge onto which the centre was snapped.
     source_along : float
@@ -2108,48 +2221,39 @@ def _projected_edge_access(point: Point, line: LineString) -> tuple[float, float
     return along, point.distance(projected)
 
 
-def _coordinate_key(coordinate: tuple[float, float]) -> tuple[float, float]:
-    """
-    Round a coordinate to a stable lookup key.
-
-    Rounding tolerates floating-point noise so segment endpoints can be matched
-    against network node positions in a dictionary.
-
-    Parameters
-    ----------
-    coordinate : tuple[float, float]
-        The ``(x, y)`` coordinate to normalise.
-
-    Returns
-    -------
-    tuple[float, float]
-        The coordinate rounded to six decimal places.
-    """
-    return (round(coordinate[0], 6), round(coordinate[1], 6))
-
-
 def _segments_within_network_distance(
     segments: gpd.GeoDataFrame,
     center_point: gpd.GeoSeries | gpd.GeoDataFrame | Point,
     max_distance: float,
+    field: _ReachabilityField | None = None,
 ) -> gpd.GeoDataFrame:
     """
     Filter street segments by the shared network reachability cost field.
 
     A segment is retained when its nearest reachable endpoint lies within
-    ``max_distance`` on the same cost field used for tessellation cells. This
-    keeps segments that straddle the budget boundary (their reachable portion is
-    within budget) instead of dropping them on a binary wholly-in/out test, and
-    ensures street and cell acceptance derive from a single reachability metric.
+    ``max_distance`` on the same cost field used for buildings and tessellation
+    cells. This keeps segments that straddle the budget boundary (their reachable
+    portion is within budget) instead of dropping them on a binary wholly-in/out
+    test, and ensures street and cell acceptance derive from a single
+    reachability metric.
+
+    Segment endpoints are looked up directly against ``field.endpoint_lengths``,
+    whose keys are the exact endpoint coordinate tuples assigned by
+    :func:`gdf_to_nx`. This is the same identity scheme :func:`segments_to_graph`
+    uses, so no separate coordinate-rounding strategy is needed.
 
     Parameters
     ----------
     segments : geopandas.GeoDataFrame
         Street segments to filter. All columns are preserved on the kept rows.
+        Ignored when a precomputed ``field`` is supplied.
     center_point : geopandas.GeoSeries or geopandas.GeoDataFrame or shapely.geometry.Point
         Origin point(s) for the reachability computation.
     max_distance : float
         Maximum network distance for a segment to be retained.
+    field : _ReachabilityField or None, optional
+        A precomputed cost field shared across node types. When ``None`` the field
+        is computed from ``segments`` and ``center_point``.
 
     Returns
     -------
@@ -2159,47 +2263,38 @@ def _segments_within_network_distance(
     if segments.empty:
         return segments.copy()
 
-    field = _network_reachability_field(segments, center_point)
+    if field is None:
+        field = _network_reachability_field(segments, center_point)
     if field is None:
         return segments.iloc[0:0].copy()
-
-    # Map each network node position to its cheapest reachable cost so segment
-    # endpoints can be looked up directly against the shared cost field.
-    cost_by_coordinate: dict[tuple[float, float], float] = {}
-    for node, cost in field.endpoint_lengths.items():
-        position = field.node_positions.get(node)
-        if position is None:
-            continue
-        key = _coordinate_key(position)
-        existing = cost_by_coordinate.get(key)
-        if existing is None or cost < existing:
-            cost_by_coordinate[key] = cost
 
     keep_ilocs = [
         iloc
         for iloc, geometry in enumerate(segments.geometry)
-        if _segment_min_reachable_cost(geometry, cost_by_coordinate) <= max_distance
+        if _segment_min_reachable_cost(geometry, field.endpoint_lengths) <= max_distance
     ]
     return segments.iloc[keep_ilocs].copy()
 
 
 def _segment_min_reachable_cost(
     geometry: LineString,
-    cost_by_coordinate: dict[tuple[float, float], float],
+    endpoint_lengths: dict[typing.Hashable, float],
 ) -> float:
     """
     Return the cheapest reachable cost among a segment's endpoints.
 
     The reachable portion of a segment is bounded by its cheaper endpoint, so the
     minimum endpoint cost determines whether any part of the segment falls within
-    the reachability budget.
+    the reachability budget. Endpoints are matched by their exact coordinate
+    tuple, the node identity used by the reachability graph.
 
     Parameters
     ----------
     geometry : shapely.geometry.LineString
         The segment geometry to evaluate.
-    cost_by_coordinate : dict[tuple[float, float], float]
-        Reachability cost keyed by rounded network node position.
+    endpoint_lengths : dict[typing.Hashable, float]
+        Shortest-path cost from the centre to each reachable network node, keyed
+        by the node's exact ``(x, y)`` coordinate tuple.
 
     Returns
     -------
@@ -2210,8 +2305,8 @@ def _segment_min_reachable_cost(
     coordinates = list(geometry.coords)
     if not coordinates:
         return math.inf
-    start = cost_by_coordinate.get(_coordinate_key(coordinates[0]), math.inf)
-    end = cost_by_coordinate.get(_coordinate_key(coordinates[-1]), math.inf)
+    start = endpoint_lengths.get(coordinates[0], math.inf)
+    end = endpoint_lengths.get(coordinates[-1], math.inf)
     return min(start, end)
 
 
