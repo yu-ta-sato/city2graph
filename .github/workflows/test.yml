@@ -62,6 +62,10 @@ jobs:
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v7
+        if: >-
+          github.repository == 'c2g-dev/city2graph' &&
+          (github.event_name != 'pull_request' ||
+          github.event.pull_request.head.repo.fork == false)
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           files: coverage.xml
