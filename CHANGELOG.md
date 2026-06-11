@@ -9,12 +9,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## Unreleased
 
 ### Added
+
+### Changed
+
+### Deprecated
+
+### Fixed
+
+### Documentation
+
+
+## 0.4.0 (2026-06-11)
+
+### Added
+- Added a `directed` parameter to `gdf_to_pyg()`. With the new default `directed=False`, each edge `(u, v)` is symmetrized by adding the reverse edge `(v, u)` (self-loops excluded, edge attributes duplicated) so PyTorch Geometric receives a proper undirected graph; `pyg_to_gdf()` deduplicates the symmetrized edges back to the original rows on reconstruction. For heterogeneous graphs, `directed` also accepts a complete dictionary mapping each edge type to its own directionality flag.
+- Added a `reverse_edge_types` parameter to `gdf_to_pyg()` controlling undirected cross-type heterogeneous edges: `"auto"` (default) generates a `(dst_type, "rev_<relation>", src_type)` reverse edge store for message passing, a dict provides explicit mappings, and `None` raises a `ValueError` (strict mode). Generated reverse stores are skipped by `pyg_to_gdf()` reconstruction.
+- Added a `multigraph` parameter to `gdf_to_pyg()` that promotes two-level edge indexes to a keyed `(source, target, key)` contract so parallel edges can be preserved; three-level edge indexes always keep their supplied keys, and `pyg_to_gdf()` round-trips them.
+- Added a `directed` parameter to `nx_to_pyg()`. By default the NetworkX graph type decides: `Graph`/`MultiGraph` convert as undirected, `DiGraph`/`MultiDiGraph` as directed. `pyg_to_nx()` now returns `MultiGraph`/`MultiDiGraph` with preserved edge keys when the metadata or edge indexes carry keys, and restores original node labels for homogeneous graphs.
 - Added `canonicalize_edges()` to collapse reciprocal `(u, v)` / `(v, u)` rows and parallel duplicates in edge GeoDataFrames, with `duplicates="first" | "key" | "error"` handling.
+- Added `symmetrize_edges()` as the inverse of `canonicalize_edges()`: it appends the reverse row of every non-self-loop edge (with reversed geometry) so neighbourhood queries on the MultiIndex are complete. The operation is idempotent.
+- Added a `duplicate_edges` parameter to the proximity generators (`knn_graph()`, `delaunay_graph()`, `gabriel_graph()`, `relative_neighborhood_graph()`, `euclidean_minimum_spanning_tree()`, `fixed_radius_graph()`, `waxman_graph()`, `contiguity_graph()`) and the morphology functions (`morphological_graph()`, `place_to_place_graph()`, `place_to_movement_graph()`, `movement_to_movement_graph()`) to optionally emit both `(u, v)` and `(v, u)` rows per undirected edge. Incompatible with `as_nx=True`.
+- Added `extent_buffer`, `limit`, and `include_unenclosed_buildings` parameters to `morphological_graph()`: `extent_buffer` caps the perpendicular access distance from a street to a building/cell, `limit` passes an explicit enclosure boundary, and `include_unenclosed_buildings` keeps buildings outside any enclosure.
+- Added a `max_connection_distance` parameter to `place_to_movement_graph()` to connect otherwise unmatched place polygons to their nearest movement geometry within a distance cap.
+- Added a `limit` parameter to `create_tessellation()` forwarded to `momepy.enclosures`; when omitted, a buffered convex hull of the input geometry and barriers is computed so buildings near outer street loops are not dropped from enclosed tessellation.
 - Added a `directed` parameter to `segments_to_graph()`; `directed=False` canonicalizes each edge to an unordered `(min, max)` node-id order so reverse-drawn duplicate segments become parallel edges of one unordered pair.
 
 ### Changed
+- **Breaking:** `gdf_to_pyg()` now treats edges as undirected by default and validates them: edge tables containing both `(u, v)` and `(v, u)` rows, or parallel rows for the same unordered pair, raise a `ValueError` (use `canonicalize_edges()`, `multigraph=True`, or `directed=True` to resolve). Edge GeoDataFrames must have a MultiIndex with at least two levels (source, target).
 - **Breaking:** Renamed the morphology terminology from "private"/"public" to "place"/"movement". Node keys are now `"place"` and `"movement"`; edge types are `("place", "touched_to", "place")`, `("movement", "connected_to", "movement")`, and `("place", "faced_to", "movement")`; identifier columns are `place_id`, `movement_id`, `from_place_id`/`to_place_id`, and `from_movement_id`/`to_movement_id`.
 - **Breaking:** `segments_to_graph()` now defaults to `multigraph=True`, returning a three-level `(from_node_id, to_node_id, edge_key)` MultiIndex (and an `nx.MultiGraph` when `as_nx=True`). With `multigraph=False`, duplicate node pairs now raise a `ValueError` instead of silently returning a duplicated MultiIndex.
+- `GraphMetadata` now records per-edge-type directionality, symmetrization provenance, multigraph flags, and generated reverse edge type mappings so `pyg_to_gdf()` and `pyg_to_nx()` can reconstruct the original input faithfully.
+- `pyg_to_nx()` warns and falls back to an undirected graph when heterogeneous edge types mix directed and undirected metadata.
 - Improved the undirected validation errors in `gdf_to_pyg()`: they now report the total number of affected node pairs with examples, explain the typical cause (reciprocal rows from directed sources such as OSMnx), and point to `canonicalize_edges()` as a remedy.
 
 ### Deprecated
@@ -23,6 +48,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 - Fixed `segments_to_graph()` ignoring `as_nx=True` for empty inputs; it now returns an empty NetworkX graph instead of a tuple, and empty outputs carry properly named indexes.
 - Fixed `segments_to_graph(multigraph=True, as_nx=True)` silently collapsing parallel edges by returning an `nx.Graph`; it now returns an `nx.MultiGraph`.
+- Fixed a `UnicodeDecodeError` in `load_overture_data()` when reading back files saved with `save_to_file=True` by forcing UTF-8 encoding.
+- Made enclosed tessellation more robust: boundary simplification failures (`TypeError` from `shapely.coverage_simplify` on degenerate footprints) retry once with `simplify=False`, and GEOS topology errors retry once with a coarser `grid_size` before returning an empty tessellation for the affected unit.
+- Fixed `load_gtfs()` UDF registration against newer DuckDB releases by using explicit `duckdb.sqltype` signatures, and guarded `get_od_pairs()` against an empty calendar table.
 
 
 ## 0.3.1 (2026-03-21)
