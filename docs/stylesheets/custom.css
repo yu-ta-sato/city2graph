@@ -1,27 +1,39 @@
 /* ==========================================================================
    City2Graph Documentation Theme
    A modern, Apple-inspired glassmorphism theme for MkDocs Material
+
+   The custom color schemes (city2graph-light / city2graph-dark) define the
+   standard Material CSS variables (--md-default-*, --md-typeset-*, ...) so
+   that built-in components pick up the palette without per-component
+   overrides. Only genuinely custom looks (glass surfaces, gradients,
+   notebook and mkdocstrings styling) are declared below the variables.
    ========================================================================== */
 
 /* ==========================================================================
-   1. FONTS & IMPORTS
+   1. FONTS
+   Single Google Fonts request for all families; the theme's own font
+   loading is disabled in mkdocs.yml (font: false).
    ========================================================================== */
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Fira+Code:wght@400;500;600&family=Outfit:wght@400;500;600;700;800;900&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Fira+Code:wght@400;500;600&family=Outfit:wght@300;400;500;600;700;800;900&display=swap');
 
 /* ==========================================================================
-   2. CSS VARIABLES - Light Mode (Default)
+   2. COLOR SCHEME - Light (default)
    ========================================================================== */
 :root,
 [data-md-color-scheme="city2graph-light"] {
   color-scheme: light;
 
-  /* Brand Colors */
+  /* Brand colors */
   --md-primary-fg-color: #2563eb;
   --md-primary-fg-color--light: #3b82f6;
   --md-primary-fg-color--dark: #1d4ed8;
   --md-accent-fg-color: #8b5cf6;
   --md-primary-fg-color--rgb: 37, 99, 235;
   --md-accent-fg-color--rgb: 139, 92, 246;
+
+  /* Text on the (glass) header - Material uses this for header content */
+  --md-primary-bg-color: #1d1d1f;
+  --md-primary-bg-color--light: rgba(29, 29, 31, 0.7);
 
   /* Glassmorphism */
   --glass-bg: rgba(255, 255, 255, 0.60);
@@ -55,24 +67,24 @@
   --card-shadow-hover: 0 8px 32px rgba(0, 0, 0, 0.08);
   --image-shadow: 0 12px 24px -6px rgba(0, 0, 0, 0.12), 0 6px 12px -4px rgba(0, 0, 0, 0.08);
 
-  /* Code Blocks */
+  /* Code blocks */
   --code-bg: #f5f5f7;
   --code-border: rgba(0, 0, 0, 0.05);
   --code-text: #1d1d1f;
   --inline-code-bg: rgba(var(--md-primary-fg-color--rgb), 0.1);
 
-  /* ReadTheDocs Addons Overrides */
+  /* ReadTheDocs addons overrides */
   --readthedocs-flyout-font-size: 13px;
   --readthedocs-flyout-z-index: 500;
 }
 
 /* ==========================================================================
-   3. CSS VARIABLES - Dark Mode
+   3. COLOR SCHEME - Dark
    ========================================================================== */
 [data-md-color-scheme="city2graph-dark"] {
   color-scheme: dark;
 
-  /* Brand Colors - Lighter for dark mode */
+  /* Brand colors - lighter for dark mode */
   --md-primary-fg-color: #60a5fa;
   --md-primary-fg-color--light: #93c5fd;
   --md-primary-fg-color--dark: #3b82f6;
@@ -80,14 +92,45 @@
   --md-primary-fg-color--rgb: 96, 165, 250;
   --md-accent-fg-color--rgb: 167, 139, 250;
 
-  /* Glassmorphism - Dark */
+  /* Text on the (glass) header */
+  --md-primary-bg-color: #f5f5f7;
+  --md-primary-bg-color--light: rgba(245, 245, 247, 0.7);
+
+  /* Material base palette - equivalents of the built-in "slate" scheme */
+  --md-default-bg-color: #000000;
+  --md-default-bg-color--light: rgba(0, 0, 0, 0.54);
+  --md-default-bg-color--lighter: rgba(0, 0, 0, 0.26);
+  --md-default-bg-color--lightest: rgba(0, 0, 0, 0.07);
+  --md-default-fg-color: #f5f5f7;
+  --md-default-fg-color--light: rgba(245, 245, 247, 0.62);
+  --md-default-fg-color--lighter: rgba(245, 245, 247, 0.32);
+  --md-default-fg-color--lightest: rgba(245, 245, 247, 0.12);
+  --md-code-fg-color: #d4d4d4;
+  --md-code-bg-color: #1c1c1e;
+  --md-typeset-color: var(--md-default-fg-color);
+  --md-typeset-a-color: #93c5fd;
+  --md-typeset-mark-color: rgba(96, 165, 250, 0.3);
+  --md-typeset-kbd-color: rgba(245, 245, 247, 0.12);
+  --md-typeset-kbd-accent-color: rgba(245, 245, 247, 0.2);
+  --md-typeset-kbd-border-color: #1c1c1e;
+  --md-typeset-table-color: rgba(245, 245, 247, 0.12);
+  --md-typeset-table-color--light: rgba(245, 245, 247, 0.035);
+  --md-admonition-fg-color: var(--md-default-fg-color);
+  --md-admonition-bg-color: var(--md-default-bg-color);
+  --md-footer-bg-color: rgba(10, 10, 10, 0.87);
+  --md-footer-bg-color--dark: #050505;
+  --md-shadow-z1: 0 0.2rem 0.5rem rgba(0, 0, 0, 0.2), 0 0 0.05rem rgba(0, 0, 0, 0.1);
+  --md-shadow-z2: 0 0.2rem 0.5rem rgba(0, 0, 0, 0.3), 0 0 0.05rem rgba(0, 0, 0, 0.25);
+  --md-shadow-z3: 0 0.2rem 0.9rem rgba(0, 0, 0, 0.4), 0 0 0.05rem rgba(0, 0, 0, 0.35);
+
+  /* Glassmorphism - dark */
   --glass-bg: rgba(20, 20, 20, 0.60);
   --glass-border: rgba(255, 255, 255, 0.08);
   --glass-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.4);
   --header-bg: linear-gradient(to bottom, rgba(20, 20, 20, 0.5), rgba(20, 20, 20, 0.3));
   --header-border: rgba(255, 255, 255, 0.05);
 
-  /* Colors - Dark */
+  /* Colors - dark */
   --doc-bg-color: #000000;
   --doc-text-color: #f5f5f7;
   --doc-heading-color: #ffffff;
@@ -95,18 +138,18 @@
   --link-color: #93c5fd;
   --link-hover-color: #bfdbfe;
 
-  /* Components - Dark */
+  /* Components - dark */
   --card-shadow: 0 4px 24px rgba(0, 0, 0, 0.4);
   --card-shadow-hover: 0 8px 32px rgba(0, 0, 0, 0.5);
   --image-shadow: 0 12px 24px -6px rgba(0, 0, 0, 0.5), 0 6px 12px -4px rgba(0, 0, 0, 0.3);
 
-  /* Code Blocks - Dark */
+  /* Code blocks - dark */
   --code-bg: #1c1c1e;
   --code-border: rgba(255, 255, 255, 0.1);
   --code-text: #d4d4d4;
   --inline-code-bg: rgba(255, 255, 255, 0.1);
 
-  /* Syntax Highlighting - Dark Mode (Dracula-inspired) */
+  /* Syntax highlighting - dark mode (Dracula-inspired) */
   --md-code-hl-color: #f8f8f2;
   --md-code-hl-number-color: #bd93f9;
   --md-code-hl-special-color: #ff79c6;
@@ -141,45 +184,58 @@ body {
 /* ==========================================================================
    5. TYPOGRAPHY
    ========================================================================== */
-h1, h2, h3, h4, h5, h6 {
+.md-typeset h1,
+.md-typeset h2,
+.md-typeset h3,
+.md-typeset h4,
+.md-typeset h5,
+.md-typeset h6 {
   font-family: var(--md-heading-font-family);
   color: var(--doc-heading-color);
-  font-weight: 700;
-  letter-spacing: -0.02em;
+  font-weight: 650;
+  letter-spacing: 0;
   margin-top: 2em;
   margin-bottom: 0.8em;
 }
 
-h1 {
-  font-size: 3.5rem;
-  font-weight: 900;
-  letter-spacing: -0.05em;
-  background: linear-gradient(135deg, var(--md-primary-fg-color--dark) 0%, var(--md-primary-fg-color) 50%, var(--md-accent-fg-color) 100%);
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
-  background-clip: text;
-  margin-bottom: 1em;
-  line-height: 1.1;
+.md-typeset h1 {
+  font-size: 1.6rem;
+  font-weight: 300;
+  color: var(--doc-heading-color);
+  margin-top: 0;
+  margin-bottom: 2rem;
+  line-height: 1.3;
 }
 
-h2 {
-  font-size: 2.5rem;
-  font-weight: 900;
-  letter-spacing: -0.04em;
-  background: linear-gradient(120deg, var(--doc-heading-color) 0%, var(--md-primary-fg-color) 80%);
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
-  background-clip: text;
+.md-typeset h2 {
+  font-size: 1.25rem;
+  font-weight: 300;
+  color: var(--doc-heading-color);
   border-bottom: none;
-  margin-top: 2.5em;
-  line-height: 1.2;
+  margin-top: 2rem;
+  margin-bottom: 0.8rem;
+  line-height: 1.4;
+}
+
+.md-typeset .headerlink {
+  color: var(--doc-muted-color);
+  opacity: 0;
+  transition: color 0.2s ease, opacity 0.2s ease;
+}
+
+.md-typeset :is(h1, h2, h3, h4, h5, h6):hover .headerlink,
+.md-typeset .headerlink:focus {
+  opacity: 0.72;
+}
+
+.md-typeset .headerlink:is(:hover, :focus) {
+  color: var(--link-hover-color);
+  opacity: 1;
 }
 
 /* ==========================================================================
-   6. HEADER & NAVIGATION
+   6. HEADER
    ========================================================================== */
-
-/* --- Header --- */
 .md-header {
   background: var(--header-bg);
   backdrop-filter: saturate(var(--glass-saturate)) blur(var(--glass-blur));
@@ -286,10 +342,6 @@ h2 {
   color: var(--doc-text-color) !important;
 }
 
-[data-md-color-scheme="city2graph-dark"] .md-search__form {
-  background-color: transparent !important;
-}
-
 [data-md-color-scheme="city2graph-dark"] .md-search__input {
   background-color: rgba(0, 0, 0, 0.3) !important;
   border: 1px solid rgba(255, 255, 255, 0.1) !important;
@@ -300,6 +352,8 @@ h2 {
   transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.3s ease;
 }
 
+/* Keep repository facts visible (they are hidden until hydrated by default,
+   which flashes with the ReadTheDocs addons) */
 .md-source,
 .md-source__repository,
 .md-source__facts {
@@ -307,121 +361,56 @@ h2 {
   opacity: 1 !important;
 }
 
-[data-md-color-scheme="city2graph-light"] .md-source,
-[data-md-color-scheme="city2graph-light"] .md-source__repository,
-[data-md-color-scheme="city2graph-light"] .md-source__facts {
-  color: #000000 !important;
-}
-
-[data-md-color-scheme="city2graph-light"] .md-source {
-  background-color: transparent !important;
-  border: none !important;
-}
-
-[data-md-color-scheme="city2graph-dark"] .md-source,
-[data-md-color-scheme="city2graph-dark"] .md-source__repository,
-[data-md-color-scheme="city2graph-dark"] .md-source__facts {
-  color: #ffffff !important;
-}
-
 /* ==========================================================================
-   7. SIDEBAR & NAVIGATION
+   7. NAVIGATION (sidebar & mobile drawer)
    ========================================================================== */
 
-/* --- Sidebar Container (Dark Mode) --- */
-[data-md-color-scheme="city2graph-dark"] .md-sidebar,
-[data-md-color-scheme="city2graph-dark"] .md-sidebar__scrollwrap,
-[data-md-color-scheme="city2graph-dark"] .md-sidebar__inner,
-[data-md-color-scheme="city2graph-dark"] .md-nav,
-[data-md-color-scheme="city2graph-dark"] .md-nav__list {
-  background: transparent !important;
-  box-shadow: none !important;
-}
-
-/* --- Navigation Links (Dark Mode) --- */
-[data-md-color-scheme="city2graph-dark"] .md-nav__link {
-  color: var(--doc-text-color) !important;
-}
-
-[data-md-color-scheme="city2graph-dark"] .md-nav__link:hover,
-[data-md-color-scheme="city2graph-dark"] .md-nav__link--active,
-[data-md-color-scheme="city2graph-dark"] .md-nav__link[aria-current="page"] {
-  color: var(--link-color) !important;
-}
-
-[data-md-color-scheme="city2graph-dark"] .md-nav__link--active {
+/* Consistent emphasis for the active page in both schemes */
+.md-nav__link--active {
   font-weight: 600;
-  background: transparent !important;
-  box-shadow: none !important;
 }
 
-/* --- Navigation Icons & Version Selector --- */
-[data-md-color-scheme="city2graph-dark"] .md-nav__icon,
-[data-md-color-scheme="city2graph-dark"] .md-nav__button,
-[data-md-color-scheme="city2graph-dark"] .md-version,
-[data-md-color-scheme="city2graph-dark"] .md-version__current {
-  color: var(--doc-text-color) !important;
+/* Disable the scroll fade masks on sidebars */
+.md-sidebar__scrollwrap {
+  mask-image: none !important;
+  -webkit-mask-image: none !important;
 }
 
-/* ==========================================================================
-   8. MOBILE NAVIGATION
-   ========================================================================== */
+/* Offset the sidebars below the tall glass header */
+@media screen and (min-width: 76.25em) {
+  .md-sidebar {
+    top: 6rem !important;
+  }
+}
 
-/* --- Mobile Drawer Header --- */
+/* --- Mobile drawer header --- */
 .md-nav__title {
+  color: var(--doc-text-color);
+}
+
+[data-md-color-scheme="city2graph-light"] .md-nav--primary .md-nav__title,
+[data-md-color-scheme="city2graph-light"] .md-nav--secondary .md-nav__title {
+  background: var(--header-bg);
   backdrop-filter: saturate(var(--glass-saturate)) blur(var(--glass-blur));
   -webkit-backdrop-filter: saturate(var(--glass-saturate)) blur(var(--glass-blur));
   border-bottom: 1px solid var(--header-border);
   box-shadow: var(--glass-shadow);
-  color: var(--doc-text-color) !important;
+  color: #000000;
 }
 
-[data-md-color-scheme="city2graph-light"] .md-nav__title {
-  background: var(--header-bg) !important;
-  color: #000000 !important;
-}
-
-[data-md-color-scheme="city2graph-dark"] .md-nav__title {
-  background: linear-gradient(to bottom, rgba(20, 20, 20, 0.95), rgba(20, 20, 20, 0.9)) !important;
+[data-md-color-scheme="city2graph-dark"] .md-nav--primary .md-nav__title,
+[data-md-color-scheme="city2graph-dark"] .md-nav--secondary .md-nav__title {
+  background: linear-gradient(to bottom, rgba(20, 20, 20, 0.95), rgba(20, 20, 20, 0.9));
   border-bottom: 1px solid rgba(255, 255, 255, 0.1);
-  color: var(--doc-text-color) !important;
+  box-shadow: var(--glass-shadow);
 }
 
-/* --- Custom Mobile Drawer Header --- */
-.custom-drawer-header {
-  display: flex;
-  background-color: rgba(255, 255, 255, 0.5);
-  flex-direction: column;
-  gap: 0.5rem;
-  margin-top: 1rem;
-  width: 100%;
-}
-
-.mobile-repo-button {
-  display: flex !important;
-  border-radius: 8px;
-  padding: 0.5rem;
-  color: var(--doc-text-color) !important;
-}
-
-[data-md-color-scheme="city2graph-dark"] .mobile-repo-button {
-  background-color: rgba(255, 255, 255, 0.1);
-  color: var(--doc-text-color) !important;
-}
-
-[data-md-color-scheme="city2graph-dark"] .custom-drawer-header {
-  background-color: transparent;
-}
-
-.mobile-version-selector {
-  display: block !important;
-  margin-top: 0.5rem;
-}
-
-/* --- Primary Navigation (Mobile Drawer - Dark Mode) --- */
+/* --- Mobile drawer body (glass) --- */
 [data-md-color-scheme="city2graph-dark"] .md-nav--primary,
-[data-md-color-scheme="city2graph-dark"] .md-nav--primary .md-nav {
-  background: rgba(15, 15, 15, 0.9) !important;
+[data-md-color-scheme="city2graph-dark"] .md-nav--primary .md-nav,
+[data-md-color-scheme="city2graph-dark"] .md-nav--secondary,
+[data-md-color-scheme="city2graph-dark"] .md-nav--secondary .md-nav {
+  background: rgba(15, 15, 15, 0.9);
   backdrop-filter: saturate(var(--glass-saturate)) blur(var(--glass-blur));
   -webkit-backdrop-filter: saturate(var(--glass-saturate)) blur(var(--glass-blur));
 }
@@ -430,35 +419,8 @@ h2 {
   border-top-color: rgba(255, 255, 255, 0.08);
 }
 
-[data-md-color-scheme="city2graph-dark"] .md-nav--primary .md-nav__link {
-  color: var(--doc-text-color) !important;
-}
-
-[data-md-color-scheme="city2graph-dark"] .md-nav--primary .md-nav__link:hover,
-[data-md-color-scheme="city2graph-dark"] .md-nav--primary .md-nav__link--active {
-  color: var(--link-color) !important;
-}
-
-/* --- Section Labels (e.g., "API Reference") --- */
-[data-md-color-scheme="city2graph-dark"] .md-nav__item--nested > .md-nav__link,
-[data-md-color-scheme="city2graph-dark"] .md-nav__item--section > .md-nav__link {
-  color: var(--doc-text-color) !important;
-  background: transparent !important;
-  box-shadow: none !important;
-  backdrop-filter: none !important;
-  -webkit-backdrop-filter: none !important;
-}
-
-[data-md-color-scheme="city2graph-dark"] .md-nav__item--section > .md-nav__link--active {
-  color: var(--link-color) !important;
-  font-weight: 600;
-}
-
-[data-md-color-scheme="city2graph-dark"] .md-nav__item--section {
-  background: transparent !important;
-}
-
-/* --- Mobile Nav Source (GitHub link) --- */
+/* --- Mobile drawer source (GitHub link) ---
+   Material paints this with the primary color by default */
 [data-md-color-scheme="city2graph-light"] .md-nav__source {
   background-color: #ffffff !important;
   color: #000000 !important;
@@ -469,28 +431,8 @@ h2 {
   color: var(--doc-text-color) !important;
 }
 
-/* --- Secondary Navigation (Table of Contents - Dark Mode) --- */
-[data-md-color-scheme="city2graph-dark"] .md-nav--secondary,
-[data-md-color-scheme="city2graph-dark"] .md-nav--secondary .md-nav {
-  background: rgba(15, 15, 15, 0.9) !important;
-  backdrop-filter: saturate(var(--glass-saturate)) blur(var(--glass-blur));
-  -webkit-backdrop-filter: saturate(var(--glass-saturate)) blur(var(--glass-blur));
-}
-
-[data-md-color-scheme="city2graph-dark"] .md-nav--secondary .md-nav__link {
-  color: var(--doc-text-color) !important;
-}
-
-[data-md-color-scheme="city2graph-dark"] .md-nav--secondary .md-nav__title {
-  background: linear-gradient(to bottom, rgba(20, 20, 20, 0.95), rgba(20, 20, 20, 0.9)) !important;
-  backdrop-filter: saturate(var(--glass-saturate)) blur(var(--glass-blur));
-  -webkit-backdrop-filter: saturate(var(--glass-saturate)) blur(var(--glass-blur));
-  color: var(--doc-text-color) !important;
-  box-shadow: var(--glass-shadow);
-}
-
 /* ==========================================================================
-   9. CONTENT COMPONENTS
+   8. CONTENT COMPONENTS
    ========================================================================== */
 
 /* --- Admonitions (Glass Cards) --- */
@@ -512,38 +454,6 @@ h2 {
   font-weight: 600;
 }
 
-[data-md-color-scheme="city2graph-dark"] .md-typeset .admonition,
-[data-md-color-scheme="city2graph-dark"] .md-typeset details {
-  color: var(--doc-text-color) !important;
-}
-
-[data-md-color-scheme="city2graph-dark"] .md-typeset .admonition .admonition-title,
-[data-md-color-scheme="city2graph-dark"] .md-typeset summary {
-  color: var(--doc-heading-color) !important;
-}
-
-/* --- See Also Admonition Fix (Dark Mode) --- */
-[data-md-color-scheme="city2graph-dark"] details.see-also,
-[data-md-color-scheme="city2graph-dark"] details.see-also summary,
-[data-md-color-scheme="city2graph-dark"] details.see-also p,
-[data-md-color-scheme="city2graph-dark"] details.see-also li,
-[data-md-color-scheme="city2graph-dark"] details.see-also span,
-[data-md-color-scheme="city2graph-dark"] details.see-also dl,
-[data-md-color-scheme="city2graph-dark"] details.see-also dt,
-[data-md-color-scheme="city2graph-dark"] details.see-also dd {
-  color: var(--doc-text-color) !important;
-}
-
-[data-md-color-scheme="city2graph-dark"] details.see-also a {
-  color: var(--link-color) !important;
-}
-
-[data-md-color-scheme="city2graph-dark"] details.see-also code {
-  background-color: var(--inline-code-bg) !important;
-  border: none !important;
-  color: var(--doc-text-color) !important;
-}
-
 /* --- Buttons --- */
 .md-typeset .md-button {
   border-radius: 999px;
@@ -555,13 +465,20 @@ h2 {
 .md-typeset .md-button--primary {
   background: var(--md-primary-fg-color);
   border: none;
+  color: #ffffff;
   box-shadow: 0 4px 14px 0 rgba(var(--md-primary-fg-color--rgb), 0.39);
 }
 
 .md-typeset .md-button--primary:hover {
   background: var(--md-primary-fg-color--dark);
+  color: #ffffff;
   transform: translateY(-1px);
   box-shadow: 0 6px 20px rgba(var(--md-primary-fg-color--rgb), 0.23);
+}
+
+/* --- Links (hover matches the light-blue palette in dark mode) --- */
+[data-md-color-scheme="city2graph-dark"] .md-typeset a:is(:focus, :hover):not(.md-button) {
+  color: var(--link-hover-color);
 }
 
 /* --- Images --- */
@@ -594,12 +511,6 @@ h2 {
   }
 }
 
-/* Limit text width utility */
-.limit-text-width {
-  max-width: 800px;
-  margin: 0 auto;
-}
-
 /* --- Tables --- */
 .md-typeset table:not([class]) {
   background: var(--glass-bg);
@@ -621,7 +532,7 @@ h2 {
 }
 
 /* ==========================================================================
-   10. CODE BLOCKS
+   9. CODE BLOCKS
    ========================================================================== */
 
 /* --- Base Code Block Style --- */
@@ -637,10 +548,6 @@ h2 {
   font-family: var(--md-code-font-family);
   font-size: 0.85em;
   line-height: 1.4;
-}
-
-[data-md-color-scheme="city2graph-dark"] .md-typeset pre {
-  color: var(--code-text);
 }
 
 .md-typeset pre > code {
@@ -681,7 +588,6 @@ h2 {
   transform: scale(1.05);
 }
 
-/* Light Mode */
 [data-md-color-scheme="city2graph-light"] .md-code__button {
   color: rgba(0, 0, 0, 0.5) !important;
 }
@@ -691,7 +597,6 @@ h2 {
   background-color: rgba(0, 0, 0, 0.08) !important;
 }
 
-/* Dark Mode */
 [data-md-color-scheme="city2graph-dark"] .md-code__button {
   color: rgba(255, 255, 255, 0.9) !important;
 }
@@ -702,7 +607,7 @@ h2 {
 }
 
 /* ==========================================================================
-   11. NOTEBOOK STYLING
+   10. NOTEBOOK STYLING (mkdocs-jupyter)
    ========================================================================== */
 
 /* --- Hide Prompts --- */
@@ -711,99 +616,45 @@ h2 {
   display: none !important;
 }
 
-/* --- Base Reset for Notebook Cells --- */
-.jp-CodeCell,
+/* --- Reset wrappers so only the editor surface is styled --- */
 .jp-Cell,
+.jp-CodeCell,
+.jp-Cell-inputWrapper,
 .jp-InputArea,
-.jp-InputArea-editor,
-.jp-RenderedHTMLCommon pre,
-.code_cell .highlight pre,
-.md-content__inner div > div > div > pre {
+.jp-CodeMirrorEditor,
+.CodeMirror,
+.highlight-ipynb,
+.code_cell .highlight {
   background: transparent !important;
   border: none !important;
   box-shadow: none !important;
+  padding: 0 !important;
+  margin: 0 !important;
 }
 
-/* --- Notebook Code Blocks (Overrides) --- */
+/* --- Cell spacing (after the wrapper reset so margin-bottom wins) --- */
+.jp-Cell,
+.jp-CodeCell,
+.jp-MarkdownCell {
+  margin-bottom: 1em !important;
+}
+
+/* --- Notebook code input surface --- */
 .jp-InputArea-editor,
 .code_cell .highlight pre,
 .highlight-ipynb pre {
-  border-radius: 0 !important;
+  background: var(--code-bg) !important;
+  color: var(--code-text) !important;
   border: none !important;
+  border-radius: 0 !important;
   box-shadow: none !important;
   font-size: 1em;
   padding: 0.8em 1em !important;
+  margin-bottom: 0.8em !important;
   font-family: var(--md-code-font-family);
 }
 
-/* --- Light Mode Notebook Styling --- */
-[data-md-color-scheme="city2graph-light"] .jp-Cell,
-[data-md-color-scheme="city2graph-light"] .jp-Cell-inputWrapper,
-[data-md-color-scheme="city2graph-light"] .jp-InputArea,
-[data-md-color-scheme="city2graph-light"] .jp-InputPrompt,
-[data-md-color-scheme="city2graph-light"] .jp-InputArea-editor,
-[data-md-color-scheme="city2graph-light"] .jp-CodeMirrorEditor,
-[data-md-color-scheme="city2graph-light"] .CodeMirror,
-[data-md-color-scheme="city2graph-light"] .highlight-ipynb,
-[data-md-color-scheme="city2graph-light"] .highlight {
-  background-color: transparent !important;
-  border: none !important;
-  box-shadow: none !important;
-  padding: 0 !important;
-  margin: 0 !important;
-}
-
-[data-md-color-scheme="city2graph-light"] .highlight-ipynb pre {
-  background-color: var(--code-bg) !important;
-  color: var(--code-text) !important;
-  margin-bottom: 0.8em !important;
-}
-
-[data-md-color-scheme="city2graph-light"] .highlight-ipynb pre:hover {
-  background-color: var(--code-bg) !important;
-}
-
-/* --- Dark Mode Notebook Styling --- */
-[data-md-color-scheme="city2graph-dark"] .jp-Cell,
-[data-md-color-scheme="city2graph-dark"] .jp-Cell-inputWrapper,
-[data-md-color-scheme="city2graph-dark"] .jp-InputArea,
-[data-md-color-scheme="city2graph-dark"] .jp-InputPrompt,
-[data-md-color-scheme="city2graph-dark"] .jp-CodeMirrorEditor,
-[data-md-color-scheme="city2graph-dark"] .CodeMirror,
-[data-md-color-scheme="city2graph-dark"] .highlight-ipynb,
-[data-md-color-scheme="city2graph-dark"] .code_cell .highlight {
-  background-color: transparent !important;
-  border: none !important;
-  box-shadow: none !important;
-  padding: 0 !important;
-  margin: 0 !important;
-}
-
-[data-md-color-scheme="city2graph-dark"] .jp-InputArea-editor,
-[data-md-color-scheme="city2graph-dark"] .code_cell .highlight pre,
-[data-md-color-scheme="city2graph-dark"] .highlight-ipynb pre {
-  background: var(--code-bg) !important;
-  color: var(--code-text);
-}
-
-[data-md-color-scheme="city2graph-dark"] .jp-InputArea-editor:hover,
-[data-md-color-scheme="city2graph-dark"] .code_cell .highlight pre:hover,
-[data-md-color-scheme="city2graph-dark"] .highlight-ipynb pre:hover {
-  border-color: rgba(255, 255, 255, 0.2) !important;
-  box-shadow: 0 15px 40px rgba(0, 0, 0, 0.6) !important;
-}
-
-/* --- Cell Spacing --- */
-[data-md-color-scheme="city2graph-dark"] .jp-Cell,
-[data-md-color-scheme="city2graph-dark"] .jp-CodeCell,
-[data-md-color-scheme="city2graph-dark"] .jp-MarkdownCell,
-[data-md-color-scheme="city2graph-light"] .jp-Cell,
-[data-md-color-scheme="city2graph-light"] .jp-CodeCell,
-[data-md-color-scheme="city2graph-light"] .jp-MarkdownCell {
-  margin-bottom: 1.0em !important;
-}
-
-/* --- Output Cells (Reset styling) --- */
+/* --- Output cells (plain, no chrome) --- */
 .md-typeset .jp-OutputArea-output pre,
 .jp-OutputArea-output pre {
   background: transparent !important;
@@ -812,6 +663,8 @@ h2 {
   padding: 0 !important;
   margin: 0 !important;
   border-radius: 0 !important;
+  color: var(--code-text) !important;
+  font-size: 0.9em;
 }
 
 [data-md-color-scheme="city2graph-dark"] .md-typeset .jp-OutputArea-output pre,
@@ -819,17 +672,7 @@ h2 {
   color: #c9d1d9 !important;
 }
 
-[data-md-color-scheme="city2graph-dark"] .jp-OutputArea-output pre {
-  font-size: 0.9em;
-  margin-left: 0.5em;
-}
-
-[data-md-color-scheme="city2graph-light"] .md-typeset .jp-OutputArea-output pre,
-[data-md-color-scheme="city2graph-light"] .jp-OutputArea-output pre {
-  color: var(--code-text) !important;
-}
-
-/* --- Notebook Syntax Highlighting --- */
+/* --- Notebook syntax highlighting (map Pygments tokens to theme vars) --- */
 :is(.code_cell .highlight, .highlight-ipynb) :is(.k, .kd, .kn, .kp, .kr, .kt) {
   color: var(--md-code-hl-keyword-color) !important;
 }
@@ -896,7 +739,7 @@ h2 {
 }
 
 /* ==========================================================================
-   12. API DOCUMENTATION (mkdocstrings)
+   11. API DOCUMENTATION (mkdocstrings)
    ========================================================================== */
 
 /* --- Container --- */
@@ -949,8 +792,7 @@ h2 {
   border: 1px solid rgba(255, 255, 255, 0.08);
 }
 
-.doc-signature pre,
-[data-md-color-scheme="city2graph-dark"] .doc-signature pre {
+.doc-signature pre {
   background: transparent !important;
   border: none !important;
   box-shadow: none !important;
@@ -1022,7 +864,6 @@ h2 {
 }
 
 [data-md-color-scheme="city2graph-dark"] .md-typeset .doc-contents dt code {
-  color: var(--doc-text-color);
   background: var(--inline-code-bg);
 }
 
@@ -1065,7 +906,7 @@ h2 {
   font-weight: 700;
 }
 
-/* --- Hide Unwanted ToC Items --- */
+/* --- Hide module/class/attribute entries from the page ToC --- */
 .md-nav--secondary .md-nav__item:has(.doc-symbol-module),
 .md-nav--secondary .md-nav__item:has(.doc-symbol-class),
 .md-nav--secondary .md-nav__item:has(.doc-symbol-attribute),
@@ -1076,7 +917,7 @@ h2 {
 }
 
 /* ==========================================================================
-   13. SCROLLBARS
+   12. MISC (scrollbars, breadcrumbs)
    ========================================================================== */
 ::-webkit-scrollbar {
   width: 10px;
@@ -1096,87 +937,13 @@ h2 {
   background: rgba(150, 150, 150, 0.5);
 }
 
-/* ==========================================================================
-   14. SIDEBAR FIXES (Dark Mode)
-   ========================================================================== */
-
-/* --- Remove Masks --- */
-.md-sidebar__scrollwrap {
-  mask-image: none !important;
-  -webkit-mask-image: none !important;
-}
-
-/* --- Remove Pseudo-element Backgrounds --- */
-[data-md-color-scheme="city2graph-dark"] .md-sidebar__scrollwrap::before,
-[data-md-color-scheme="city2graph-dark"] .md-sidebar__scrollwrap::after,
-[data-md-color-scheme="city2graph-dark"] .md-nav__title::before,
-[data-md-color-scheme="city2graph-dark"] .md-nav__title::after {
-  background: none !important;
-  box-shadow: none !important;
-  display: none !important;
-  content: none !important;
-}
-
-/* --- Nav Title Reset --- */
-[data-md-color-scheme="city2graph-dark"] .md-nav__title {
-  background: transparent !important;
-  box-shadow: none !important;
-  backdrop-filter: none !important;
-  -webkit-backdrop-filter: none !important;
-  border: none !important;
-}
-
-
-/* --- Section Header Pseudo-elements --- */
-[data-md-color-scheme="city2graph-dark"] .md-nav__item--section > .md-nav__link::after,
-[data-md-color-scheme="city2graph-dark"] .md-nav__item--nested > .md-nav__link::after {
-  display: none !important;
-  content: none !important;
-}
-
-/* --- Sidebar Top Offset Fix --- */
-@media screen and (min-width: 76.25em) {
-  .md-sidebar {
-    top: 6rem !important;
-  }
-}
-
-
-/* ==========================================================================
-   15. BREADCRUMBS
-   ========================================================================== */
 .md-path__link {
   color: var(--doc-muted-color);
   transition: color 0.25s;
   font-weight: 500;
-  font-size: 0.5rem;
+  font-size: 0.64rem;
 }
 
 .md-path__link:hover {
   color: var(--md-primary-fg-color);
-}
-
-[data-md-color-scheme="city2graph-dark"] .md-path__link:hover {
-  color: var(--md-primary-fg-color--light);
-}
-
-/* ==========================================================================
-   16. LINKS (Dark Mode Readability)
-   ========================================================================== */
-
-/* --- Content Links --- */
-[data-md-color-scheme="city2graph-dark"] .md-typeset a:not(.md-button):not(.md-nav__link):not(.md-source):not(.md-header__button):not(.md-logo):not([class^="md-"]),
-[data-md-color-scheme="city2graph-dark"] .md-content a,
-[data-md-color-scheme="city2graph-dark"] .md-content__inner a,
-[data-md-color-scheme="city2graph-dark"] .md-typeset ul li a,
-[data-md-color-scheme="city2graph-dark"] .md-typeset ol li a {
-  color: var(--link-color) !important;
-}
-
-[data-md-color-scheme="city2graph-dark"] .md-typeset a:not(.md-button):not(.md-nav__link):not(.md-source):not(.md-header__button):not(.md-logo):not([class^="md-"]):hover,
-[data-md-color-scheme="city2graph-dark"] .md-content a:hover,
-[data-md-color-scheme="city2graph-dark"] .md-content__inner a:hover,
-[data-md-color-scheme="city2graph-dark"] .md-typeset ul li a:hover,
-[data-md-color-scheme="city2graph-dark"] .md-typeset ol li a:hover {
-  color: var(--link-hover-color) !important;
 }

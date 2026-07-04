@@ -19,18 +19,9 @@ build:
     build:
       html:
         - mkdir -p "${READTHEDOCS_OUTPUT}/html/"
-        # Use Sphinx for legacy tags (v0.1.x) and MkDocs for current docs.
-        # Read the Docs sets READTHEDOCS_VERSION_TYPE to "tag" for tags,
-        # and READTHEDOCS_VERSION_NAME to the tag name (e.g. "v0.1.7").
-        - |
-          if [ "${READTHEDOCS_VERSION_TYPE:-}" = "tag" ] && \
-             echo "${READTHEDOCS_VERSION_NAME:-}" | grep -Eq '^v0\.1\.'; then
-            UV_PROJECT_ENVIRONMENT="${READTHEDOCS_VIRTUALENV_PATH}" \
-            uv run sphinx-build -b html docs/source "${READTHEDOCS_OUTPUT}/html"
-          else
-            UV_PROJECT_ENVIRONMENT="${READTHEDOCS_VIRTUALENV_PATH}" \
-            uv run mkdocs build --clean --site-dir "${READTHEDOCS_OUTPUT}/html"
-          fi
+        - >
+          UV_PROJECT_ENVIRONMENT="${READTHEDOCS_VIRTUALENV_PATH}"
+          uv run mkdocs build --clean --site-dir "${READTHEDOCS_OUTPUT}/html"
 
 mkdocs:
   configuration: mkdocs.yml
