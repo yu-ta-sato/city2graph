@@ -7,6 +7,16 @@ hide:
 
 # City2Graph
 
+[![GitHub Stars](https://img.shields.io/github/stars/c2g-dev/city2graph)](https://github.com/c2g-dev/city2graph)
+[![PyPI version](https://badge.fury.io/py/city2graph.svg)](https://badge.fury.io/py/city2graph)
+[![conda-forge Version](https://anaconda.org/conda-forge/city2graph/badges/version.svg)](https://anaconda.org/conda-forge/city2graph)
+[![PyPI Downloads](https://static.pepy.tech/badge/city2graph)](https://pepy.tech/projects/city2graph)
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.15858845.svg)](https://doi.org/10.5281/zenodo.15858845)
+[![License](https://img.shields.io/badge/License-BSD_3--Clause-blue.svg)](https://github.com/c2g-dev/city2graph/blob/main/LICENSE)
+[![Platform](https://anaconda.org/conda-forge/city2graph/badges/platforms.svg)](https://anaconda.org/conda-forge/city2graph)
+[![codecov](https://codecov.io/gh/c2g-dev/city2graph/graph/badge.svg?token=2R449G75Z0)](https://codecov.io/gh/c2g-dev/city2graph)
+[![Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff)
+
 <p align="center">
   <img src="assets/logos/social_preview_city2graph.png" alt="City2Graph logo">
 </p>
@@ -28,16 +38,6 @@ hide:
 
 **City2Graph** empowers researchers and practitioners in GeoAI, Urban Analytics, and Spatial Data Science to build advanced applications. A key distinction of this library is its ability to model complex urban systems by handling multiple geospatial relations as **heterogeneous graphs**. It bridges the gap between traditional GIS and modern Graph Neural Networks (GNNs) for a variety of applications. By supporting standard libraries like PyTorch Geometric, it enables seamless integration into deep learning workflows for Graph Representation Learning. With its versatile graph construction interface, this library can also be used for network analysis of urban systems from multiple geospatial relations, such as multi-modal accessibility (e.g. isochrone with street networks + public transport networks).
 
-[![GitHub Stars](https://img.shields.io/github/stars/c2g-dev/city2graph)](https://github.com/c2g-dev/city2graph)
-[![PyPI version](https://badge.fury.io/py/city2graph.svg)](https://badge.fury.io/py/city2graph)
-[![conda-forge Version](https://anaconda.org/conda-forge/city2graph/badges/version.svg)](https://anaconda.org/conda-forge/city2graph)
-[![PyPI Downloads](https://static.pepy.tech/badge/city2graph)](https://pepy.tech/projects/city2graph)
-[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.15858845.svg)](https://doi.org/10.5281/zenodo.15858845)
-[![License](https://img.shields.io/badge/License-BSD_3--Clause-blue.svg)](https://github.com/c2g-dev/city2graph/blob/main/LICENSE)
-[![Platform](https://anaconda.org/conda-forge/city2graph/badges/platforms.svg)](https://anaconda.org/conda-forge/city2graph)
-[![codecov](https://codecov.io/gh/c2g-dev/city2graph/graph/badge.svg?token=2R449G75Z0)](https://codecov.io/gh/c2g-dev/city2graph)
-[![Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff)
-
 ## Quickstart
 
 Install City2Graph using pip (recommended):
@@ -49,37 +49,11 @@ pip install city2graph
 For graph neural network functionality (PyTorch, PyTorch Geometric):
 
 ```bash
-pip install "city2graph[cpu]"  # CPU only
-pip install "city2graph[cu130]"  # For CUDA 13.0 (GPU)
+pip install "city2graph[cpu]"  # or e.g. "city2graph[cu130]" for CUDA (GPU)
 ```
 
-Supported CUDA options: cu126, cu128, cu130
-
-The CPU, cu126, and cu130 options use PyTorch 2.12 or newer. The cu128 option
-uses PyTorch 2.11 because CUDA 12.8 wheels are no longer published for
-PyTorch 2.12.
-
-Or install with conda (core functionality only):
-
-```bash
-conda install -c conda-forge city2graph
-```
-
-To add PyTorch and PyTorch Geometric (conda):
-
-```bash
-conda install -c conda-forge pytorch pytorch_geometric
-```
-
-For CUDA-enabled PyTorch (conda):
-
-```bash
-conda install -c conda-forge pytorch=2.12.0=*cuda130*
-conda install -c conda-forge pytorch_geometric
-```
-
-!!! warning
-    As conda is not officially supported by PyTorch and PyTorch Geometric anymore, pip is recommended for full PyTorch support. See [Installation](installation.md) for details.
+See [Installation](installation.md) for supported CUDA versions and
+conda-based installation.
 
 ## Examples
 
