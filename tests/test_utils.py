@@ -190,6 +190,69 @@ class TestTessellation(BaseGraphTest):
         assert list(result.columns) == ["geometry", "enclosure_index", "tess_id"]
         assert result.crs == sample_buildings_gdf.crs
 
+    def test_enclosed_tessellation_rectilinear_buildings_not_degenerate(
+        self,
+        sample_crs: str,
+    ) -> None:
+        """Grid-aligned footprints must yield per-building, non-overlapping cells.
+
+        Perfectly rectilinear coordinates make ``shapely.voronoi_polygons``
+        degenerate (GeometryCollection cells, overlapping partitions); the
+        retry ladder must recover via the deterministic jitter rung instead of
+        dropping the enclosure and degrading its buildings to fallback cells.
+        """
+        corners = [(0.0, 0.0), (200.0, 0.0), (200.0, 200.0), (0.0, 200.0), (0.0, 0.0)]
+        barriers = gpd.GeoDataFrame(
+            geometry=[LineString([corners[i], corners[i + 1]]) for i in range(4)],
+            crs=sample_crs,
+        )
+        buildings = gpd.GeoDataFrame(
+            geometry=[
+                Polygon([(40, 40), (80, 40), (80, 80), (40, 80)]),
+                Polygon([(120, 120), (160, 120), (160, 160), (120, 160)]),
+            ],
+            crs=sample_crs,
+        )
+
+        result = utils.create_tessellation(buildings, primary_barriers=barriers, n_jobs=1)
+
+        cells = list(result.geometry)
+        overlap = sum(
+            cells[i].intersection(cells[j]).area
+            for i in range(len(cells))
+            for j in range(i + 1, len(cells))
+        )
+        assert overlap == pytest.approx(0.0, abs=1e-6)
+        for footprint in buildings.geometry:
+            assert result.geometry.contains(footprint.centroid).sum() == 1
+
+    def test_enclosed_tessellation_single_building_enclosures(
+        self,
+        sample_crs: str,
+    ) -> None:
+        """Enclosures holding at most one building each still produce cells.
+
+        ``momepy.enclosed_tessellation`` crashes with "No objects to
+        concatenate" when no enclosure holds two or more buildings; the
+        single-building enclosures must become their buildings' cells instead
+        of degrading the unit to an empty tessellation.
+        """
+        corners = [(0.0, 0.0), (200.0, 0.0), (200.0, 200.0), (0.0, 200.0), (0.0, 0.0)]
+        barriers = gpd.GeoDataFrame(
+            geometry=[LineString([corners[i], corners[i + 1]]) for i in range(4)],
+            crs=sample_crs,
+        )
+        building = gpd.GeoDataFrame(
+            geometry=[Polygon([(80, 80), (120, 80), (120, 120), (80, 120)])],
+            crs=sample_crs,
+        )
+
+        result = utils.create_tessellation(building, primary_barriers=barriers, n_jobs=1)
+
+        assert not result.empty
+        assert list(result.columns) == ["geometry", "enclosure_index", "tess_id"]
+        assert result.geometry.contains(building.geometry.iloc[0].centroid).sum() == 1
+
     def test_tessellation_momepy_error_handling(self, sample_crs: str) -> None:
         """Test tessellation error handling for momepy ValueError (lines 2393-2399)."""
         # Create geometry that might cause momepy to fail with "No objects to concatenate"
@@ -721,7 +784,10 @@ class TestTessellation(BaseGraphTest):
             )
 
         assert result.empty
-        assert calls == [1e-5]  # the pinned precision is never overridden
+        # The pinned precision is never overridden; the final rung retries the
+        # same options once with jittered geometry before degrading.
+        assert calls == [1e-5, 1e-5]
+        assert "retrying with jittered geometry" in caplog.text
         assert "returning empty" in caplog.text
 
     def test_enclosed_tessellation_pinned_grid_size_retries_simplify_false(
@@ -805,7 +871,9 @@ class TestTessellation(BaseGraphTest):
             )
 
         assert result.empty
-        assert calls == [(True, 1e-5)]  # pinned options are never overridden
+        # Pinned options are never overridden; the final rung retries them
+        # once with jittered geometry before degrading.
+        assert calls == [(True, 1e-5), (True, 1e-5)]
         assert "returning empty" in caplog.text
 
     def test_enclosed_tessellation_reraises_unknown_error_on_retry(
@@ -847,7 +915,12 @@ class TestTessellation(BaseGraphTest):
         caplog: pytest.LogCaptureFixture,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """A GEOS crash in the repair simplify=False retry keeps the original cells."""
+        """A GEOS crash in the repair simplify=False retry still drops only the broken cells.
+
+        The repair retry escalates through the jitter rung, whose (mocked)
+        result stays degenerate, so the broken enclosure is dropped while the
+        good one survives.
+        """
         bad_enclosure = Polygon([(0, 0), (10, 0), (10, 10), (0, 10)])
         good_enclosure = Polygon([(20, 0), (25, 0), (25, 5), (20, 5)])
         monkeypatch.setattr(
@@ -886,7 +959,7 @@ class TestTessellation(BaseGraphTest):
             )
 
         assert set(result["enclosure_index"]) == {1}
-        assert "keeping the original cells" in caplog.text
+        assert "retrying with jittered geometry" in caplog.text
         assert "Dropping 1 enclosure(s)" in caplog.text
 
     def test_enclosed_tessellation_degrades_when_concat_error_on_retry(
@@ -966,7 +1039,9 @@ class TestTessellation(BaseGraphTest):
             )
 
         assert result.empty
-        assert calls == [(None, None), (None, 1e-3)]
+        # After the coarse-grid rung the ladder resets to a jittered attempt
+        # at default options before degrading.
+        assert calls == [(None, None), (None, 1e-3), (None, None)]
         assert "returning empty" in caplog.text
 
     def test_enclosed_tessellation_degrades_when_type_error_persists(
@@ -1003,7 +1078,9 @@ class TestTessellation(BaseGraphTest):
             )
 
         assert result.empty
-        assert calls == [(None, None), (None, 1e-3), (False, 1e-3)]
+        # grid_size, then simplify=False, then one jittered attempt at
+        # default options before degrading.
+        assert calls == [(None, None), (None, 1e-3), (False, 1e-3), (None, None)]
         assert "returning empty" in caplog.text
 
     def test_enclosed_tessellation_overlap_retry_failure_drops_enclosures(
@@ -1013,7 +1090,12 @@ class TestTessellation(BaseGraphTest):
         caplog: pytest.LogCaptureFixture,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """A failing overlap-repair retry keeps the good enclosures and drops the broken."""
+        """A failing overlap-repair retry keeps the good enclosures and drops the broken.
+
+        The GEOS crash in the coarser-grid retry escalates to the jitter rung,
+        whose (mocked) result stays degenerate, so the broken enclosure is
+        dropped while the good one survives.
+        """
         bad_enclosure = Polygon([(0, 0), (10, 0), (10, 10), (0, 10)])
         good_enclosure = Polygon([(20, 0), (25, 0), (25, 5), (20, 5)])
         monkeypatch.setattr(
@@ -1048,7 +1130,7 @@ class TestTessellation(BaseGraphTest):
             )
 
         assert set(result["enclosure_index"]) == {1}
-        assert "keeping the original cells" in caplog.text
+        assert "retrying with jittered geometry" in caplog.text
         assert "Dropping 1 enclosure(s)" in caplog.text
 
     def test_enclosed_tessellation_passes_explicit_limit(

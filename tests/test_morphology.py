@@ -1060,6 +1060,77 @@ class TestMorphologicalGraphBarrierAndFallback(TestMorphologyBase):
 
         assert len(nodes["movement"]) == 2
 
+    def test_barrier_geometry_with_stale_crs_is_reprojected(self, sample_crs: str) -> None:
+        """A barrier column left in a pre-``to_crs()`` CRS is reprojected, not rejected.
+
+        ``GeoDataFrame.to_crs()`` only reprojects the active geometry column,
+        so a ``barrier_geometry`` column created beforehand (e.g. by
+        ``process_overture_segments`` on WGS84 data) keeps the original CRS.
+        """
+        lon, lat = -0.12, 51.5  # projects into the EPSG:27700 sample CRS
+        step = 1e-4
+        buildings = gpd.GeoDataFrame(
+            geometry=[
+                Polygon(
+                    [
+                        (lon + 2 * step, lat + 2 * step),
+                        (lon + 4 * step, lat + 2 * step),
+                        (lon + 4 * step, lat + 4 * step),
+                        (lon + 2 * step, lat + 4 * step),
+                    ]
+                )
+            ],
+            crs="EPSG:4326",
+        )
+        segments = gpd.GeoDataFrame(
+            geometry=[
+                LineString([(lon, lat), (lon + 10 * step, lat)]),
+                LineString([(lon + 10 * step, lat), (lon + 10 * step, lat + 10 * step)]),
+                LineString([(lon + 10 * step, lat + 10 * step), (lon, lat + 10 * step)]),
+                LineString([(lon, lat + 10 * step), (lon, lat)]),
+            ],
+            crs="EPSG:4326",
+        )
+        segments["barrier_geometry"] = segments.geometry
+
+        buildings = buildings.to_crs(sample_crs)
+        # Only the active geometry column is reprojected; barrier_geometry
+        # stays in EPSG:4326.
+        stale_segments = segments.to_crs(sample_crs)
+
+        nodes, edges = morphological_graph(
+            buildings,
+            stale_segments,
+            primary_barrier_col="barrier_geometry",
+        )
+
+        fresh_segments = stale_segments.copy()
+        fresh_segments["barrier_geometry"] = fresh_segments.geometry
+        reference_nodes, _ = morphological_graph(
+            buildings,
+            fresh_segments,
+            primary_barrier_col="barrier_geometry",
+        )
+
+        self.validate_basic_output(nodes, edges, ["place", "movement"])
+        assert len(nodes["place"]) == len(reference_nodes["place"])
+        assert nodes["place"].geometry.area.sum() == pytest.approx(
+            reference_nodes["place"].geometry.area.sum()
+        )
+
+        # A CRS-less barrier column (e.g. plain shapely objects) adopts the
+        # segments CRS instead of failing.
+        naive_segments = fresh_segments.copy()
+        naive_segments["barrier_geometry"] = pd.Series(
+            [*fresh_segments.geometry], index=fresh_segments.index, dtype=object
+        )
+        naive_nodes, _ = morphological_graph(
+            buildings,
+            naive_segments,
+            primary_barrier_col="barrier_geometry",
+        )
+        assert len(naive_nodes["place"]) == len(reference_nodes["place"])
+
     def test_none_barrier_geometry_keeps_movement_but_not_barrier(self, sample_crs: str) -> None:
         """A segment with a null barrier geometry stays a movement node but never cuts cells."""
         buildings = gpd.GeoDataFrame(
@@ -1158,6 +1229,68 @@ class TestMorphologicalGraphBarrierAndFallback(TestMorphologyBase):
 
         assert default_nodes["place"].empty
         assert len(fallback_nodes["place"]) == 1
+
+    def test_tessellation_fallback_logs_reason_and_cell_count(
+        self,
+        sample_crs: str,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """Whole-tessellation fallback warns with the failure reason and cell count."""
+        buildings = gpd.GeoDataFrame(
+            geometry=[Polygon([(0.2, 0.2), (0.4, 0.2), (0.4, 0.4), (0.2, 0.4)])],
+            crs=sample_crs,
+        )
+        segments = gpd.GeoDataFrame(geometry=[LineString([(0, 0), (1, 0)])], crs=sample_crs)
+
+        monkeypatch.setattr(
+            "city2graph.morphology.create_tessellation",
+            _raise_no_objects_tessellation,
+        )
+
+        with caplog.at_level(logging.WARNING, logger="city2graph.morphology"):
+            morphological_graph(buildings, segments, tessellation_fallback=True)
+
+        assert any(
+            "could not be created" in message and "1 building-footprint fallback cells" in message
+            for message in caplog.messages
+        )
+
+    def test_include_unenclosed_buildings_logs_missing_count(
+        self,
+        sample_crs: str,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """Appending fallback cells for unenclosed buildings warns with the counts."""
+        buildings = gpd.GeoDataFrame(
+            {"building_id": ["inside", "unenclosed"]},
+            geometry=[
+                Polygon([(0, 0), (1, 0), (1, 1), (0, 1)]),
+                Polygon([(10, 0), (11, 0), (11, 1), (10, 1)]),
+            ],
+            crs=sample_crs,
+        )
+        segments = gpd.GeoDataFrame(
+            geometry=[LineString([(-1, -1), (2, -1)])],
+            crs=sample_crs,
+        )
+
+        monkeypatch.setattr(
+            "city2graph.morphology.create_tessellation",
+            _enclosed_cell_or_fail_on_fallback,
+        )
+        monkeypatch.setattr(
+            "city2graph.morphology._filter_adjacent_tessellation",
+            _passthrough_adjacent_filter,
+        )
+
+        with caplog.at_level(logging.WARNING, logger="city2graph.morphology"):
+            morphological_graph(buildings, segments, include_unenclosed_buildings=True)
+
+        assert any(
+            "covers no cell for 1 of 2 eligible buildings" in message for message in caplog.messages
+        )
 
     def test_fallback_cells_match_source_buildings_exactly(
         self,

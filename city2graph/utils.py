@@ -18,6 +18,7 @@ from collections import defaultdict
 from collections.abc import Iterable
 from collections.abc import Sequence
 from dataclasses import dataclass
+from functools import partial
 from itertools import combinations
 from typing import TYPE_CHECKING
 from typing import Any
@@ -4362,6 +4363,101 @@ def _overfilled_enclosures(
 # default (1e-5) can degenerate numerically inside fragile enclosures.
 _COARSE_GRID_SIZE: float = 1e-3
 
+# Magnitude (map units, i.e. ~1 cm in projected CRS) of the deterministic
+# coordinate jitter used as the last tessellation retry rung. Perfectly
+# rectilinear, grid-aligned footprints produce exactly collinear/cocircular
+# voronoi generator points on which ``shapely.voronoi_polygons`` degenerates
+# (GeometryCollection cells, overlapping partitions); a sub-centimetre jitter
+# breaks the ties without materially moving any geometry.
+_JITTER_MAGNITUDE: float = 0.01
+
+
+def _jitter_hash_unit(coords: np.ndarray, salt: float) -> np.ndarray:
+    """
+    Map coordinate pairs to deterministic pseudo-random values in [0, 1).
+
+    The value is a pure function of the coordinates and the salt, so repeated
+    calls with the same input produce identical output. This keeps the
+    geometry jitter reproducible across runs and consistent for vertices
+    shared between geometries.
+
+    Parameters
+    ----------
+    coords : numpy.ndarray
+        Array of shape (n, 2) with x/y coordinates.
+    salt : float
+        Salt distinguishing independent channels (e.g. x- and y-offsets).
+
+    Returns
+    -------
+    numpy.ndarray
+        One value in [0, 1) per coordinate pair, identical for identical
+        input pairs.
+    """
+    return np.abs(np.sin(coords[:, 0] * 12.9898 + coords[:, 1] * 78.233 + salt) * 43758.5453) % 1.0
+
+
+def _shift_jittered_coordinates(coords: np.ndarray, magnitude: float) -> np.ndarray:
+    """
+    Offset an (n, 2) coordinate array by the deterministic jitter.
+
+    Both offset channels derive from :func:`_jitter_hash_unit`, so the shift
+    is reproducible and identical for identical coordinates.
+
+    Parameters
+    ----------
+    coords : numpy.ndarray
+        Array of shape (n, 2) with x/y coordinates.
+    magnitude : float
+        Maximum absolute offset per axis in map units.
+
+    Returns
+    -------
+    numpy.ndarray
+        The offset coordinates.
+    """
+    dx = (_jitter_hash_unit(coords, 0.0) - 0.5) * 2.0 * magnitude
+    dy = (_jitter_hash_unit(coords, 1.0) - 0.5) * 2.0 * magnitude
+    return coords + np.column_stack([dx, dy])
+
+
+def _jitter_geometry(
+    geometry: gpd.GeoDataFrame | gpd.GeoSeries,
+    magnitude: float = _JITTER_MAGNITUDE,
+) -> gpd.GeoDataFrame | gpd.GeoSeries:
+    """
+    Displace every vertex by a deterministic sub-centimetre offset.
+
+    The offset is a pure function of the vertex coordinates, so identical
+    vertices move identically: rings stay closed, shared party walls stay
+    coincident, and repeated runs produce identical output. Used by the
+    tessellation retry ladder to break the exact collinearity that makes
+    ``shapely.voronoi_polygons`` degenerate on rectilinear footprints.
+
+    Parameters
+    ----------
+    geometry : geopandas.GeoDataFrame or geopandas.GeoSeries
+        Geometries to jitter.
+    magnitude : float, default _JITTER_MAGNITUDE
+        Maximum absolute offset per axis in map units.
+
+    Returns
+    -------
+    geopandas.GeoDataFrame or geopandas.GeoSeries
+        A copy with jittered vertex coordinates.
+    """
+    shift = partial(_shift_jittered_coordinates, magnitude=magnitude)
+    jittered = geometry.copy()
+    if isinstance(jittered, gpd.GeoDataFrame):
+        jittered.geometry = shapely.transform(geometry.geometry, shift)
+    else:
+        jittered = gpd.GeoSeries(
+            shapely.transform(geometry, shift),
+            index=geometry.index,
+            crs=geometry.crs,
+        )
+    return jittered
+
 
 def _classify_tessellation_failure(error: Exception) -> str | None:
     """
@@ -4421,18 +4517,22 @@ def _next_retry_overrides(
         The overrides for the next attempt, or ``None`` when the ladder is
         exhausted and the unit must degrade to an empty tessellation.
     """
-    if kind != "empty":
+    if kind != "empty" and "_jitter" not in overrides:
         if "grid_size" not in kwargs and "grid_size" not in overrides:
             return {**overrides, "grid_size": _COARSE_GRID_SIZE}
         if kind == "simplify" and "simplify" not in kwargs and "simplify" not in overrides:
             return {**overrides, "simplify": False}
+        # The final jitter rung replaces the earlier workarounds instead of
+        # stacking on them: snapping to the coarse grid would re-align the
+        # jittered coordinates and reintroduce the degeneracy.
+        return {"_jitter": True}
     return None
 
 
 def _log_tessellation_retry(
     kind: str,
     error: Exception,
-    adds_grid_size: bool,
+    added_option: str,
 ) -> None:
     """
     Log the retry decision for a known tessellation failure.
@@ -4446,18 +4546,23 @@ def _log_tessellation_retry(
         The failure kind from :func:`_classify_tessellation_failure`.
     error : Exception
         The failure that triggered the retry.
-    adds_grid_size : bool
-        Whether the next rung adds the coarser ``grid_size`` (as opposed to
-        disabling boundary simplification).
+    added_option : str
+        The option the next rung adds: ``"grid_size"``, ``"simplify"`` or
+        ``"_jitter"``.
     """
-    if adds_grid_size and kind == "geos":
+    if added_option == "grid_size" and kind == "geos":
         logger.warning(
             "Tessellation hit a GEOS topology error (%s); retrying with coarser grid_size=1e-3.",
             error,
         )
-    elif adds_grid_size:
+    elif added_option == "grid_size":
         logger.warning(
             "Tessellation boundary simplification failed (%s); retrying with grid_size=1e-3.",
+            error,
+        )
+    elif added_option == "_jitter":
+        logger.warning(
+            "Tessellation stayed degenerate (%s); retrying with jittered geometry.",
             error,
         )
     else:
@@ -4564,11 +4669,8 @@ def _run_tessellation_with_retries(
             if next_overrides is None:
                 log_exhausted(error)
                 return None, overrides
-            _log_tessellation_retry(
-                kind,
-                error,
-                adds_grid_size="grid_size" not in overrides and "grid_size" in next_overrides,
-            )
+            added_option = next(key for key in next_overrides if key not in overrides)
+            _log_tessellation_retry(kind, error, added_option)
             overrides = next_overrides
 
 
@@ -4586,9 +4688,11 @@ def _repair_or_drop_degenerate_enclosures(
     under ``simplify=False``), so the cells are validated against the
     enclosure areas before they can poison downstream spatial joins. A broken
     partition is retried once with a coarser ``grid_size`` (unless one is
-    already in effect); when the retry itself fails with a known error the
-    original cells are kept, and enclosures that stay degenerate have their
-    cells dropped with a warning.
+    already in effect) and then once with deterministically jittered geometry
+    (which breaks the exact collinearity that degenerates the voronoi
+    partition of rectilinear footprints); when a retry itself fails with a
+    known error the original cells are kept, and enclosures that stay
+    degenerate have their cells dropped with a warning.
 
     Parameters
     ----------
@@ -4616,7 +4720,7 @@ def _repair_or_drop_degenerate_enclosures(
             "grid_size=1e-3.",
             len(broken),
         )
-        retried, _ = _run_tessellation_with_retries(
+        retried, overrides = _run_tessellation_with_retries(
             run_tessellation,
             kwargs,
             overrides={**overrides, "grid_size": _COARSE_GRID_SIZE},
@@ -4625,14 +4729,90 @@ def _repair_or_drop_degenerate_enclosures(
         if retried is not None:
             tessellation = retried
             broken = _overfilled_enclosures(tessellation, enclosures)
-    if broken:
+    if broken and "_jitter" not in overrides:
         logger.warning(
-            "Dropping %d enclosure(s) whose tessellation cells overlap instead of "
-            "partitioning the enclosure.",
+            "Tessellation kept overlapping cells in %d enclosure(s); retrying with "
+            "jittered geometry.",
             len(broken),
         )
-        tessellation = tessellation.loc[~tessellation["enclosure_index"].isin(broken)]
+        # Jitter replaces the earlier workarounds (see _next_retry_overrides):
+        # the coarse grid would re-align the jittered coordinates.
+        retried, _ = _run_tessellation_with_retries(
+            run_tessellation,
+            kwargs,
+            overrides={"_jitter": True},
+            log_exhausted=_log_repair_retry_failure,
+        )
+        if retried is not None:
+            tessellation = retried
+            broken = _overfilled_enclosures(tessellation, enclosures)
+    if broken:
+        dropped = tessellation["enclosure_index"].isin(broken)
+        logger.warning(
+            "Dropping %d enclosure(s) whose tessellation cells overlap instead of "
+            "partitioning the enclosure; %d cell(s) removed and their buildings "
+            "degrade to footprint fallback cells.",
+            len(broken),
+            int(dropped.sum()),
+        )
+        tessellation = tessellation.loc[~dropped]
     return tessellation
+
+
+def _run_enclosed_tessellation(
+    *,
+    geometry: gpd.GeoDataFrame | gpd.GeoSeries,
+    enclosures: gpd.GeoDataFrame,
+    shrink: float,
+    segment: float,
+    threshold: float,
+    n_jobs: int,
+    kwargs: dict[str, object],
+    **extra_kwargs: object,
+) -> gpd.GeoDataFrame:
+    """
+    Run momepy enclosed tessellation with retry-specific option overrides.
+
+    The retry ladder passes only override options into this helper. This
+    function merges those options with the caller-supplied momepy options and
+    handles the internal ``_jitter`` marker before dispatching to momepy.
+
+    Parameters
+    ----------
+    geometry : geopandas.GeoDataFrame or geopandas.GeoSeries
+        The geometries to tessellate around.
+    enclosures : geopandas.GeoDataFrame
+        The enclosures to tessellate within.
+    shrink : float
+        The distance to shrink the geometry.
+    segment : float
+        The segment length for discretizing the geometry.
+    threshold : float
+        The threshold for snapping skeleton endpoints.
+    n_jobs : int
+        The number of jobs to use for parallel processing.
+    kwargs : dict[str, object]
+        Caller-supplied momepy options.
+    **extra_kwargs : object
+        Retry overrides, such as ``simplify``, ``grid_size`` or the internal
+        ``_jitter`` marker.
+
+    Returns
+    -------
+    geopandas.GeoDataFrame
+        The enclosed tessellation.
+    """
+    options = {**kwargs, **extra_kwargs}
+    tess_geometry = _jitter_geometry(geometry) if options.pop("_jitter", False) else geometry
+    return momepy.enclosed_tessellation(
+        geometry=tess_geometry,
+        enclosures=enclosures,
+        shrink=shrink,
+        segment=segment,
+        threshold=threshold,
+        n_jobs=n_jobs,
+        **options,
+    )
 
 
 def _create_enclosed_tessellation(
@@ -4689,33 +4869,36 @@ def _create_enclosed_tessellation(
     )
 
     if not enclosures.empty:
-
-        def _run_enclosed_tessellation(**extra_kwargs: object) -> gpd.GeoDataFrame:
-            # ``extra_kwargs`` (e.g. ``simplify`` or a coarser ``grid_size``) are
-            # applied as retry overrides on top of the caller-supplied ``kwargs``.
-            return momepy.enclosed_tessellation(
-                geometry=geometry,
-                enclosures=enclosures,
-                shrink=shrink,
-                segment=segment,
-                threshold=threshold,
-                n_jobs=n_jobs,
-                **{**kwargs, **extra_kwargs},
-            )
-
-        tessellation, overrides = _run_tessellation_with_retries(
+        run_enclosed_tessellation = partial(
             _run_enclosed_tessellation,
+            geometry=geometry,
+            enclosures=enclosures,
+            shrink=shrink,
+            segment=segment,
+            threshold=threshold,
+            n_jobs=n_jobs,
+            kwargs=kwargs,
+        )
+        tessellation, overrides = _run_tessellation_with_retries(
+            run_enclosed_tessellation,
             kwargs,
         )
         if tessellation is None:
-            return _create_empty_tessellation(geometry.crs)
-        tessellation = _repair_or_drop_degenerate_enclosures(
-            tessellation,
-            enclosures,
-            _run_enclosed_tessellation,
-            kwargs,
-            overrides,
-        )
+            # ``momepy.enclosed_tessellation`` crashes with "No objects to
+            # concatenate" when no enclosure holds two or more buildings,
+            # although every single-building enclosure is a perfectly valid
+            # cell; recover those units instead of degrading them to empty.
+            tessellation = _recover_tessellation_without_splits(geometry, enclosures)
+            if tessellation is None:
+                return _create_empty_tessellation(geometry.crs)
+        else:
+            tessellation = _repair_or_drop_degenerate_enclosures(
+                tessellation,
+                enclosures,
+                run_enclosed_tessellation,
+                kwargs,
+                overrides,
+            )
     else:
         tessellation = _create_empty_tessellation(geometry.crs)
 
@@ -4728,6 +4911,99 @@ def _create_enclosed_tessellation(
         for i, j in zip(tessellation["enclosure_index"], tessellation.index, strict=False)
     ]
     return tessellation.reset_index(drop=True)
+
+
+def _recover_tessellation_without_splits(
+    geometry: gpd.GeoDataFrame | gpd.GeoSeries,
+    enclosures: gpd.GeoDataFrame,
+) -> gpd.GeoDataFrame | None:
+    """
+    Recover the tessellation after momepy's empty-concatenation crash.
+
+    ``momepy.enclosed_tessellation`` voronoi-partitions only enclosures that
+    intersect two or more buildings and crashes with "No objects to
+    concatenate" when none exist, although single-building and empty
+    enclosures are perfectly valid cells. When that precondition holds (and
+    at least one polygonal building sits in an enclosure) the equivalent
+    output is built directly; otherwise ``None`` signals that the failure was
+    genuine and the unit must degrade to an empty tessellation.
+
+    Parameters
+    ----------
+    geometry : geopandas.GeoDataFrame or geopandas.GeoSeries
+        Building footprints passed to the tessellation.
+    enclosures : geopandas.GeoDataFrame
+        Enclosure polygons produced by ``momepy.enclosures``.
+
+    Returns
+    -------
+    geopandas.GeoDataFrame or None
+        The recovered tessellation, or ``None`` when recovery does not apply.
+    """
+    polygonal = geometry.geometry.notna() & geometry.geometry.geom_type.isin(
+        ["Polygon", "MultiPolygon"],
+    )
+    buildings = geometry[polygonal]
+    if buildings.empty:
+        return None
+    enclosure_positions, _ = buildings.sindex.query(
+        enclosures.geometry,
+        predicate="intersects",
+    )
+    if len(enclosure_positions) == 0:
+        return None
+    _, counts = np.unique(enclosure_positions, return_counts=True)
+    if (counts > 1).any():
+        # Some enclosure did need splitting, so the crash came from elsewhere.
+        return None
+    logger.warning(
+        "Momepy could not tessellate because no enclosure holds two or more "
+        "buildings; assigning single-building enclosures as cells directly.",
+    )
+    return _enclosure_cells_without_splits(buildings, enclosures)
+
+
+def _enclosure_cells_without_splits(
+    geometry: gpd.GeoDataFrame | gpd.GeoSeries,
+    enclosures: gpd.GeoDataFrame,
+) -> gpd.GeoDataFrame:
+    """
+    Build the enclosed tessellation when no enclosure needs splitting.
+
+    Equivalent of the ``momepy.enclosed_tessellation`` output for the case its
+    own implementation crashes on: every enclosure intersecting exactly one
+    building becomes that building's cell (indexed by the building), and
+    enclosures without buildings keep momepy's negative-index convention.
+
+    Parameters
+    ----------
+    geometry : geopandas.GeoDataFrame or geopandas.GeoSeries
+        Building footprints.
+    enclosures : geopandas.GeoDataFrame
+        Enclosure polygons produced by ``momepy.enclosures``.
+
+    Returns
+    -------
+    geopandas.GeoDataFrame
+        One cell per enclosure with the ``enclosure_index`` column set,
+        matching the raw momepy output schema.
+    """
+    enclosure_positions, building_positions = geometry.sindex.query(
+        enclosures.geometry,
+        predicate="intersects",
+    )
+    cell_index = np.full(len(enclosures), None, dtype=object)
+    cell_index[enclosure_positions] = geometry.geometry.index.to_numpy()[building_positions]
+    empty_mask = np.array([index is None for index in cell_index])
+    cell_index[empty_mask] = range(-int(empty_mask.sum()), 0)
+    cells = gpd.GeoDataFrame(
+        {"enclosure_index": enclosures.index},
+        geometry=enclosures.geometry.to_numpy(),
+        index=pd.Index(cell_index),
+        crs=enclosures.crs,
+    )
+    # Match the raw momepy output column order (geometry first).
+    return cells[["geometry", "enclosure_index"]]
 
 
 def _compute_enclosure_limit(
@@ -5528,6 +5804,58 @@ def _resolve_type_parameter(
     return param.get(type_key) if isinstance(param, dict) else param
 
 
+def _get_style_param(
+    global_kwargs: dict[str, Any],
+    name: str,
+    type_key: str | tuple[str, str, str] | None,
+) -> Any:  # noqa: ANN401
+    """
+    Get a style parameter value with optional type-specific lookup.
+
+    Type-specific plotting options are stored as dictionaries keyed by node or
+    edge type. This helper resolves those dictionaries when a type key is
+    available and otherwise returns the raw parameter value.
+
+    Parameters
+    ----------
+    global_kwargs : dict[str, Any]
+        The kwargs passed to the main plot_graph function.
+    name : str
+        Parameter name to look up.
+    type_key : str or tuple or None
+        The key identifying the node or edge type.
+
+    Returns
+    -------
+    Any
+        The parameter value, or type-specific value if ``type_key`` is set.
+    """
+    val = global_kwargs.get(name)
+    return _resolve_type_parameter(val, type_key) if type_key else val
+
+
+def _or_default(val: Any, default: Any) -> Any:  # noqa: ANN401
+    """
+    Return a fallback value when the resolved style value is None.
+
+    Plotting defaults should replace missing values while preserving explicit
+    falsy values such as ``0`` or ``False``.
+
+    Parameters
+    ----------
+    val : Any
+        Value to check.
+    default : Any
+        Default value to use if ``val`` is None.
+
+    Returns
+    -------
+    Any
+        ``val`` if not None, otherwise ``default``.
+    """
+    return val if val is not None else default
+
+
 def _resolve_style_kwargs(
     global_kwargs: dict[str, Any],
     type_key: str | tuple[str, str, str] | None,
@@ -5556,48 +5884,6 @@ def _resolve_style_kwargs(
     dict
         Resolved style arguments ready for _plot_gdf.
     """
-
-    def _get_param(name: str) -> Any:  # noqa: ANN401
-        """
-        Get parameter value from kwargs with optional type-specific lookup.
-
-        This helper looks up a parameter by name from the enclosing function's
-        global_kwargs dict, applying type-specific resolution if a type_key is set.
-
-        Parameters
-        ----------
-        name : str
-            Parameter name to look up.
-
-        Returns
-        -------
-        Any
-            The parameter value, or type-specific value if type_key is set.
-        """
-        val = global_kwargs.get(name)
-        return _resolve_type_parameter(val, type_key) if type_key else val
-
-    def _or_default(val: Any, default: Any) -> Any:  # noqa: ANN401
-        """
-        Return val if not None, otherwise return default.
-
-        This helper provides a None-safe default value fallback, ensuring that
-        explicit None values are replaced with the specified default.
-
-        Parameters
-        ----------
-        val : Any
-            Value to check.
-        default : Any
-            Default value to use if val is None.
-
-        Returns
-        -------
-        Any
-            Val if not None, otherwise default.
-        """
-        return val if val is not None else default
-
     # Keys reserved for C2G-specific styling logic
     c2g_keys = {
         "node_color",
@@ -5627,25 +5913,46 @@ def _resolve_style_kwargs(
         resolved.update(
             {
                 "linewidth": _or_default(
-                    _get_param("edge_linewidth"), PLOT_DEFAULTS["edge_linewidth"]
+                    _get_style_param(global_kwargs, "edge_linewidth", type_key),
+                    PLOT_DEFAULTS["edge_linewidth"],
                 ),
-                "alpha": _or_default(_get_param("edge_alpha"), PLOT_DEFAULTS["edge_alpha"]),
-                "zorder": _or_default(_get_param("edge_zorder"), PLOT_DEFAULTS["edge_zorder"]),
-                "color": _or_default(_get_param("edge_color"), default_color),
+                "alpha": _or_default(
+                    _get_style_param(global_kwargs, "edge_alpha", type_key),
+                    PLOT_DEFAULTS["edge_alpha"],
+                ),
+                "zorder": _or_default(
+                    _get_style_param(global_kwargs, "edge_zorder", type_key),
+                    PLOT_DEFAULTS["edge_zorder"],
+                ),
+                "color": _or_default(
+                    _get_style_param(global_kwargs, "edge_color", type_key),
+                    default_color,
+                ),
             }
         )
     else:
         resolved.update(
             {
                 "color": _or_default(
-                    _get_param("node_color"), default_color or PLOT_DEFAULTS["node_color"]
+                    _get_style_param(global_kwargs, "node_color", type_key),
+                    default_color or PLOT_DEFAULTS["node_color"],
                 ),
-                "alpha": _or_default(_get_param("node_alpha"), PLOT_DEFAULTS["node_alpha"]),
-                "zorder": _or_default(_get_param("node_zorder"), PLOT_DEFAULTS["node_zorder"]),
+                "alpha": _or_default(
+                    _get_style_param(global_kwargs, "node_alpha", type_key),
+                    PLOT_DEFAULTS["node_alpha"],
+                ),
+                "zorder": _or_default(
+                    _get_style_param(global_kwargs, "node_zorder", type_key),
+                    PLOT_DEFAULTS["node_zorder"],
+                ),
                 "edgecolor": _or_default(
-                    _get_param("node_edgecolor"), PLOT_DEFAULTS["node_edgecolor"]
+                    _get_style_param(global_kwargs, "node_edgecolor", type_key),
+                    PLOT_DEFAULTS["node_edgecolor"],
                 ),
-                "markersize": _or_default(_get_param("markersize"), PLOT_DEFAULTS["markersize"]),
+                "markersize": _or_default(
+                    _get_style_param(global_kwargs, "markersize", type_key),
+                    PLOT_DEFAULTS["markersize"],
+                ),
             }
         )
     return resolved

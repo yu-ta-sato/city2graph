@@ -1751,6 +1751,7 @@ def _create_and_filter_tessellation(
                 context,
                 distance,
                 segments_filtered,
+                reason="could not be created (barriers enclose no area)",
             )
 
     tessellation = tessellation.rename(columns={"tess_id": _PLACE_ID_COL})
@@ -1818,6 +1819,7 @@ def _create_and_filter_tessellation(
             context,
             distance,
             segments_filtered,
+            reason="retained no cells after filtering",
         )
 
     return tessellation
@@ -1851,6 +1853,12 @@ def _include_unenclosed_building_tessellation(
     if missing_buildings.empty:
         return tessellation
 
+    logger.warning(
+        "Enclosed tessellation covers no cell for %d of %d eligible buildings; "
+        "adding building-footprint fallback cells.",
+        len(missing_buildings),
+        len(buildings_gdf),
+    )
     tessellation = tessellation.copy()
     if "enclosure_index" in tessellation.columns:
         tessellation["enclosure_index"] = tessellation["enclosure_index"].astype(str)
@@ -1987,6 +1995,7 @@ def _fallback_tessellation_without_enclosures(
     context: _MorphologyContext,
     distance: float | None,
     segments_filtered: gpd.GeoDataFrame,
+    reason: str = "produced no usable cells",
 ) -> gpd.GeoDataFrame:
     """
     Build place cells from building footprints when enclosed tessellation fails.
@@ -2005,6 +2014,9 @@ def _fallback_tessellation_without_enclosures(
         Maximum network distance for a cell to be retained.
     segments_filtered : geopandas.GeoDataFrame
         Reachable movement segments used for the network-distance filters.
+    reason : str, optional
+        Why the enclosed tessellation is unavailable, used in the warning log
+        so operators can tell the failure paths apart.
 
     Returns
     -------
@@ -2034,6 +2046,11 @@ def _fallback_tessellation_without_enclosures(
             context.extent_buffer,
             field=context.field,
         )
+    logger.warning(
+        "Enclosed tessellation %s; using %d building-footprint fallback cells.",
+        reason,
+        len(tessellation),
+    )
     if context.keep_buildings:
         tessellation = _add_building_info(tessellation, buildings)
     else:
@@ -2245,9 +2262,18 @@ def _prepare_barriers(
     if geom_col and geom_col in segments.columns and geom_col != "geometry":
         # The alternative column may be object-dtype (e.g. after assigning
         # None values or a parquet round trip), so coerce it to a GeoSeries.
+        barrier_series = gpd.GeoSeries(segments[geom_col], index=segments.index)
+        if segments.crs is not None:
+            if barrier_series.crs is None:
+                barrier_series = barrier_series.set_crs(segments.crs)
+            elif barrier_series.crs != segments.crs:
+                # to_crs() on a GeoDataFrame only reprojects the active
+                # geometry column, so a barrier column created before the
+                # reprojection keeps its original CRS.
+                barrier_series = barrier_series.to_crs(segments.crs)
         barriers = gpd.GeoDataFrame(
             segments.drop(columns=["geometry"]),
-            geometry=gpd.GeoSeries(segments[geom_col], index=segments.index, crs=segments.crs),
+            geometry=barrier_series,
             crs=segments.crs,
         )
     else:
