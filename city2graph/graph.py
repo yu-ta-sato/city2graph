@@ -32,7 +32,7 @@ import geopandas as gpd
 import networkx as nx
 import numpy as np
 import pandas as pd
-from shapely import wkb
+import shapely
 from shapely.geometry import LineString
 
 # Internal imports from city2graph package
@@ -82,6 +82,79 @@ __all__ = [
 TORCH_ERROR_MSG = "PyTorch and PyTorch Geometric required for graph conversion functionality."
 DEVICE_ERROR_MSG = "Device must be 'cuda', 'cpu', a torch.device object, or None"
 GRAPH_NO_NODES_MSG = "Graph has no nodes"
+
+# Lazily populated torch.dtype -> numpy.dtype mapping (torch is an optional import).
+_TORCH_TO_NUMPY_DTYPE: dict[Any, np.dtype[Any]] | None = None
+
+
+def _torch_dtype_to_numpy(dtype: torch.dtype) -> np.dtype[Any]:
+    """
+    Map a torch dtype to the corresponding NumPy dtype.
+
+    Uses a lazily built module-level lookup table to avoid allocating a
+    temporary tensor on every call. Unknown dtypes fall back to conversion
+    through an empty tensor, preserving torch's own conversion behaviour.
+
+    Parameters
+    ----------
+    dtype : torch.dtype
+        Torch dtype to convert.
+
+    Returns
+    -------
+    numpy.dtype
+        Equivalent NumPy dtype.
+    """
+    global _TORCH_TO_NUMPY_DTYPE  # noqa: PLW0603
+    if _TORCH_TO_NUMPY_DTYPE is None:
+        _TORCH_TO_NUMPY_DTYPE = {
+            torch.float16: np.dtype(np.float16),
+            torch.float32: np.dtype(np.float32),
+            torch.float64: np.dtype(np.float64),
+            torch.int8: np.dtype(np.int8),
+            torch.int16: np.dtype(np.int16),
+            torch.int32: np.dtype(np.int32),
+            torch.int64: np.dtype(np.int64),
+            torch.uint8: np.dtype(np.uint8),
+            torch.bool: np.dtype(np.bool_),
+        }
+    numpy_dtype = _TORCH_TO_NUMPY_DTYPE.get(dtype)
+    if numpy_dtype is None:
+        numpy_dtype = torch.empty((), dtype=dtype).numpy().dtype
+        _TORCH_TO_NUMPY_DTYPE[dtype] = numpy_dtype
+    return numpy_dtype
+
+
+def _get_last_occurrence_indexer(
+    index: pd.Index,
+    ids: pd.Index,
+) -> np.ndarray[tuple[int, ...], np.dtype[np.int64]]:
+    """
+    Map identifiers to their positions in an index, keeping last occurrences.
+
+    Behaves like ``index.get_indexer`` but also supports non-unique indexes,
+    where each identifier resolves to the position of its last occurrence.
+    Identifiers absent from the index map to ``-1``.
+
+    Parameters
+    ----------
+    index : pd.Index
+        Index of node identifiers to map into.
+    ids : pd.Index
+        Identifiers to resolve to integer positions.
+
+    Returns
+    -------
+    numpy.ndarray
+        Integer positions of ``ids`` in ``index``, with ``-1`` for misses.
+    """
+    if index.is_unique:
+        return index.get_indexer(ids)
+
+    keep_mask = ~index.duplicated(keep="last")
+    kept_positions = np.flatnonzero(keep_mask)
+    indexer = index[keep_mask].get_indexer(ids)
+    return np.where(indexer >= 0, kept_positions[np.maximum(indexer, 0)], -1)
 
 
 def _unique_unordered_pairs(srcs: list[Any], dsts: list[Any]) -> list[tuple[Any, Any]]:
@@ -418,17 +491,9 @@ class PyGConverter(BaseGraphConverter):
             self._validate_edge_gdf_for_pyg(edges, directed=directed_bool)
 
         if edges is not None and not edges.empty:
-            edge_pairs = self._create_edge_indices(
-                edges,
-                id_mapping,
-                id_mapping,
-            )
-            if edge_pairs:
-                edge_index = torch.tensor(
-                    np.array(edge_pairs).T,
-                    dtype=torch.long,
-                    device=device,
-                )
+            edge_pairs = self._create_edge_indices(edges, nodes.index)
+            if edge_pairs.size:
+                edge_index = torch.from_numpy(edge_pairs).to(device)
             edge_attr = self._create_features(edges, edge_feature_cols_homo)
 
             # Symmetrize edges for undirected graphs
@@ -600,11 +665,12 @@ class PyGConverter(BaseGraphConverter):
         )
 
         # Process edges
+        node_indices = {node_type: gdf.index for node_type, gdf in nodes.items()}
         directed_by_et, symmetrized_by_et, reverse_et_map, gen_reverse_et_map = (
             self._process_hetero_edges(
                 data,
                 edges_dict,
-                node_mappings,
+                node_indices,
                 edge_feature_cols_hetero,
             )
         )
@@ -684,7 +750,7 @@ class PyGConverter(BaseGraphConverter):
         self,
         data: HeteroData,
         edges_dict: dict[tuple[str, str, str], gpd.GeoDataFrame],
-        node_mappings: dict[str, dict[str, dict[str | int, int] | str | list[str | int]]],
+        node_indices: dict[str, pd.Index],
         edge_feature_cols: dict[tuple[str, str, str], list[str]] | None,
     ) -> tuple[
         dict[tuple[str, str, str], bool],
@@ -705,8 +771,8 @@ class PyGConverter(BaseGraphConverter):
             HeteroData object to populate with edge information.
         edges_dict : dict[tuple[str, str, str], gpd.GeoDataFrame]
             Dictionary mapping edge types to GeoDataFrames.
-        node_mappings : dict
-            Dictionary containing node mapping information.
+        node_indices : dict[str, pd.Index]
+            Dictionary mapping node types to their original node ID indexes.
         edge_feature_cols : dict[tuple[str, str, str], list[str]], optional
             Dictionary mapping edge types to feature column names.
 
@@ -731,14 +797,6 @@ class PyGConverter(BaseGraphConverter):
             src_type, _, dst_type = edge_type
             is_directed_et = directed_by_et[edge_type]
 
-            # Get the mapping dictionaries
-            src_mapping_raw = node_mappings[src_type]["mapping"]
-            dst_mapping_raw = node_mappings[dst_type]["mapping"]
-            assert isinstance(src_mapping_raw, dict), f"Expected dict mapping for {src_type}"
-            assert isinstance(dst_mapping_raw, dict), f"Expected dict mapping for {dst_type}"
-            src_mapping: dict[str | int, int] = src_mapping_raw
-            dst_mapping: dict[str | int, int] = dst_mapping_raw
-
             if edge_gdf is not None and not edge_gdf.empty:
                 # Validate edge table
                 self._validate_edge_gdf_for_pyg(
@@ -747,12 +805,12 @@ class PyGConverter(BaseGraphConverter):
 
                 edge_pairs = self._create_edge_indices(
                     edge_gdf,
-                    src_mapping,
-                    dst_mapping,
+                    node_indices[src_type],
+                    node_indices[dst_type],
                 )
                 edge_index = (
-                    torch.tensor(np.array(edge_pairs).T, dtype=torch.long, device=device)
-                    if edge_pairs
+                    torch.from_numpy(edge_pairs).to(device)
+                    if edge_pairs.size
                     else torch.zeros((2, 0), dtype=torch.long, device=device)
                 )
 
@@ -934,73 +992,58 @@ class PyGConverter(BaseGraphConverter):
     def _create_edge_indices(
         self,
         edge_gdf: gpd.GeoDataFrame,
-        source_mapping: dict[str | int, int],
-        target_mapping: dict[str | int, int] | None = None,
-    ) -> list[list[int]]:
+        source_index: pd.Index,
+        target_index: pd.Index | None = None,
+    ) -> np.ndarray[tuple[int, ...], np.dtype[np.int64]]:
         """
         Create edge connectivity matrix from edge data using MultiIndex.
 
         Extracts source and target node IDs from the MultiIndex of the edge GeoDataFrame
         and maps them to sequential integer indices required by PyTorch Geometric.
+        Edges referencing node IDs absent from the node indexes are dropped.
 
         Parameters
         ----------
         edge_gdf : geopandas.GeoDataFrame
             GeoDataFrame with MultiIndex containing (source_id, target_id) pairs.
-        source_mapping : dict[str | int, int]
-            Mapping from original source node IDs to integer indices.
-        target_mapping : dict[str | int, int], optional
-            Mapping from original target node IDs to integer indices.
-            If None, uses source_mapping.
+        source_index : pd.Index
+            Index of original source node IDs, in node order.
+        target_index : pd.Index, optional
+            Index of original target node IDs, in node order.
+            If None, uses source_index.
 
         Returns
         -------
-        list[list[int]]
-            Edge connectivity matrix as [source_indices, target_indices].
+        numpy.ndarray
+            Edge connectivity matrix of shape ``(2, num_valid_edges)``.
         """
-        target_mapping = target_mapping or source_mapping
+        target_index = source_index if target_index is None else target_index
 
         # Extract source and target IDs from MultiIndex
         source_ids = edge_gdf.index.get_level_values(0)
         target_ids = edge_gdf.index.get_level_values(1)
 
-        # Convert types if needed and validate
-        source_ids = pd.Series(source_ids) if isinstance(source_ids, pd.Index) else source_ids
-        target_ids = pd.Series(target_ids) if isinstance(target_ids, pd.Index) else target_ids
+        # Map original node IDs to integer positions (-1 marks unknown nodes)
+        from_indices = _get_last_occurrence_indexer(source_index, source_ids)
+        to_indices = _get_last_occurrence_indexer(target_index, target_ids)
 
-        # Find edges with valid source and target nodes
-        valid_src_mask = source_ids.isin(source_mapping.keys())
-        valid_dst_mask = target_ids.isin(target_mapping.keys())
-        valid_edges_mask = valid_src_mask & valid_dst_mask
-
-        # Process valid edges using vectorized operations
-        valid_sources = source_ids[valid_edges_mask]
-        valid_targets = target_ids[valid_edges_mask]
-
-        # Map original node IDs to integer indices
-        from_indices: np.ndarray[tuple[int, ...], np.dtype[np.int64]] = cast(
-            "np.ndarray[tuple[int, ...], np.dtype[np.int64]]",
-            valid_sources.map(
-                source_mapping,
-            ).to_numpy(dtype=int),
-        )
-        to_indices: np.ndarray[tuple[int, ...], np.dtype[np.int64]] = cast(
-            "np.ndarray[tuple[int, ...], np.dtype[np.int64]]",
-            valid_targets.map(
-                target_mapping,
-            ).to_numpy(dtype=int),
-        )
-
-        combined_array = np.column_stack([from_indices, to_indices]).astype(int)
-        result: list[list[int]] = combined_array.tolist()
-        return result
+        # Keep only edges whose both endpoints resolved to known nodes
+        valid_edges_mask = (from_indices >= 0) & (to_indices >= 0)
+        return np.stack(
+            [from_indices[valid_edges_mask], to_indices[valid_edges_mask]],
+        ).astype(np.int64, copy=False)
 
     def _edge_index_metadata(
         self,
         edges: gpd.GeoDataFrame,
         *,
         symmetrize: bool,
-    ) -> tuple[list[str | None] | None, list[list[str | int]], list[str | int] | None, bool]:
+    ) -> tuple[
+        list[str | None] | None,
+        list[np.ndarray[tuple[int, ...], np.dtype[Any]]],
+        np.ndarray[tuple[int, ...], np.dtype[Any]] | None,
+        bool,
+    ]:
         """
         Build edge index metadata, promoting opt-in multigraphs to keyed indexes.
 
@@ -1022,12 +1065,12 @@ class PyGConverter(BaseGraphConverter):
         """
         index_names = list(edges.index.names) if hasattr(edges.index, "names") else None
         edge_idx_vals = [
-            edges.index.get_level_values(i).tolist() for i in range(edges.index.nlevels)
+            edges.index.get_level_values(i).to_numpy() for i in range(edges.index.nlevels)
         ]
 
         is_multigraph = edges.index.nlevels >= 3
         if self.multigraph and len(edge_idx_vals) == 2:
-            edge_idx_vals.append(list(range(len(edges))))
+            edge_idx_vals.append(np.arange(len(edges)))
             if index_names is not None:
                 index_names.append("key")
             is_multigraph = True
@@ -1381,8 +1424,8 @@ class PyGConverter(BaseGraphConverter):
 
     @staticmethod
     def _symmetrize_edge_index_values(
-        edge_idx_vals: list[list[str | int]],
-    ) -> list[list[str | int]]:
+        edge_idx_vals: list[np.ndarray[tuple[int, ...], np.dtype[Any]]],
+    ) -> list[np.ndarray[tuple[int, ...], np.dtype[Any]]]:
         """
         Symmetrize edge index values for undirected graph metadata.
 
@@ -1391,27 +1434,29 @@ class PyGConverter(BaseGraphConverter):
 
         Parameters
         ----------
-        edge_idx_vals : list[list[str | int]]
-            Two-element list: [level_0_values, level_1_values].
+        edge_idx_vals : list[numpy.ndarray]
+            Per-level index value arrays; the first two are source and target.
 
         Returns
         -------
-        list[list[str | int]]
-            Symmetrized edge index values.
+        list[numpy.ndarray]
+            Symmetrized edge index value arrays.
         """
         if len(edge_idx_vals) < 2:
             return edge_idx_vals
 
-        srcs = np.asarray(edge_idx_vals[0], dtype=object)
-        dsts = np.asarray(edge_idx_vals[1], dtype=object)
-        non_self_loop_mask = srcs != dsts
+        srcs, dsts = edge_idx_vals[0], edge_idx_vals[1]
+        # Compare as objects so mixed-dtype levels keep current semantics
+        non_self_loop_mask = np.asarray(srcs, dtype=object) != np.asarray(dsts, dtype=object)
 
-        symmetrized = [list(values) for values in edge_idx_vals]
-        symmetrized[0].extend(dsts[non_self_loop_mask].tolist())
-        symmetrized[1].extend(srcs[non_self_loop_mask].tolist())
-        for level_idx in range(2, len(edge_idx_vals)):
-            level_values = np.asarray(edge_idx_vals[level_idx], dtype=object)
-            symmetrized[level_idx].extend(level_values[non_self_loop_mask].tolist())
+        symmetrized = [
+            np.concatenate([srcs, dsts[non_self_loop_mask]]),
+            np.concatenate([dsts, srcs[non_self_loop_mask]]),
+        ]
+        symmetrized.extend(
+            np.concatenate([level_values, level_values[non_self_loop_mask]])
+            for level_values in edge_idx_vals[2:]
+        )
         return symmetrized
 
     @staticmethod
@@ -1616,7 +1661,7 @@ class PyGConverter(BaseGraphConverter):
             geometry = self._create_edge_geometries(obj_data, edge_type, is_hetero, data)
 
         # Reconstruct edge index
-        stored_values: list[list[str | int]] | None = None
+        stored_values: list[np.ndarray[tuple[int, ...], np.dtype[Any]]] | None = None
         if is_hetero and edge_type and isinstance(metadata.edge_index_values, dict):
             stored_values = metadata.edge_index_values.get(edge_type)
         elif not is_hetero and isinstance(metadata.edge_index_values, list):
@@ -2251,7 +2296,7 @@ class PyGConverter(BaseGraphConverter):
         numeric_cols = gdf[valid_cols].select_dtypes(include=np.number).columns.tolist()
 
         # Map torch dtype to numpy dtype for consistency
-        numpy_dtype = torch.tensor(0, dtype=dtype).numpy().dtype
+        numpy_dtype = _torch_dtype_to_numpy(dtype)
 
         # Ensure consistent column order based on feature_cols
         ordered_cols = [col for col in feature_cols if col in numeric_cols]
@@ -2296,7 +2341,7 @@ class PyGConverter(BaseGraphConverter):
             centroids = geom_series.centroid
 
         # Map torch dtype to numpy dtype for consistency
-        numpy_dtype = torch.tensor(0, dtype=dtype).numpy().dtype
+        numpy_dtype = _torch_dtype_to_numpy(dtype)
         pos_data = np.column_stack(
             [
                 centroids.x.to_numpy(),
@@ -2304,7 +2349,7 @@ class PyGConverter(BaseGraphConverter):
             ],
         ).astype(numpy_dtype)
 
-        return torch.tensor(pos_data, dtype=dtype, device=device)
+        return torch.from_numpy(pos_data).to(device=device, dtype=dtype)
 
     def _serialize_geometries(self, gdf: gpd.GeoDataFrame) -> list[str] | None:
         """
@@ -2326,8 +2371,9 @@ class PyGConverter(BaseGraphConverter):
         if not hasattr(gdf, "geometry") or gdf.geometry is None:
             return None
 
-        # Convert each geometry to WKB hex format
-        return [geom.wkb_hex if geom is not None else "" for geom in gdf.geometry]
+        # Vectorized WKB hex serialization; missing geometries are stored as ""
+        hex_array = shapely.to_wkb(gdf.geometry.to_numpy(), hex=True)
+        return ["" if wkb_hex is None else wkb_hex for wkb_hex in hex_array]
 
     def _deserialize_geometries(
         self, wkb_list: list[str], crs: object = None
@@ -2350,14 +2396,10 @@ class PyGConverter(BaseGraphConverter):
         gpd.array.GeometryArray
             Array of reconstructed geometries.
         """
-        # Reconstruct geometries from WKB hex
-        geometries = []
-        for wkb_hex in wkb_list:
-            if wkb_hex:
-                geom = wkb.loads(bytes.fromhex(wkb_hex))
-                geometries.append(geom)
-            else:
-                geometries.append(None)
+        # Reconstruct geometries from WKB hex; "" marks a missing geometry
+        wkb_array = np.array(wkb_list, dtype=object)
+        wkb_array[wkb_array == ""] = None
+        geometries = shapely.from_wkb(wkb_array)
 
         return gpd.array.from_shapely(geometries, crs=crs)
 

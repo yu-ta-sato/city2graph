@@ -11,12 +11,16 @@ graph conversion functionality across different formats (NetworkX, PyTorch Geome
 import logging
 from abc import ABC
 from abc import abstractmethod
+from typing import TYPE_CHECKING
 from typing import Any
 
 # Third-party imports
 import geopandas as gpd
 import networkx as nx
 import pandas as pd
+
+if TYPE_CHECKING:
+    import numpy as np
 
 # Module logger configuration
 logger = logging.getLogger(__name__)
@@ -102,10 +106,14 @@ class GraphMetadata:
         self.node_label_cols: dict[str, list[str]] | list[str] | None = None
         self.edge_feature_cols: dict[tuple[str, str, str], list[str]] | list[str] | None = None
         self.edge_index_values: (
-            dict[tuple[str, str, str], list[list[str | int]]] | list[list[str | int]] | None
+            dict[tuple[str, str, str], list[np.ndarray[tuple[int, ...], np.dtype[Any]]]]
+            | list[np.ndarray[tuple[int, ...], np.dtype[Any]]]
+            | None
         ) = None
         self.edge_index_keys: (
-            dict[tuple[str, str, str], list[str | int]] | list[str | int] | None
+            dict[tuple[str, str, str], np.ndarray[tuple[int, ...], np.dtype[Any]]]
+            | np.ndarray[tuple[int, ...], np.dtype[Any]]
+            | None
         ) = None
 
         # Geometry storage for exact reconstruction (WKB hexadecimal format)

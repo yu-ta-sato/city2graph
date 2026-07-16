@@ -207,6 +207,49 @@ class TestGraphConversion:
         assert set(nodes_restored.keys()) == set(sample_hetero_nodes_dict.keys())
         assert set(edges_restored.keys()) == set(sample_hetero_edges_dict.keys())
 
+    def test_homogeneous_duplicate_node_index_maps_last_occurrence(self) -> None:
+        """Edges referencing a duplicated node ID resolve to its last occurrence."""
+        nodes = gpd.GeoDataFrame(
+            {"geometry": [Point(0, 0), Point(1, 1), Point(2, 2)]},
+            index=pd.Index([1, 2, 2], name="node_id"),
+            crs="EPSG:27700",
+        )
+        edges = gpd.GeoDataFrame(
+            {"geometry": [LineString([(0, 0), (2, 2)])]},
+            index=pd.MultiIndex.from_tuples([(1, 2)], names=["u", "v"]),
+            crs="EPSG:27700",
+        )
+
+        data = gdf_to_pyg(nodes, edges, directed=True)
+
+        assert data.edge_index.tolist() == [[0], [2]]
+
+    def test_heterogeneous_duplicate_node_index_maps_last_occurrence(self) -> None:
+        """Heterogeneous edges also resolve duplicated node IDs to last occurrences."""
+        nodes = {
+            "building": gpd.GeoDataFrame(
+                {"geometry": [Point(0, 0), Point(1, 1), Point(2, 2)]},
+                index=pd.Index(["a", "b", "b"], name="building_id"),
+                crs="EPSG:27700",
+            ),
+            "road": gpd.GeoDataFrame(
+                {"geometry": [Point(3, 3)]},
+                index=pd.Index(["r1"], name="road_id"),
+                crs="EPSG:27700",
+            ),
+        }
+        edges = {
+            ("building", "connects_to", "road"): gpd.GeoDataFrame(
+                {"geometry": [LineString([(1, 1), (3, 3)])]},
+                index=pd.MultiIndex.from_tuples([("b", "r1")], names=["u", "v"]),
+                crs="EPSG:27700",
+            ),
+        }
+
+        data = gdf_to_pyg(nodes, edges, directed=True)
+
+        assert data[("building", "connects_to", "road")].edge_index.tolist() == [[2], [0]]
+
     def test_nx_conversions(self, sample_nx_graph: nx.Graph) -> None:
         """Test NetworkX conversions."""
         # NX -> PyG
@@ -786,6 +829,24 @@ class TestDeviceHandling:
         for device_input in invalid_string_inputs:
             with pytest.raises(ValueError, match="Device must be"):
                 gdf_to_pyg(sample_nodes_gdf, device=device_input)
+
+    def test_non_default_dtype_applied_to_tensors(
+        self,
+        sample_nodes_gdf: gpd.GeoDataFrame,
+        sample_edges_gdf: gpd.GeoDataFrame,
+    ) -> None:
+        """Requested torch dtypes propagate to feature and position tensors."""
+        for dtype in (torch.float16, torch.complex64):
+            data = gdf_to_pyg(
+                sample_nodes_gdf,
+                sample_edges_gdf,
+                node_feature_cols=["feature1"],
+                edge_feature_cols=["edge_feature1"],
+                dtype=dtype,
+            )
+            assert data.x.dtype == dtype
+            assert data.pos.dtype == dtype
+            assert data.edge_attr.dtype == dtype
 
     def test_cuda_not_available(self, sample_nodes_gdf: gpd.GeoDataFrame) -> None:
         """Test CUDA not available error when CUDA is requested but not available."""
