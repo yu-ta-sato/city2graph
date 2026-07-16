@@ -999,6 +999,28 @@ class TestProcessOvertureSegments:
         assert len(result) == 2
         assert result.iloc[0]["id"] == "seg1"
 
+    def test_endpoint_clustering_ignores_all_non_linestring_geometries(self) -> None:
+        """Endpoint clustering returns non-LineString-only frames unchanged."""
+        segments_gdf = make_segments_gdf(
+            ids=["point"],
+            geoms_or_coords=[Point(2, 2)],
+            level_rules="",
+            crs="EPSG:3857",
+        )
+        connectors_gdf = make_connectors_gdf(
+            ids=["unused"],
+            coords=[(1, 1)],
+            crs="EPSG:3857",
+        )
+
+        result = process_overture_segments(
+            segments_gdf,
+            connectors_gdf=connectors_gdf,
+            get_barriers=False,
+        )
+
+        assert result.geometry.tolist() == segments_gdf.geometry.tolist()
+
     def test_with_short_linestring(self) -> None:
         """Test endpoint clustering with LineString having insufficient coordinates."""
         invalid_geom = LineString([(0, 0), (0, 0)])
@@ -1082,6 +1104,149 @@ class TestProcessOvertureSegments:
         result = process_overture_segments(segments_gdf, connectors_gdf=connectors_gdf)
 
         assert len(result) >= 1
+
+    def test_vectorized_splitting_preserves_order_attributes_and_geometry(self) -> None:
+        """Batch splitting preserves exact row semantics and source attributes."""
+        segments_gdf = gpd.GeoDataFrame(
+            {
+                "id": ["split", "unchanged"],
+                "connectors": [
+                    [
+                        {"connector_id": "valid", "at": 0.75},
+                        {"connector_id": "valid", "at": 0.25},
+                        {"connector_id": "missing", "at": 0.5},
+                    ],
+                    [],
+                ],
+                "level_rules": ["", ""],
+                "road_class": ["primary", "residential"],
+            },
+            geometry=[
+                LineString([(0, 0), (4, 0)]),
+                LineString([(10, 0), (12, 0)]),
+            ],
+            crs="EPSG:3857",
+        )
+        connectors_gdf = make_connectors_gdf(
+            ids=["valid"],
+            coords=[(1, 0)],
+            crs="EPSG:3857",
+        )
+
+        result = process_overture_segments(
+            segments_gdf,
+            connectors_gdf=connectors_gdf,
+            get_barriers=False,
+            threshold=0.01,
+        )
+
+        assert result["id"].tolist() == ["split_1", "split_2", "split_3", "unchanged"]
+        assert result["road_class"].tolist() == [
+            "primary",
+            "primary",
+            "primary",
+            "residential",
+        ]
+        assert result["split_from"].iloc[:3].tolist() == [0.0, 0.25, 0.75]
+        assert result["split_to"].iloc[:3].tolist() == [0.25, 0.75, 1.0]
+        assert result["split_from"].iloc[3:].isna().all()
+        assert result.geometry.tolist() == [
+            LineString([(0, 0), (1, 0)]),
+            LineString([(1, 0), (3, 0)]),
+            LineString([(3, 0), (4, 0)]),
+            LineString([(10, 0), (12, 0)]),
+        ]
+        assert result.crs == segments_gdf.crs
+
+    def test_vectorized_endpoint_snapping_preserves_interior_coordinates(self) -> None:
+        """Endpoint replacement leaves every interior coordinate unchanged."""
+        segments_gdf = gpd.GeoDataFrame(
+            {
+                "id": ["left", "right"],
+                "connectors": [[], []],
+                "level_rules": ["", ""],
+            },
+            geometry=[
+                LineString([(0, 0), (0.5, 2), (1, 0)]),
+                LineString([(1.2, 0), (1.5, 2), (2, 0)]),
+            ],
+            crs="EPSG:3857",
+        )
+        connectors_gdf = make_connectors_gdf(
+            ids=["unused"],
+            coords=[(0, 0)],
+            crs="EPSG:3857",
+        )
+
+        result = process_overture_segments(
+            segments_gdf,
+            connectors_gdf=connectors_gdf,
+            get_barriers=False,
+            threshold=1.0,
+        )
+
+        assert list(result.geometry.iloc[0].coords) == [(0, 0), (0.5, 2), (1.1, 0)]
+        assert list(result.geometry.iloc[1].coords) == [(1.1, 0), (1.5, 2), (2, 0)]
+
+    def test_vectorized_barriers_preserve_indexes_and_null_geometries(self) -> None:
+        """Barrier generation aligns custom indexes and retains null/empty values."""
+        segments_gdf = gpd.GeoDataFrame(
+            {
+                "id": ["open", "missing", "empty", "blocked"],
+                "level_rules": [
+                    "",
+                    "",
+                    [{"value": 1, "between": [0.2, 0.4]}],
+                    [{"value": 1}],
+                ],
+            },
+            geometry=[
+                LineString([(0, 0), (10, 0)]),
+                None,
+                LineString(),
+                LineString([(20, 0), (30, 0)]),
+            ],
+            index=[10, 20, 30, 40],
+            crs="EPSG:3857",
+        )
+
+        result = process_overture_segments(segments_gdf)
+
+        assert result.index.tolist() == [10, 20, 30, 40]
+        assert result["barrier_geometry"].loc[10] == segments_gdf.geometry.loc[10]
+        assert result["barrier_geometry"].loc[20] is None
+        assert result["barrier_geometry"].loc[30].is_empty
+        assert result["barrier_geometry"].loc[40] is None
+
+    def test_processing_does_not_iterate_over_geodataframe_rows(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """The public post-processing path does not use GeoDataFrame.iterrows."""
+
+        def fail_iterrows(_self: gpd.GeoDataFrame) -> None:
+            msg = "GeoDataFrame.iterrows must not be used"
+            raise AssertionError(msg)
+
+        monkeypatch.setattr(gpd.GeoDataFrame, "iterrows", fail_iterrows)
+        segments_gdf = gpd.GeoDataFrame(
+            {
+                "id": ["segment"],
+                "connectors": [[{"connector_id": "valid", "at": 0.5}]],
+                "level_rules": [[{"value": 1, "between": [0.2, 0.4]}]],
+            },
+            geometry=[LineString([(0, 0), (2, 0)])],
+            crs="EPSG:3857",
+        )
+        connectors_gdf = make_connectors_gdf(
+            ids=["valid"],
+            coords=[(1, 0)],
+            crs="EPSG:3857",
+        )
+
+        result = process_overture_segments(segments_gdf, connectors_gdf=connectors_gdf)
+
+        assert len(result) == 2
 
 
 # ============================================================================
