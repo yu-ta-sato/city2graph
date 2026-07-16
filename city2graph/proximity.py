@@ -24,6 +24,7 @@ from typing import cast
 
 if TYPE_CHECKING:  # Only needed for typing annotations
     from collections.abc import Iterable
+    from collections.abc import Iterator
 
 # Third-party imports
 import geopandas as gpd
@@ -33,9 +34,9 @@ import numpy as np
 import numpy.typing as npt
 import pandas as pd
 from scipy.spatial import Delaunay
+from scipy.spatial import cKDTree
 from scipy.spatial import distance as sdist
 from shapely.geometry import LineString
-from sklearn.neighbors import NearestNeighbors
 
 # Local imports
 from .utils import gdf_to_nx
@@ -140,7 +141,8 @@ class DistanceMetric:
     behind Euclidean, Manhattan, or network-based measurements. The class
     normalizes metric names, validates that required resources (such as a
     network GeoDataFrame) are available when needed, and provides methods
-    for computing distance matrices.
+    for computing distance matrices as well as sparse per-source network
+    distance rows that avoid materialising a dense matrix.
 
     Parameters
     ----------
@@ -191,6 +193,7 @@ class DistanceMetric:
             ]
             | None
         ) = None
+        self._net_kdtree: cKDTree | None = None
 
     def validate(self, crs: object) -> None:
         """
@@ -288,6 +291,75 @@ class DistanceMetric:
 
         return self._network_cache
 
+    def _snap_to_network(self, coords: npt.NDArray[np.floating]) -> list[Any]:
+        """
+        Map sample coordinates to their nearest network node IDs.
+
+        The lookup is served by a cached k-d tree over the network node
+        coordinates so that repeated snapping queries stay cheap.
+
+        Parameters
+        ----------
+        coords : npt.NDArray[np.floating]
+            Array of (x, y) coordinates to snap onto the network.
+
+        Returns
+        -------
+        list[Any]
+            Nearest network node ID for each input coordinate, in order.
+        """
+        _net_nx, _pos, net_coords, net_ids, _weight_attr = self._get_network_support()
+        if self._net_kdtree is None:
+            self._net_kdtree = cKDTree(net_coords)
+        _, idx = self._net_kdtree.query(coords)
+        return [net_ids[int(i)] for i in np.atleast_1d(idx)]
+
+    def _iter_network_rows(
+        self,
+        src_coords: npt.NDArray[np.floating],
+        dst_coords: npt.NDArray[np.floating] | None = None,
+        *,
+        cutoff: float | None = None,
+    ) -> Iterator[tuple[list[int], npt.NDArray[np.floating]]]:
+        """
+        Yield per-source network distance rows without a dense matrix.
+
+        Sources sharing the same snapped network node are grouped so that a
+        single Dijkstra traversal serves all of them, keeping memory usage
+        proportional to one row of distances at a time.
+
+        Parameters
+        ----------
+        src_coords : npt.NDArray[np.floating]
+            Coordinates of the source points.
+        dst_coords : npt.NDArray[np.floating], optional
+            Coordinates of the destination points. When omitted, the source
+            points also act as destinations.
+        cutoff : float, optional
+            Maximum shortest-path length explored by each Dijkstra traversal.
+            Destinations beyond the cutoff receive ``numpy.inf``.
+
+        Yields
+        ------
+        tuple[list[int], npt.NDArray[np.floating]]
+            Pair of source row indices sharing one snapped node and the array
+            of network distances from that node to every destination.
+        """
+        net_nx, _pos, _net_coords, _net_ids, weight_attr = self._get_network_support()
+        src_nearest = self._snap_to_network(src_coords)
+        dst_nearest = src_nearest if dst_coords is None else self._snap_to_network(dst_coords)
+
+        groups: dict[Any, list[int]] = {}
+        for i, node in enumerate(src_nearest):
+            groups.setdefault(node, []).append(i)
+
+        for node, indices in groups.items():
+            lengths = nx.single_source_dijkstra_path_length(
+                net_nx, node, cutoff=cutoff, weight=weight_attr
+            )
+            row = np.asarray([lengths.get(dn, np.inf) for dn in dst_nearest], dtype=float)
+            yield indices, row
+
     @staticmethod
     def _normalize_metric(metric: object) -> str:
         """
@@ -369,12 +441,10 @@ class DistanceMetric:
         npt.NDArray[np.floating]
             Network distance matrix.
         """
-        net_nx, _pos, net_coords, net_ids, weight_attr = self._get_network_support()
+        net_nx, _pos, _net_coords, _net_ids, weight_attr = self._get_network_support()
 
         # Map sample points to nearest network nodes
-        nn = NearestNeighbors(n_neighbors=1).fit(net_coords)
-        _, idx = nn.kneighbors(coords)
-        nearest = [net_ids[i[0]] for i in idx]
+        nearest = self._snap_to_network(coords)
 
         # Pre-allocate distance matrix
         n = len(coords)
@@ -434,6 +504,7 @@ class GraphBuilder:
         self.coords: npt.NDArray[np.floating] | None = None
         self.node_ids: list[Any] | None = None
         self.dm: npt.NDArray[np.floating] | None = None
+        self.network_cutoff: float | None = None
 
     def prepare_nodes(self, geometry: gpd.GeoSeries | None = None) -> None:
         """
@@ -581,26 +652,27 @@ class GraphBuilder:
         assert self.coords is not None
         assert self.node_ids is not None
 
-        net_nx, pos, net_coords, net_ids_list, weight_attr = self.metric._get_network_support()
+        net_nx, pos, _net_coords, _net_ids_list, weight_attr = self.metric._get_network_support()
 
-        nn = NearestNeighbors(n_neighbors=1).fit(net_coords)
-        _, idxs = nn.kneighbors(self.coords)
-        nearest = {self.node_ids[i]: net_ids_list[j[0]] for i, j in enumerate(idxs)}
+        snapped = self.metric._snap_to_network(self.coords)
+        nearest = {self.node_ids[i]: s for i, s in enumerate(snapped)}
 
-        edges_by_src: dict[Any, list[int]] = {}
+        # Group edges by snapped source node so co-located sources share a Dijkstra
+        edges_by_src_nn: dict[Any, list[int]] = {}
         for i, (u, _v) in enumerate(edges):
-            edges_by_src.setdefault(u, []).append(i)
+            edges_by_src_nn.setdefault(nearest[u], []).append(i)
 
         use_weight = weight_attr
         weights = [0.0] * len(edges)
         geoms = [LineString()] * len(edges)
 
-        for u, indices in edges_by_src.items():
-            src_nn = nearest[u]
-            dists, paths = nx.single_source_dijkstra(net_nx, src_nn, weight=use_weight)
+        for src_nn, indices in edges_by_src_nn.items():
+            dists, paths = nx.single_source_dijkstra(
+                net_nx, src_nn, cutoff=self.network_cutoff, weight=use_weight
+            )
 
             for i in indices:
-                _, v = edges[i]
+                u, v = edges[i]
                 dst_nn = nearest[v]
 
                 if self.dm is not None:
@@ -786,22 +858,24 @@ def knn_graph(
         return builder.to_output(as_nx, duplicate_edges=duplicate_edges)
 
     if metric.name == "network":
-        builder.compute_distance_matrix()
-        assert builder.dm is not None
-        # Use argsort to find nearest neighbors in distance matrix
-        # Skip the first one (self)
-        order = np.argsort(builder.dm, axis=1)[:, 1 : k + 1]
+        # Per-source distance rows instead of a dense matrix.
+        # Skip the first sorted entry (self)
+        n = len(builder.coords)
+        selections: list[npt.NDArray[np.intp]] = [np.empty(0, dtype=np.intp)] * n
+        for indices, row in metric._iter_network_rows(builder.coords):
+            order = np.argsort(row)[1 : k + 1]
+            sel = order[row[order] < np.inf]
+            for i in indices:
+                selections[i] = sel
         edges = [
-            (builder.node_ids[i], builder.node_ids[j])
-            for i in range(len(builder.node_ids))
-            for j in order[i]
-            if builder.dm[i, j] < np.inf
+            (builder.node_ids[i], builder.node_ids[j]) for i in range(n) for j in selections[i]
         ]
     else:
-        nn_metric = "cityblock" if metric.name == "manhattan" else "euclidean"
+        p_norm = 1 if metric.name == "manhattan" else 2
         n_neigh = min(k + 1, len(builder.coords))
-        nn = NearestNeighbors(n_neighbors=n_neigh, metric=nn_metric).fit(builder.coords)
-        _, idxs = nn.kneighbors(builder.coords)
+        tree = cKDTree(builder.coords)
+        _, idxs = tree.query(builder.coords, k=n_neigh, p=p_norm)
+        idxs = idxs.reshape(len(builder.coords), -1)
         edges = [
             (builder.node_ids[i], builder.node_ids[j])
             for i, neigh in enumerate(idxs)
@@ -1175,6 +1249,9 @@ def euclidean_minimum_spanning_tree(
     - The resulting graph always contains n - 1 edges (or 0 / 1 when the input has < 2 points).
     - For planar Euclidean inputs the computation is $O(n \\log n)$ thanks to the
       Delaunay pruning.
+    - For the ``manhattan`` and ``network`` metrics the candidate set is the complete
+      graph, so candidate-edge generation is inherently $O(n^2)$ in the number of edges;
+      the Delaunay sparsification applies to the Euclidean metric only.
     - All the usual spatial attributes (weight, geometry, CRS checks, etc.) are attached
       through the shared private helpers.
 
@@ -1209,8 +1286,7 @@ def euclidean_minimum_spanning_tree(
     # Convert to node IDs
     named_edges = {(builder.node_ids[i], builder.node_ids[j]) for i, j in cand_edges}
 
-    # Add all candidate edges with weights
-    builder.compute_distance_matrix()  # Ensure DM is ready for weight assignment if needed
+    # Add all candidate edges; weights are computed per edge without a dense matrix
     builder.add_edges(named_edges)
 
     # Compute MST
@@ -1333,19 +1409,20 @@ def fixed_radius_graph(
         return builder.to_output(as_nx, duplicate_edges=duplicate_edges)
 
     if metric.name == "network":
-        builder.compute_distance_matrix()
-        assert builder.dm is not None
-        mask = (builder.dm <= radius) & np.triu(np.ones_like(builder.dm, dtype=bool), 1)
-        edge_idx = np.column_stack(np.where(mask))
+        # Cutoff-bounded per-source Dijkstra rows instead of a dense matrix
+        n = len(builder.coords)
+        selections: list[npt.NDArray[np.intp]] = [np.empty(0, dtype=np.intp)] * n
+        for indices, row in metric._iter_network_rows(builder.coords, cutoff=radius):
+            within = np.where(row <= radius)[0]
+            for i in indices:
+                selections[i] = within[within > i]
         edges = [
-            (builder.node_ids[i], builder.node_ids[j])
-            for i, j in edge_idx
-            if builder.dm[i, j] < np.inf
+            (builder.node_ids[i], builder.node_ids[j]) for i in range(n) for j in selections[i]
         ]
     else:
-        nn_metric = "cityblock" if metric.name == "manhattan" else "euclidean"
-        nn = NearestNeighbors(radius=radius, metric=nn_metric).fit(builder.coords)
-        idxs = nn.radius_neighbors(builder.coords, return_distance=False)
+        p_norm = 1 if metric.name == "manhattan" else 2
+        tree = cKDTree(builder.coords)
+        idxs = tree.query_ball_point(builder.coords, r=radius, p=p_norm)
         edges = [
             (builder.node_ids[i], builder.node_ids[j])
             for i, neigh in enumerate(idxs)
@@ -1353,6 +1430,7 @@ def fixed_radius_graph(
             if i < j
         ]
 
+    builder.network_cutoff = radius
     builder.add_edges(edges)
     builder.G.graph["radius"] = radius
     return builder.to_output(as_nx, duplicate_edges=duplicate_edges)
@@ -1448,6 +1526,10 @@ def waxman_graph(
     - The graph stores parameters in G.graph["beta"] and G.graph["r0"]
     - Results are stochastic; use seed parameter for reproducible outputs
     - The graph is undirected with symmetric edge probabilities
+    - Because every node pair is sampled, the implementation deliberately materialises
+      a dense n-by-n distance matrix and an n-by-n random draw ($O(n^2)$ memory,
+      roughly 8 GB for 50,000 nodes each). This keeps the seeded random stream stable
+      and is intended for moderate point counts.
 
     References
     ----------
@@ -1996,7 +2078,7 @@ class DirectedGraphContext:
     unique_src_ids: list[tuple[str, Any]]
     unique_dst_ids: list[tuple[str, Any]]
     edges: list[tuple[Any, Any]]
-    dm: npt.NDArray[np.floating] | None
+    network_cutoff: float | None
     metric: DistanceMetric
 
 
@@ -2055,7 +2137,7 @@ def _directed_graph(
     src_ids = list(src_gdf.index)
     dst_ids = list(dst_gdf.index)
 
-    edges, dm = _directed_edges(
+    edges = _directed_edges(
         src_coords, dst_coords, src_ids, dst_ids, metric=metric, method=method, param=param
     )
 
@@ -2073,7 +2155,7 @@ def _directed_graph(
         unique_src_ids=unique_src_ids,
         unique_dst_ids=unique_dst_ids,
         edges=edges,
-        dm=dm,
+        network_cutoff=None if method == "knn" else param,
         metric=metric,
     )
 
@@ -2116,7 +2198,7 @@ def _directed_graph_gdf(
     dummy_builder = GraphBuilder(context.src_gdf, context.metric)
     dummy_builder.coords = combined_coords
     dummy_builder.node_ids = combined_ids
-    dummy_builder.dm = context.dm
+    dummy_builder.network_cutoff = context.network_cutoff
 
     weights, geoms = dummy_builder._compute_edge_data(namespaced_edges)
 
@@ -2199,7 +2281,7 @@ def _directed_graph_nx(context: DirectedGraphContext) -> nx.Graph:
     dummy_builder = GraphBuilder(context.src_gdf, context.metric)
     dummy_builder.coords = combined_coords
     dummy_builder.node_ids = combined_ids
-    dummy_builder.dm = context.dm
+    dummy_builder.network_cutoff = context.network_cutoff
     dummy_builder.G = G
 
     dummy_builder.add_edges(relabeled_edges)
@@ -2221,7 +2303,7 @@ def _directed_edges(
     metric: DistanceMetric,
     method: str,
     param: float,
-) -> tuple[list[tuple[int, int]], npt.NDArray[np.floating] | None]:
+) -> list[tuple[int, int]]:
     """
     Generate directed edges from source to destination nodes.
 
@@ -2243,47 +2325,38 @@ def _directed_edges(
 
     Returns
     -------
-    tuple[list[tuple[int, int]], numpy.typing.NDArray[np.floating] or None]
-        Pair of selected edges and the optional dense distance matrix.
+    list[tuple[int, int]]
+        Selected directed edges from source to destination identifiers.
     """
     if metric.name == "network":
-        # Compute network distances for all src+dst points
-        combined_coords = np.vstack([src_coords, dst_coords])
-        dm_full = metric.matrix(combined_coords)
-
+        # Per-source network distance rows instead of a dense (src+dst)^2 matrix
         src_n = len(src_coords)
-        dst_n = len(dst_coords)
-        d_sub = dm_full[:src_n, src_n : src_n + dst_n]
-        finite = np.isfinite(d_sub)
-
-        if method == "knn":
-            k = int(param)
-            order = np.argsort(d_sub, axis=1)
-            rows = np.arange(src_n)[:, None]
-            ranks = np.empty_like(order)
-            ranks[rows, order] = np.arange(dst_n)[None, :]
-            sel_mask = (ranks < k) & finite
-            i_idx, j_idx = np.where(sel_mask)
-        else:  # radius
-            i_idx, j_idx = np.where(finite & (d_sub <= param))
-
-        edges = list(zip((src_ids[i] for i in i_idx), (dst_ids[j] for j in j_idx), strict=True))
-        return edges, dm_full
+        selections: list[npt.NDArray[np.intp]] = [np.empty(0, dtype=np.intp)] * src_n
+        row_cutoff = None if method == "knn" else param
+        for indices, row in metric._iter_network_rows(src_coords, dst_coords, cutoff=row_cutoff):
+            if method == "knn":
+                top = np.argsort(row)[: int(param)]
+                sel = np.sort(top[row[top] < np.inf])
+            else:  # radius
+                sel = np.where(row <= param)[0]
+            for i in indices:
+                selections[i] = sel
+        return [(src_ids[i], dst_ids[j]) for i in range(src_n) for j in selections[i]]
 
     # Euclidean / Manhattan
-    nn_metric = "cityblock" if metric.name == "manhattan" else "euclidean"
+    p_norm = 1 if metric.name == "manhattan" else 2
+    tree = cKDTree(dst_coords)
     if method == "knn":
         k = int(param)
         n_neigh = min(k, len(dst_coords))
-        nn = NearestNeighbors(n_neighbors=n_neigh, metric=nn_metric).fit(dst_coords)
-        _, idxs = nn.kneighbors(src_coords)
+        _, idxs = tree.query(src_coords, k=n_neigh, p=p_norm)
+        idxs = idxs.reshape(len(src_coords), -1)
         edges = [(src_ids[i], dst_ids[j]) for i, neigh in enumerate(idxs) for j in neigh]
     else:  # radius
-        nn = NearestNeighbors(radius=param, metric=nn_metric).fit(dst_coords)
-        idxs = nn.radius_neighbors(src_coords, return_distance=False)
-        edges = [(src_ids[i], dst_ids[j]) for i, neigh in enumerate(idxs) for j in neigh]
+        neighbor_lists = tree.query_ball_point(src_coords, r=param, p=p_norm)
+        edges = [(src_ids[i], dst_ids[j]) for i, neigh in enumerate(neighbor_lists) for j in neigh]
 
-    return edges, None
+    return edges
 
 
 def _relation_from_predicate(predicate: str | None) -> str:
