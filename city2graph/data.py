@@ -16,10 +16,18 @@ from pathlib import Path
 
 # Third-party imports
 import geopandas as gpd
+import numpy as np
 import pandas as pd
 from geopy.geocoders import Nominatim
 from overturemaps.core import ALL_RELEASES
 from pyproj import CRS
+from shapely import get_coordinates
+from shapely import get_point
+from shapely import get_type_id
+from shapely import get_x
+from shapely import get_y
+from shapely import is_empty
+from shapely import set_coordinates
 from shapely.geometry import LineString
 from shapely.geometry import MultiLineString
 from shapely.geometry import MultiPolygon
@@ -588,10 +596,6 @@ def _split_segments_at_connectors(
     gpd.GeoDataFrame
         GeoDataFrame with segments split at connector positions.
 
-    See Also
-    --------
-    _extract_connector_positions : Extract connector positions from segments.
-
     Examples
     --------
     >>> segments = gpd.GeoDataFrame({'geometry': [LineString([(0,0), (1,1)])]})
@@ -602,129 +606,130 @@ def _split_segments_at_connectors(
         return segments_gdf
 
     valid_connector_ids = set(connectors_gdf["id"])
-    split_segments = []
+    connector_values = segments_gdf.get(
+        "connectors",
+        pd.Series("", index=segments_gdf.index, dtype=object),
+    )
+    parsed_connectors = connector_values.map(_parse_connector_records)
 
-    for _, segment in segments_gdf.iterrows():
-        positions = _extract_connector_positions(segment, valid_connector_ids)
-        split_parts = _create_segment_splits(segment, positions)
-        split_segments.extend(split_parts)
-
-    return gpd.GeoDataFrame(split_segments, crs=segments_gdf.crs).reset_index(drop=True)
-
-
-def _extract_connector_positions(segment: pd.Series, valid_connector_ids: set[str]) -> list[float]:
-    """
-    Extract valid connector positions from a segment.
-
-    This function parses connector information from a segment and returns
-    the positions of valid connectors along the segment.
-
-    Parameters
-    ----------
-    segment : pd.Series
-        Series containing segment data with connector information.
-    valid_connector_ids : set[str]
-        Set of valid connector IDs to filter by.
-
-    Returns
-    -------
-    list[float]
-        List of connector positions along the segment (0.0 to 1.0).
-
-    See Also
-    --------
-    _split_segments_at_connectors : Main function using this helper.
-
-    Examples
-    --------
-    >>> segment = pd.Series({'connectors': '[{"connector_id": "c1", "at": 0.5}]'})
-    >>> valid_ids = {'c1'}
-    >>> positions = _extract_connector_positions(segment, valid_ids)
-    [0.0, 0.5, 1.0]
-    """
-    connectors_val = segment.get("connectors", "")
-    if not connectors_val:
-        return [0.0, 1.0]
-
-    # Parse connector data safely
-    if isinstance(connectors_val, list):
-        connectors_data = connectors_val
-    else:
-        try:
-            connectors_data = json.loads(
-                str(connectors_val).replace("'", '"').replace("None", "null")
-            )
-        except (json.JSONDecodeError, AttributeError):
-            connectors_data = []
-
-    # Ensure connectors_data is a list
-    if not isinstance(connectors_data, list):
-        connectors_data = [connectors_data] if connectors_data else []
-
-    # Extract positions from valid connectors
-    positions = [
-        float(conn["at"])
-        for conn in connectors_data
-        if (
-            isinstance(conn, dict)
-            and conn.get("connector_id") in valid_connector_ids
-            and "at" in conn
-        )
+    # Normalize all connector records at once, retaining positional row IDs so
+    # duplicate/non-unique input indexes do not affect ordering.
+    connector_rows = pd.DataFrame(
+        {
+            "_segment_pos": np.arange(len(segments_gdf)),
+            "_connector": parsed_connectors.to_numpy(),
+        }
+    ).explode("_connector")
+    connector_rows = connector_rows[
+        connector_rows["_connector"].map(lambda value: isinstance(value, dict))
     ]
 
-    # Return sorted unique positions with start and end
-    return sorted({0.0, *positions, 1.0})
+    positions = pd.Series(
+        [[0.0, 1.0] for _ in range(len(segments_gdf))],
+        index=pd.RangeIndex(len(segments_gdf)),
+        dtype=object,
+    )
+    if not connector_rows.empty:
+        normalized = pd.json_normalize(connector_rows["_connector"])
+        normalized["_segment_pos"] = connector_rows["_segment_pos"].to_numpy()
+        if {"connector_id", "at"} <= set(normalized.columns):
+            normalized = normalized[
+                normalized["connector_id"].isin(valid_connector_ids) & normalized["at"].notna()
+            ]
+            normalized["at"] = normalized["at"].map(float)
+            grouped_positions = normalized.groupby("_segment_pos", sort=False)["at"].agg(
+                lambda values: sorted({0.0, *values, 1.0})
+            )
+            positions.loc[grouped_positions.index] = grouped_positions
+
+    # Convert position lists into one interval table. This duplicates source
+    # rows in a single indexed selection and preserves source/part ordering.
+    bounds = positions.explode().rename("_split_from").to_frame()
+    bounds["_segment_pos"] = bounds.index
+    bounds["_part"] = bounds.groupby("_segment_pos", sort=False).cumcount()
+    bounds["_split_to"] = bounds.groupby("_segment_pos", sort=False)["_split_from"].shift(-1)
+    intervals = bounds[bounds["_split_to"].notna()].copy()
+    interval_counts = intervals.groupby("_segment_pos", sort=False)["_part"].transform("size")
+    split_mask = interval_counts.gt(1).to_numpy()
+
+    result_gdf = segments_gdf.iloc[intervals["_segment_pos"].to_numpy()].copy()
+    result_gdf = result_gdf.reset_index(drop=True)
+
+    if split_mask.any():
+        split_intervals = intervals.loc[split_mask]
+        split_starts = split_intervals["_split_from"].astype(float).to_numpy()
+        split_ends = split_intervals["_split_to"].astype(float).to_numpy()
+        source_geometries = result_gdf.geometry.to_numpy()
+        split_geometries = [
+            substring(geometry, start, end, normalized=True)
+            for geometry, start, end in zip(
+                source_geometries[split_mask],
+                split_starts,
+                split_ends,
+                strict=True,
+            )
+        ]
+        source_geometries[split_mask] = split_geometries
+        result_gdf.geometry = gpd.GeoSeries(
+            source_geometries,
+            index=result_gdf.index,
+            crs=segments_gdf.crs,
+        )
+
+        if "split_from" not in result_gdf:
+            result_gdf["split_from"] = np.nan
+        if "split_to" not in result_gdf:
+            result_gdf["split_to"] = np.nan
+        result_gdf.loc[split_mask, "split_from"] = split_starts
+        result_gdf.loc[split_mask, "split_to"] = split_ends
+
+        source_positions = intervals.loc[split_mask, "_segment_pos"].to_numpy()
+        original_ids = (
+            segments_gdf["id"].to_numpy() if "id" in segments_gdf else segments_gdf.index.to_numpy()
+        )
+        part_numbers = intervals.loc[split_mask, "_part"].to_numpy() + 1
+        result_gdf.loc[split_mask, "id"] = [
+            f"{original_ids[source_pos]}_{part_number}"
+            for source_pos, part_number in zip(source_positions, part_numbers, strict=True)
+        ]
+
+        valid_parts = np.ones(len(result_gdf), dtype=bool)
+        valid_parts[split_mask] = [
+            geometry is not None and not geometry.is_empty for geometry in split_geometries
+        ]
+        result_gdf = result_gdf.loc[valid_parts].reset_index(drop=True)
+
+    return result_gdf
 
 
-def _create_segment_splits(segment: pd.Series, positions: list[float]) -> list[pd.Series]:
+def _parse_connector_records(value: object) -> list[object]:
     """
-    Create split segments from position list.
+    Normalize a connector value to a list of records.
 
-    This function takes a segment and a list of split positions and creates
-    multiple segment parts based on those positions.
+    JSON-like string values are decoded permissively to match the Overture
+    values accepted by the existing processing path.
 
     Parameters
     ----------
-    segment : pd.Series
-        Original segment to be split.
-    positions : list[float]
-        List of positions along the segment where splits should occur.
+    value : object
+        Connector data represented as a list, JSON-like string, mapping, or null value.
 
     Returns
     -------
-    list[pd.Series]
-        List of split segment parts.
-
-    See Also
-    --------
-    _split_segments_at_connectors : Main function using this helper.
-
-    Examples
-    --------
-    >>> segment = pd.Series({'geometry': LineString([(0,0), (1,1)])})
-    >>> positions = [0.0, 0.5, 1.0]
-    >>> splits = _create_segment_splits(segment, positions)
+    list[object]
+        Parsed connector records. Invalid values produce an empty list.
     """
-    if len(positions) <= 2:
-        return [segment]
-
-    original_id = segment.get("id", segment.name)
-    split_parts = []
-
-    for i in range(len(positions) - 1):
-        start_pct, end_pct = positions[i], positions[i + 1]
-
-        part_geom = substring(segment.geometry, start_pct, end_pct, normalized=True)
-
-        if part_geom and not part_geom.is_empty:
-            new_segment = segment.copy()
-            new_segment["geometry"] = part_geom
-            new_segment["split_from"] = start_pct
-            new_segment["split_to"] = end_pct
-            new_segment["id"] = f"{original_id}_{i + 1}" if len(positions) > 2 else original_id
-            split_parts.append(new_segment)
-
-    return split_parts
+    if isinstance(value, list):
+        return value
+    if value is None or value == "":
+        return []
+    try:
+        parsed = json.loads(str(value).replace("'", '"').replace("None", "null"))
+    except (json.JSONDecodeError, AttributeError):
+        return []
+    if isinstance(parsed, list):
+        return parsed
+    return [parsed] if parsed else []
 
 
 def _cluster_segment_endpoints(
@@ -758,45 +763,42 @@ def _cluster_segment_endpoints(
     >>> segments = gpd.GeoDataFrame({'geometry': [LineString([(0,0), (1,1)])]})
     >>> clustered = _cluster_segment_endpoints(segments, 0.1)
     """
-    # Extract all endpoints
-    endpoints_data = []
-    for idx, geom in segments_gdf.geometry.items():
-        if isinstance(geom, LineString) and len(geom.coords) >= 2:
-            coords = list(geom.coords)
-            endpoints_data.append((idx, "start", coords[0]))
-            endpoints_data.append((idx, "end", coords[-1]))
+    result_gdf = segments_gdf.copy()
+    geometries = result_gdf.geometry.to_numpy()
+    line_mask = (get_type_id(geometries) == 1) & ~is_empty(geometries)
+    line_positions = np.flatnonzero(line_mask)
+    if not len(line_positions):
+        return result_gdf
 
-    # Create DataFrame for clustering
-    endpoints_df = pd.DataFrame(
-        [
-            {"seg_id": idx, "pos": pos, "x": coord[0], "y": coord[1]}
-            for idx, pos, coord in endpoints_data
-        ],
-    )
+    line_geometries = geometries[line_positions]
+    start_points = get_point(line_geometries, 0)
+    end_points = get_point(line_geometries, -1)
+    endpoint_x = np.column_stack((get_x(start_points), get_x(end_points))).ravel()
+    endpoint_y = np.column_stack((get_y(start_points), get_y(end_points))).ravel()
 
-    # Perform spatial clustering using binning
+    endpoints_df = pd.DataFrame({"x": endpoint_x, "y": endpoint_y})
     endpoints_df["bin_x"] = (endpoints_df["x"] / threshold).round().astype(int)
     endpoints_df["bin_y"] = (endpoints_df["y"] / threshold).round().astype(int)
+    centroid_coordinates = (
+        endpoints_df.groupby(["bin_x", "bin_y"], sort=False)[["x", "y"]]
+        .transform("mean")
+        .to_numpy()
+        .reshape(-1, 2, 2)
+    )
 
-    # Calculate cluster centroids
-    centroids = endpoints_df.groupby(["bin_x", "bin_y"])[["x", "y"]].mean()
-    endpoints_df = endpoints_df.merge(centroids, on=["bin_x", "bin_y"], suffixes=("", "_new"))
+    coordinates, geometry_indexes = get_coordinates(line_geometries, return_index=True)
+    first_coordinate = np.flatnonzero(np.r_[True, geometry_indexes[1:] != geometry_indexes[:-1]])
+    last_coordinate = np.r_[first_coordinate[1:] - 1, len(coordinates) - 1]
+    coordinates[first_coordinate, :2] = centroid_coordinates[:, 0, :]
+    coordinates[last_coordinate, :2] = centroid_coordinates[:, 1, :]
 
-    # Create coordinate lookup
-    coord_lookup = {
-        (row["seg_id"], row["pos"]): (row["x_new"], row["y_new"])
-        for _, row in endpoints_df.iterrows()
-    }
-
-    # Update segment geometries
-    result_gdf = segments_gdf.copy()
-    for idx, row in result_gdf.iterrows():
-        row_geom = row.get("geometry")
-        if isinstance(row_geom, LineString) and len(row_geom.coords) >= 2:
-            coords = list(row_geom.coords)
-            start_coord = coord_lookup.get((idx, "start"), coords[0])
-            end_coord = coord_lookup.get((idx, "end"), coords[-1])
-            result_gdf.loc[idx, "geometry"] = LineString([start_coord, *coords[1:-1], end_coord])
+    updated_geometries = set_coordinates(line_geometries.copy(), coordinates)
+    geometries[line_positions] = updated_geometries
+    result_gdf.geometry = gpd.GeoSeries(
+        geometries,
+        index=result_gdf.index,
+        crs=segments_gdf.crs,
+    )
 
     return result_gdf
 
@@ -828,20 +830,37 @@ def _generate_barrier_geometries(segments_gdf: gpd.GeoDataFrame) -> gpd.GeoSerie
     >>> segments = gpd.GeoDataFrame({'level_rules': [''], 'geometry': [LineString([(0,0), (1,1)])]})
     >>> barriers = _generate_barrier_geometries(segments)
     """
-    barrier_geometries = []
+    level_rules = segments_gdf.get(
+        "level_rules",
+        pd.Series("", index=segments_gdf.index, dtype=object),
+    )
+    parsed_rules = level_rules.map(_parse_level_rules)
+    full_barrier = parsed_rules.map(lambda value: value == "full_barrier").to_numpy()
+    partial_barrier = parsed_rules.map(
+        lambda value: isinstance(value, list) and bool(value)
+    ).to_numpy()
 
-    for _, row in segments_gdf.iterrows():
-        level_rules_str = row.get("level_rules", "")
-        geometry = row.geometry
+    barrier_geometries = segments_gdf.geometry.to_numpy().copy()
+    barrier_geometries[full_barrier] = None
+    partial_positions = np.flatnonzero(partial_barrier)
+    barrier_geometries[partial_positions] = [
+        (
+            geometry
+            if geometry is None or geometry.is_empty
+            else _create_barrier_geometry(geometry, parsed_rules.iloc[position])
+        )
+        for position, geometry in zip(
+            partial_positions,
+            barrier_geometries[partial_positions],
+            strict=True,
+        )
+    ]
 
-        # Parse level rules
-        barrier_intervals = _parse_level_rules(level_rules_str)
-
-        # Generate barrier geometry
-        barrier_geom = _create_barrier_geometry(geometry, barrier_intervals)
-        barrier_geometries.append(barrier_geom)
-
-    return gpd.GeoSeries(barrier_geometries, crs=segments_gdf.crs)
+    return gpd.GeoSeries(
+        barrier_geometries,
+        index=segments_gdf.index,
+        crs=segments_gdf.crs,
+    )
 
 
 def _parse_level_rules(level_rules_str: str) -> list[tuple[float, float]] | str:
@@ -901,7 +920,7 @@ def _parse_level_rules(level_rules_str: str) -> list[tuple[float, float]] | str:
 
 def _create_barrier_geometry(
     geometry: LineString,
-    barrier_intervals: list[tuple[float, float]] | str,
+    barrier_intervals: list[tuple[float, float]],
 ) -> LineString | MultiLineString | None:
     """
     Create barrier geometry from intervals.
@@ -913,8 +932,8 @@ def _create_barrier_geometry(
     ----------
     geometry : LineString
         Original road segment geometry.
-    barrier_intervals : list[tuple[float, float]] or str
-        Barrier intervals or "full_barrier" indicator.
+    barrier_intervals : list[tuple[float, float]]
+        Partial barrier intervals.
 
     Returns
     -------
@@ -932,15 +951,6 @@ def _create_barrier_geometry(
     >>> barriers = [(0.2, 0.8)]
     >>> passable = _create_barrier_geometry(geom, barriers)
     """
-    if barrier_intervals == "full_barrier":
-        return None
-
-    if not barrier_intervals:
-        return geometry
-
-    # Ensure barrier_intervals is a list of tuples
-    assert isinstance(barrier_intervals, list)
-
     # Calculate passable intervals (complement of barrier intervals)
     passable_intervals = _calculate_passable_intervals(barrier_intervals)
 
