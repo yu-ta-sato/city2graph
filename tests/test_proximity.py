@@ -1234,3 +1234,160 @@ class TestNetworkMetricPublicApis:
         )
 
         assert_valid_proximity_result(nodes, edges, 2)
+
+
+# ---------------------------------------------------------------------------
+# Sparse neighbour queries (issue #190): no dense distance matrices
+# ---------------------------------------------------------------------------
+
+
+def _raise_dense_matrix_error(_self: object, _coords: object) -> None:
+    """Fail the test if any builder materialises a dense distance matrix."""
+    msg = "dense distance matrix must not be materialised"
+    raise AssertionError(msg)
+
+
+def _make_chain_points_and_network() -> tuple[gpd.GeoDataFrame, gpd.GeoDataFrame]:
+    """Return four points sitting exactly on the nodes of a unit chain network."""
+    pts = make_points_simple([(0, 0), (1, 0), (2, 0), (3, 0)])
+    net = make_network_edges(
+        src_ids=[0, 1, 2],
+        dst_ids=[1, 2, 3],
+        geometries=[
+            LineString([(0, 0), (1, 0)]),
+            LineString([(1, 0), (2, 0)]),
+            LineString([(2, 0), (3, 0)]),
+        ],
+        crs=pts.crs,
+    )
+    return pts, net
+
+
+def _undirected_edge_weights(edges: gpd.GeoDataFrame) -> dict[tuple[object, object], float]:
+    """Map sorted (u, v) index pairs to edge weights."""
+    return {
+        tuple(sorted((u, v))): float(w)
+        for (u, v), w in zip(edges.index, edges["weight"], strict=True)
+    }
+
+
+@pytest.mark.parametrize(
+    ("builder_name", "metric"),
+    [
+        ("knn", "euclidean"),
+        ("knn", "manhattan"),
+        ("knn", "network"),
+        ("fixed_radius", "euclidean"),
+        ("fixed_radius", "network"),
+        ("mst", "euclidean"),
+        ("mst", "network"),
+        ("knn_directed", "network"),
+        ("fixed_radius_directed", "network"),
+    ],
+)
+def test_proximity_builders_avoid_dense_matrix(
+    small_points: gpd.GeoDataFrame,
+    network_edges: gpd.GeoDataFrame,
+    monkeypatch: pytest.MonkeyPatch,
+    builder_name: str,
+    metric: str,
+) -> None:
+    """Graph builders never call DistanceMetric.matrix (regression for issue #190)."""
+    monkeypatch.setattr("city2graph.proximity.DistanceMetric.matrix", _raise_dense_matrix_error)
+    net = network_edges if metric == "network" else None
+    src = small_points.iloc[:2]
+    dst = small_points.iloc[2:]
+
+    if builder_name == "knn":
+        nodes, edges = knn_graph(small_points, k=1, distance_metric=metric, network_gdf=net)
+        assert_valid_proximity_result(nodes, edges, len(small_points), allow_empty_edges=False)
+    elif builder_name == "fixed_radius":
+        nodes, edges = fixed_radius_graph(
+            small_points, radius=2.5, distance_metric=metric, network_gdf=net
+        )
+        assert_valid_proximity_result(nodes, edges, len(small_points))
+    elif builder_name == "mst":
+        nodes, edges = euclidean_minimum_spanning_tree(
+            small_points, distance_metric=metric, network_gdf=net
+        )
+        assert len(edges) <= max(len(small_points) - 1, 0)
+    elif builder_name == "knn_directed":
+        nodes, edges = knn_graph(src, k=1, distance_metric=metric, network_gdf=net, target_gdf=dst)
+        assert_valid_proximity_result(nodes, edges, len(small_points))
+    else:  # fixed_radius_directed
+        nodes, edges = fixed_radius_graph(
+            src, radius=2.5, distance_metric=metric, network_gdf=net, target_gdf=dst
+        )
+        assert_valid_proximity_result(nodes, edges, len(small_points))
+
+
+def test_fixed_radius_network_cutoff_matches_bruteforce() -> None:
+    """Cutoff-bounded Dijkstra returns the exact edge set, including the boundary."""
+    pts, net = _make_chain_points_and_network()
+    _, edges = fixed_radius_graph(pts, radius=2.0, distance_metric="network", network_gdf=net)
+
+    weights = _undirected_edge_weights(edges)
+    # Path lengths on the unit chain: 1 for adjacent pairs, 2 for one-apart pairs.
+    # The pair (0, 3) at distance 3 must be excluded; distance == radius is included.
+    expected = {(0, 1): 1.0, (1, 2): 1.0, (2, 3): 1.0, (0, 2): 2.0, (1, 3): 2.0}
+    assert set(weights) == set(expected)
+    for pair, dist in expected.items():
+        assert weights[pair] == pytest.approx(dist)
+
+
+def test_knn_network_k_exceeds_point_count() -> None:
+    """K larger than n - 1 connects every reachable pair on the network."""
+    pts, net = _make_chain_points_and_network()
+    _, edges = knn_graph(pts, k=10, distance_metric="network", network_gdf=net)
+
+    weights = _undirected_edge_weights(edges)
+    expected = {
+        (0, 1): 1.0,
+        (0, 2): 2.0,
+        (0, 3): 3.0,
+        (1, 2): 1.0,
+        (1, 3): 2.0,
+        (2, 3): 1.0,
+    }
+    assert set(weights) == set(expected)
+    for pair, dist in expected.items():
+        assert weights[pair] == pytest.approx(dist)
+
+
+def test_directed_network_radius_exact_edges() -> None:
+    """Directed radius selection yields the exact edge set with network weights."""
+    pts, net = _make_chain_points_and_network()
+    src = pts.iloc[[0, 3]]
+    dst = pts.iloc[[1, 2]]
+    _, edges = fixed_radius_graph(
+        src, radius=1.0, distance_metric="network", network_gdf=net, target_gdf=dst
+    )
+
+    pairs = {(u, v): float(w) for (u, v), w in zip(edges.index, edges["weight"], strict=True)}
+    expected = {(("src", 0), ("dst", 1)): 1.0, (("src", 3), ("dst", 2)): 1.0}
+    assert set(pairs) == set(expected)
+    for pair, dist in expected.items():
+        assert pairs[pair] == pytest.approx(dist)
+
+
+def test_bridge_nodes_network_fixed_radius_exact_edges() -> None:
+    """bridge_nodes fixed_radius with network metric respects the radius cutoff."""
+    pts, net = _make_chain_points_and_network()
+    layers = {"a": pts.iloc[[0, 3]], "b": pts.iloc[[1, 2]]}
+    _, edges = bridge_nodes(
+        layers,
+        proximity_method="fixed_radius",
+        radius=1.0,
+        distance_metric="network",
+        network_gdf=net,
+    )
+
+    expected = {
+        ("a", "is_nearby", "b"): {(0, 1), (3, 2)},
+        ("b", "is_nearby", "a"): {(1, 0), (2, 3)},
+    }
+    assert set(edges) == set(expected)
+    for relation, pairs in expected.items():
+        gdf = edges[relation]
+        assert set(gdf.index) == pairs
+        assert all(w == pytest.approx(1.0) for w in gdf["weight"])
