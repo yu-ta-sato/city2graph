@@ -97,39 +97,8 @@ You can browse available CUDA-enabled builds on the [conda-forge PyTorch files p
 
 ## For Development
 
-If you want to contribute to City2Graph, you can set up a development environment using `uv`.
-
-```bash
-# Install uv if you haven't already done it
-curl -LsSf https://astral.sh/uv/install.sh | sh
-
-# Clone the repository
-git clone https://github.com/c2g-dev/city2graph.git
-cd city2graph
-
-# Install development dependencies with a PyTorch variant (e.g., cpu or cu128)
-uv sync --extra cpu --group dev
-```
-
-You can then run commands within the managed environment:
-
-```bash
-# Add IPython kernel for interactive development
-uv run ipython kernel install --name "your-env-name" --user
-
-# Or start Jupyter Notebook
-uv run jupyter notebook
-```
-
-### Development Environment
-
-The development dependencies include:
-- `ipython`: Enhanced interactive Python shell with Jupyter kernel support
-- `jupyter` and `notebook`: For running Jupyter notebooks with project-specific kernel
-- `isort`: Code formatting tools
-- `pytest` and `pytest-cov`: Testing tools
-
-The Jupyter kernel installation ensures that when you start Jupyter notebooks, you can select the "city2graph" kernel which has access to all your project dependencies in the correct virtual environment.
+See the [Contributing Guide](docs/contributing.md) for the canonical development
+setup, testing, code quality, documentation, and pull request instructions.
 
 ## Citation
 
@@ -151,47 +120,8 @@ Alternatively, you can find the citation information in the [CITATION.cff](CITAT
 
 ## Contributing
 
-We welcome contributions to the City2Graph project! To contribute:
-
-1. **Fork and clone the repository:**
-   ```bash
-   git clone https://github.com/<your-name>/city2graph.git
-   cd city2graph
-   git remote add upstream https://github.com/c2g-dev/city2graph.git
-   ```
-
-2. **Set up the development environment:**
-   ```bash
-   uv sync --group dev --extra cpu
-   source .venv/bin/activate  # On Windows: .venv\Scripts\activate
-   ```
-
-3. **Create a feature branch:**
-   ```bash
-   git checkout -b your-feature-name
-   ```
-
-4. **Make your changes and test:**
-   ```bash
-   # Run pre-commit checks
-   uv run pre-commit run --all-files
-
-   # Run tests
-   uv run pytest -q
-   ```
-
-5. **Submit a pull request** with a clear description of your changes.
-
-For detailed contributing guidelines, code style requirements, and documentation standards, please see our [Contributing Guide](docs/contributing.md).
-
-## Code Quality
-
-We maintain strict code quality standards using:
-- **Ruff**: For linting and formatting
-- **mypy**: For static type checking
-- **numpydoc**: For docstring style validation
-
-All contributions must pass pre-commit checks before being merged.
+Contributions are welcome. The [Contributing Guide](docs/contributing.md)
+contains the complete development and quality requirements.
 
 ## Documentation
 

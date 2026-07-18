@@ -1,15 +1,17 @@
 ---
-description: Guidelines for contributing to City2Graph. Learn how to report bugs, suggest features, and submit pull requests to help improve the project.
-keywords: contributing, pull request, bug report, feature request, development environment, pre-commit, pytest, code style, ruff, documentation
+description: Guidelines for developing, testing, documenting, and contributing to City2Graph.
+keywords: contributing, pull request, development environment, pre-commit, pytest, coverage, code style, ruff, mypy, numpydoc, documentation
 hide:
   - navigation
 ---
 
 # Contributing
 
-We welcome contributions to the City2Graph project! This document provides guidelines for contributing to the project.
+We welcome contributions to City2Graph. This guide is the canonical reference
+for setting up the repository, making and testing changes, and submitting a
+pull request.
 
-## Setting Up Development Environment
+## Set up the development environment
 
 1. Fork the repository on GitHub.
 2. Clone your fork locally:
@@ -20,98 +22,162 @@ We welcome contributions to the City2Graph project! This document provides guide
    git remote add upstream https://github.com/c2g-dev/city2graph.git
    ```
 
-3. Set up the development environment:
+3. Install [uv](https://docs.astral.sh/uv/) if it is not already available on
+   your `PATH`.
+4. Install the development dependencies with the CPU-only PyTorch extra:
 
    ```bash
-   uv sync --group dev --extra cpu
-   source .venv/bin/activate  # On Windows: .venv\Scripts\activate
+   uv sync --extra cpu --group dev
    ```
 
-## Making Changes
+The CPU build keeps development installations fast and deterministic. The
+project supports Python 3.11 through 3.14, and CI tests every supported version.
 
-1. Create a new branch for your changes:
+There is no separate virtual-environment activation step. Run project commands
+with `uv run`; uv automatically uses the managed environment.
 
-   ```bash
-   git checkout -b your-feature-name
-   ```
+## Make a change
 
-2. Make your changes to the codebase.
+Create a branch from an up-to-date `main` branch. Direct commits to `main` are
+blocked by the `no-commit-to-branch` pre-commit hook.
 
-3. Run pre-commit checks before committing:
+```bash
+git checkout -b your-change-name
+```
 
-   ```bash
-   uv run pre-commit run --all-files
-   ```
+Keep each pull request focused. Update tests and documentation with the code
+they describe, and use a concise, descriptive commit message.
 
-4. Run the tests to ensure your changes don't break existing functionality:
+Before committing, run both required checks:
 
-   ```bash
-   uv run pytest -q
-   ```
+```bash
+uv run pytest -q
+uv run pre-commit run --all-files
+```
 
-5. Update or add documentation as needed.
-6. Commit your changes with a descriptive commit message.
+These are the same commands used by the repository's local workflow and CI.
 
-## Code Style
+## Code and API quality
 
-We follow strict code quality standards using the following tools:
+All code, comments, docstrings, and documentation must be written in English.
 
-* **Ruff**: For linting and formatting Python code
-* **mypy**: For static type checking
-* **numpydoc**: For docstring style validation
+City2Graph uses:
 
-Key style guidelines:
+- **Ruff** for linting, import ordering, and formatting. The formatter line
+  length is 100 characters; the lint configuration allows lines up to 140
+  characters where Ruff cannot rewrite them cleanly.
+- **mypy** with strict type checking. Public functions must have type hints.
+- **numpydoc** validation. Public modules, functions, classes, and methods must
+  use NumPy-style docstrings.
 
-* Use 4 spaces for indentation.
-* Maximum line length of 88 characters.
-* Use docstrings following numpydoc conventions for all public modules, functions, classes, and methods.
-* Use type hints where appropriate.
+Use four spaces for indentation. Prefer the existing public API and established
+module patterns when extending functionality. If a change affects public
+behaviour, update the corresponding docstring and documentation.
 
-Pre-commit hooks will automatically run these checks when you commit changes.
+## Testing
+
+Tests live under `tests/` and mirror the package layout. Add a new test class
+only when the test does not belong to an existing class.
+
+Test private helper functions indirectly through the public function that calls
+them. Do not create tests that call private helpers directly. This keeps tests
+focused on supported behaviour and allows internal implementations to evolve.
+
+New behaviour and bug fixes must include tests that cover the changed paths.
+Behaviour-preserving refactors may rely on existing public-API tests when those
+tests already exercise the refactored paths.
+
+Coverage is enabled automatically by the pytest configuration:
+
+```bash
+uv run pytest -q
+```
+
+The command prints a `term-missing` report. Check its missing-line output before
+opening a pull request and keep new code covered; no additional coverage flags
+are needed. `@overload` and `if TYPE_CHECKING:` blocks are excluded from
+coverage, so do not add tests solely to execute those blocks.
+
+## Pre-commit checks
+
+Install the hooks once per clone:
+
+```bash
+uv run pre-commit install
+```
+
+They then run automatically on `git commit`. Always run the complete suite
+before committing:
+
+```bash
+uv run pre-commit run --all-files
+```
+
+For a focused local iteration, run one hook or a selected set of files:
+
+```bash
+uv run pre-commit run ruff-check --all-files
+uv run pre-commit run --files city2graph/graph.py tests/test_graph.py
+```
+
+The configured checks cover:
+
+- Python AST, TOML, and YAML syntax;
+- case conflicts, merge-conflict markers, and private keys;
+- executable and shebang consistency;
+- byte-order marks, mixed line endings, trailing whitespace, and final
+  newlines;
+- strict YAML linting;
+- NumPy-style docstrings in `city2graph/`;
+- Ruff linting with automatic fixes and Ruff formatting;
+- strict mypy type checking; and
+- protection against direct commits to protected branches.
+
+Some hooks modify files automatically. Review those changes, stage them, and
+rerun the full suite until every hook passes. Do not bypass failed checks.
 
 ## Documentation
 
-When contributing new features or making significant changes, please update the documentation:
+Update the relevant files under `docs/` for new features or significant
+behaviour changes. Add or update examples when they materially help users
+understand a feature.
 
-1. Add docstrings to all public functions, classes, and methods.
-2. Update the relevant documentation files in the `docs` directory.
-3. If adding a new feature, consider adding an example to `docs/examples/index.md`.
+Install the documentation dependencies and build the site before submitting
+documentation changes:
 
-## Pull Requests
+```bash
+uv sync --group docs --extra cpu
+uv run mkdocs build
+```
 
-1. Push your changes to your fork:
+For a local preview, run:
 
-   ```bash
-   git push origin your-feature-name
-   ```
+```bash
+uv run mkdocs serve
+```
 
-2. Open a pull request on GitHub.
-3. Describe your changes in the pull request description.
-4. Reference any related issues that your pull request addresses.
+Then open `http://127.0.0.1:8000/`.
 
-Your pull request will be reviewed, and you may be asked to make changes before it's merged.
+## Pull requests
 
-## Building Documentation
+Push your branch to your fork and open a pull request against
+`c2g-dev/city2graph:main`:
 
-To build and preview the documentation locally:
+```bash
+git push -u origin your-change-name
+```
 
-1. Create and activate a virtual environment with uv:
+Follow the repository's pull request template:
 
-   ```bash
-   uv venv docs-env
-   source docs-env/bin/activate  # On Windows: docs-env\Scripts\activate
-   ```
+- **Summary**: explain what changed and why.
+- **Related issues**: link issues with closing keywords when appropriate, or
+  state that none apply.
+- **Testing**: list the exact automated and manual checks run; explain any
+  check that was not run.
+- **Documentation**: identify documentation changes, or write "Not applicable".
+- **Reviewer notes**: call out compatibility concerns, trade-offs, or areas
+  deserving particular attention.
 
-2. Install documentation dependencies:
-
-   ```bash
-   uv pip install -e ".[docs]"
-   ```
-
-3. Build the documentation:
-
-   ```bash
-   uv run mkdocs serve
-   ```
-
-4. Open `http://127.0.0.1:8000/` in your browser to view the documentation.
+Both `uv run pytest -q` and `uv run pre-commit run --all-files` must pass before
+the contribution is committed. Documentation changes must also pass
+`uv run mkdocs build`.
